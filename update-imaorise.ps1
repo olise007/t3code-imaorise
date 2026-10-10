@@ -66,6 +66,10 @@ try {
     $linux = Get-Content "$output\linux\linux-manifest.json" -Raw | ConvertFrom-Json
     if ($linux.revision -ne $revision) { throw 'Windows and Linux revisions do not match.' }
     $manifest.linux = $linux
+    Wsl @('bash', "$WslRepository/scripts/imaorise/android.sh", "$wslOutput/android", $revision)
+    $android = Get-Content "$output\android\android-manifest.json" -Raw | ConvertFrom-Json
+    if ($android.revision -ne $revision) { throw 'Android and desktop revisions do not match.' }
+    $manifest.android = $android
     $archive = Get-ChildItem "$output\linux\t3-*-linux-x64.tar.gz"
     if (@($archive).Count -ne 1) { throw 'Expected exactly one Linux runtime archive.' }
     Push-Location $WindowsRepository
@@ -79,10 +83,6 @@ try {
     } finally { Pop-Location }
     CleanWindows
     if ((GitValue @('rev-parse', 'HEAD')) -ne $revision) { throw 'Windows revision changed during build.' }
-    Wsl @('bash', "$WslRepository/scripts/imaorise/android.sh", "$wslOutput/android", $revision)
-    $android = Get-Content "$output\android\android-manifest.json" -Raw | ConvertFrom-Json
-    if ($android.revision -ne $revision) { throw 'Android and desktop revisions do not match.' }
-    $manifest.android = $android
     $manifest.status = 'build-passed-awaiting-interactive-acceptance'
 } catch {
     $manifest.error = $_.Exception.Message

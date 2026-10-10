@@ -54,8 +54,11 @@ apk="$output/T3-Code-Imaorise-2.0.0-${expected:0:12}-arm64-v8a.apk"
 rm "$output/aligned.apk"
 "$ANDROID_HOME/build-tools/$buildTools/apksigner" verify --verbose --print-certs "$apk" > "$output/signature.txt"
 "$ANDROID_HOME/build-tools/$buildTools/aapt" dump badging "$apk" > "$output/package.txt"
+"$ANDROID_HOME/build-tools/$buildTools/aapt" dump xmltree "$apk" AndroidManifest.xml > "$output/native-manifest.txt"
+rg -q "package: name='com.imaorise.t3code'" "$output/package.txt"
+rg -q 't3code-imaorise' "$output/native-manifest.txt"
 [[ -z $(git status --porcelain) ]] || { echo 'Android build modified tracked source.' >&2; exit 1; }
-python3 - "$output/android-manifest.json" "$expected" "$T3CODE_IMAORISE_ANDROID_VERSION_CODE" <<'PY'
+python3 - "$output/android-manifest.json" "$expected" "$T3CODE_IMAORISE_ANDROID_VERSION_CODE" "$ndk" "$sdk" "$buildTools" <<'PY'
 import json, subprocess, sys
-json.dump({"revision":sys.argv[2], "applicationId":"com.imaorise.t3code", "versionCode":int(sys.argv[3]), "architecture":"arm64-v8a", "java":subprocess.check_output(['java','--version'],text=True).splitlines()[0], "checks":"focused tests, lint, mobile typecheck, APK signature and package inspection passed", "interactiveAcceptance":"pending phone installation and pairing; installation is not approved"},open(sys.argv[1],'w'),indent=2)
+json.dump({"revision":sys.argv[2], "applicationId":"com.imaorise.t3code", "versionCode":int(sys.argv[3]), "architecture":"arm64-v8a", "tools":{"java":subprocess.check_output(['java','--version'],text=True).splitlines()[0],"ndk":sys.argv[4],"sdk":sys.argv[5],"buildTools":sys.argv[6],"zig":"0.15.2"}, "checks":"focused tests, lint, mobile typecheck, APK signature and package inspection passed", "interactiveAcceptance":"pending phone installation and pairing; installation is not approved"},open(sys.argv[1],'w'),indent=2)
 PY

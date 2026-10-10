@@ -71,8 +71,10 @@ No Git push is performed by the update command.
 
 It installs frozen dependencies, runs focused browser/isolation/update tests,
 scoped lint and package typechecks, builds and smoke-tests the Linux x64 archive,
-then builds an unsigned native Windows x64 NSIS installer embedding that archive
-and a signed Android ARM64 APK. All outputs use the same committed revision.
+then builds a signed Android ARM64 APK and an unsigned native Windows x64 NSIS
+installer embedding that archive. All outputs use the same committed revision.
+Android runs before Windows packaging so its artifact is retained even if the
+Windows signing policy blocks installer preparation.
 The desktop packaging process
 also runs its upstream native dependency and payload checks.
 
