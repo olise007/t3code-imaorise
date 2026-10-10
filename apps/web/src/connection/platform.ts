@@ -23,6 +23,8 @@ import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/enviro
 import { managedRelayAccountChanges, managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import { EnvironmentRpcRequestObserver } from "@t3tools/client-runtime/rpc";
 import {
+  AuthAccessReadScope,
+  AuthAccessWriteScope,
   AuthStandardClientScopes,
   type DesktopBridge,
   type DesktopEnvironmentBootstrap,
@@ -363,7 +365,7 @@ const loadPrimaryConnectionRegistration = Effect.fn(
 // A desktop-local secondary backend (e.g. a parallel WSL backend) lives on its
 // own loopback origin, so — unlike the same-origin primary — it authenticates
 // with a bearer token minted from the bootstrap credential the desktop issues.
-const loadSecondaryConnectionRegistration = Effect.fn(
+export const loadSecondaryConnectionRegistration = Effect.fn(
   "web.connectionPlatform.loadSecondaryConnectionRegistration",
 )(function* (entry: DesktopEnvironmentBootstrap) {
   if (
@@ -382,12 +384,13 @@ const loadSecondaryConnectionRegistration = Effect.fn(
     Effect.mapError(mapRemoteEnvironmentError),
   );
   const issuedAtEpochMs = yield* Clock.currentTimeMillis;
-  // The desktop seed grant is administrative so the primary window can manage
-  // access; a secondary backend session only needs to operate its environment.
+  // The desktop owns this backend and must manage its pairing links too.
+  // Request access grants only for host-managed loopback connections; saved
+  // remote and SSH connections keep their independently granted permissions.
   const access = yield* bootstrapRemoteBearerSession({
     httpBaseUrl,
     credential: entry.bootstrapToken,
-    scopes: AuthStandardClientScopes,
+    scopes: [...AuthStandardClientScopes, AuthAccessReadScope, AuthAccessWriteScope],
     clientMetadata: clientMetadata(),
   }).pipe(Effect.mapError(mapRemoteEnvironmentError));
   // Keep the desktop pool's stable backend id in the connection id. The
