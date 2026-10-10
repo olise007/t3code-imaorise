@@ -18,7 +18,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: personal-release
+  group: ${{ (github.event_name == 'workflow_dispatch' || vars.PERSONAL_BETA_ACCEPTED == 'true') && 'personal-release' || format('personal-disabled-{0}', github.run_id) }}
   cancel-in-progress: false
 jobs:
   reserve:
