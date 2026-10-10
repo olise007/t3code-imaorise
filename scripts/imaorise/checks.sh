@@ -5,6 +5,7 @@ source "$HOME/.config/vite-plus/env"
 export PATH="$HOME/.cargo/bin:$PATH"
 vp install --frozen-lockfile
 vp test run \
+  apps/web/src/branding.test.ts \
   apps/web/src/browser/previewRuntime.test.ts \
   apps/web/src/browser/HostedBrowserWebview.test.tsx \
   apps/desktop/src/app/DesktopEnvironment.test.ts \

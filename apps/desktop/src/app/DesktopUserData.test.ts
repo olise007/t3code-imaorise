@@ -7,6 +7,31 @@ import * as PlatformError from "effect/PlatformError";
 
 import { resolveUserDataPath } from "./DesktopUserData.ts";
 
+it.effect("leaves official profiles untouched and starts a fresh personal profile", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "imaorise-profile-test-" });
+    for (const name of ["t3code", "t3code-v2", "T3 Code (Alpha)"]) {
+      yield* fs.makeDirectory(path.join(directory, name), { recursive: true });
+      yield* fs.writeFileString(path.join(directory, name, "Local State"), "official-profile");
+    }
+    const destination = yield* resolveUserDataPath({
+      appDataDirectory: directory,
+      isDevelopment: false,
+      platform: "win32",
+    });
+    assert.equal(destination, path.join(directory, "t3code-imaorise"));
+    assert.isFalse(yield* fs.exists(destination));
+    for (const name of ["t3code", "t3code-v2", "T3 Code (Alpha)"]) {
+      assert.equal(
+        yield* fs.readFileString(path.join(directory, name, "Local State")),
+        "official-profile",
+      );
+    }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("identifies a failed source read and preserves its cause", () => {
   const sourceState = "/profiles/t3code-imaorise-legacy/Local State";
   const cause = PlatformError.systemError({
