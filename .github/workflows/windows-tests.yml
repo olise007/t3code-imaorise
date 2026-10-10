@@ -26,7 +26,7 @@ permissions:
 jobs:
   test:
     name: Test (${{ inputs.package || 'all non-server' }})
-    runs-on: blacksmith-8vcpu-windows-2025
+    runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -52,6 +52,7 @@ jobs:
         run: '"path=$(vp pm cache dir)" >> $env:GITHUB_OUTPUT'
 
       - name: Cache packages
+        if: github.repository == 'pingdotgg/t3code'
         uses: actions/cache@v6
         with:
           path: ${{ steps.package_cache_path.outputs.path }}
