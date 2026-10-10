@@ -102,9 +102,11 @@ jobs:
   preflight:
     name: Preflight
     needs: [resolve_commit]
-    if: ${{ github.repository == 'pingdotgg/t3code' && (|) }}
+    if: >-
+      github.repository == 'pingdotgg/t3code' && (
       needs.resolve_commit.result == 'success' &&
       (github.event_name != 'schedule' || needs.resolve_commit.outputs.has_changes == 'true')
+      )
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     outputs:
@@ -342,9 +344,11 @@ jobs:
     # Consumes only the release commit, not preflight's resolved version, so it
     # runs alongside preflight instead of after it. The condition mirrors preflight's.
     needs: [resolve_commit]
-    if: ${{ github.repository == 'pingdotgg/t3code' && (|) }}
+    if: >-
+      github.repository == 'pingdotgg/t3code' && (
       needs.resolve_commit.result == 'success' &&
       (github.event_name != 'schedule' || needs.resolve_commit.outputs.has_changes == 'true')
+      )
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 5
     environment:
@@ -1321,7 +1325,8 @@ jobs:
 
   announce_discord:
     name: Announce release on Discord
-    if: ${{ github.repository == 'pingdotgg/t3code' && (|) }}
+    if: >-
+      github.repository == 'pingdotgg/t3code' && (
       always() && !cancelled() &&
       needs.preflight.result == 'success' &&
       needs.preflight.outputs.release_channel != 'preview' &&
@@ -1329,6 +1334,7 @@ jobs:
       needs.release.result == 'success' &&
       needs.deploy_web.result == 'success' &&
       (needs.finalize.result == 'success' || needs.finalize.result == 'skipped')
+      )
     needs: [preflight, relay_public_config, release, deploy_web, finalize]
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
