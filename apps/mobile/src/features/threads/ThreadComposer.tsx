@@ -1,3 +1,5 @@
+import { usePlanActions } from "./use-plan-actions";
+import { registerPlanComposer } from "./plan-action-state";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -400,6 +402,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const [previewFile, setPreviewFile] = useState<FilePreviewSource | null>(null);
   const [previewVideo, setPreviewVideo] = useState<VideoPreviewSource | null>(null);
   const queuedEdit = props.queuedEdit ?? null;
+  const planActions = usePlanActions({
+    environmentId: props.environmentId,
+    threadId: props.selectedThread.id,
+  });
+  useEffect(
+    () =>
+      registerPlanComposer(props.environmentId, props.selectedThread.id, () =>
+        inputRef.current?.focus(),
+      ),
+    [props.environmentId, props.selectedThread.id, inputRef],
+  );
   const hasContent =
     props.draftMessage.trim().length > 0 ||
     props.draftAttachments.length > 0 ||
@@ -525,7 +538,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   );
   const isVoiceInputPresented = voicePresentation.statusLabel !== null;
   // An open draft stays visible; only a collapsed composer becomes a voice strip.
-  const isExpanded = isFocused || settingsSheetPresentation.keepsComposerExpanded;
+  const isExpanded =
+    isFocused || settingsSheetPresentation.keepsComposerExpanded || !isVoiceInputPresented;
   const showsCompactDictation = isVoiceInputPresented && !isExpanded;
   const isToolbarVisible = isExpanded || isVoiceInputPresented;
   const attachmentBlockReason = composerAttachmentUploadBlockReason({
@@ -747,6 +761,54 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     [navigation, settingsSheetPresentation.onStackTransitionsFinished],
   );
 
+  const showImplement = planActions.actionable && !hasContent && queuedEdit === null;
+  const implementControl = (
+    <View className="flex-row items-center">
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Implement plan here"
+        disabled={
+          planActions.busy ||
+          props.connectionState !== "connected" ||
+          modelUnavailable ||
+          props.queueCount > 0 ||
+          voiceInput.isBusy
+        }
+        onPress={() => void planActions.implement(false)}
+        className="min-h-11 justify-center rounded-xl bg-primary px-3 active:opacity-80"
+      >
+        <Text className="text-sm font-t3-bold text-primary-foreground">
+          {planActions.busy ? "Starting…" : "Implement"}
+        </Text>
+      </Pressable>
+      <ControlPillMenu
+        accessibilityLabel="Implementation destination"
+        actions={[
+          { id: "here", title: "Implement here" },
+          { id: "new", title: "Implement in a new thread" },
+        ]}
+        onPressAction={({ nativeEvent }) => {
+          if (props.connectionState === "connected")
+            void planActions.implement(nativeEvent.event === "new");
+        }}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Implementation destination"
+          disabled={
+            planActions.busy ||
+            props.connectionState !== "connected" ||
+            modelUnavailable ||
+            props.queueCount > 0 ||
+            voiceInput.isBusy
+          }
+          className="size-11 items-center justify-center"
+        >
+          <Text>⌄</Text>
+        </Pressable>
+      </ControlPillMenu>
+    </View>
+  );
   return (
     <Animated.View
       className="px-[12px]"
@@ -813,34 +875,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           </Pressable>
         ) : null}
 
-        {selectedProviderStatus?.showInteractionModeToggle !== false ? (
-          <View className="flex-row gap-2 px-3 pb-2">
-            {(["default", "plan"] as const).map((mode) => (
-              <Pressable
-                key={mode}
-                accessibilityRole="button"
-                accessibilityState={{ selected: props.interactionMode === mode }}
-                disabled={!props.canOperateThread}
-                onPress={() => props.onUpdateInteractionMode(mode)}
-                className="rounded-full border border-border px-4 py-2"
-              >
-                <Text
-                  className={
-                    props.interactionMode === mode ? "text-primary" : "text-foreground-muted"
-                  }
-                >
-                  {mode === "plan" ? "Plan" : "Build"}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        ) : null}
         <ComposerSurface
           style={
             isExpanded
               ? {
                   borderRadius: 26,
-                  minHeight: 140,
+                  minHeight: isFocused ? 140 : 100,
                   overflow: "hidden" as const,
                   paddingBottom: 6,
                   paddingTop: 14,
@@ -1012,13 +1052,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 onBlur={handleBlur}
                 // Command-Return sends the other way, matching web's Mod+Enter.
                 onSubmit={(alternate) =>
-                  void handleSend(
-                    alternate && sendPresentation.alternate !== null
-                      ? sendPresentation.alternate
-                      : undefined,
-                  )
+                  showImplement
+                    ? void planActions.implement(false)
+                    : void handleSend(
+                        alternate && sendPresentation.alternate !== null
+                          ? sendPresentation.alternate
+                          : undefined,
+                      )
                 }
-                submitTitle={sendPresentation.label}
+                submitTitle={showImplement ? "Implement" : sendPresentation.label}
                 alternateSubmitTitle={
                   sendPresentation.alternate === null
                     ? sendPresentation.label
@@ -1032,7 +1074,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 style={
                   isExpanded
                     ? {
-                        minHeight: 72,
+                        minHeight: isFocused ? 72 : 36,
                         maxHeight: 160,
                         paddingVertical: 4,
                       }
@@ -1145,9 +1187,30 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       onPickMedia={props.onPickDraftMedia}
                       onPickFiles={props.onPickDraftFiles}
                     />
-                    <View className="min-w-0 shrink">
+                    {selectedProviderStatus?.showInteractionModeToggle !== false ? (
                       <ComposerInlineControl
-                        accessibilityLabel="Model and reasoning settings"
+                        accessibilityLabel={`Interaction mode: ${props.interactionMode === "plan" ? "Plan" : "Build"}`}
+                        accessibilityHint="Switches Build and Plan mode"
+                        selected={props.interactionMode === "plan"}
+                        disabled={!props.canOperateThread || voiceInput.freezesEditor}
+                        icon={
+                          props.interactionMode === "plan"
+                            ? { ios: "list.bullet.clipboard", android: "auto_awesome" }
+                            : { ios: "hammer", android: "construction" }
+                        }
+                        label={props.interactionMode === "plan" ? "Plan" : "Build"}
+                        showChevron={false}
+                        onPress={() =>
+                          props.onUpdateInteractionMode(
+                            props.interactionMode === "plan" ? "default" : "plan",
+                          )
+                        }
+                      />
+                    ) : null}
+                    <View className="min-w-0 flex-1">
+                      <ComposerInlineControl
+                        accessibilityLabel="Model, workflow and permissions"
+                        accessibilityHint="Opens model, reasoning and workflow settings"
                         emphasized
                         renderIcon={(size) => (
                           <ProviderIcon
@@ -1157,7 +1220,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                           />
                         )}
                         label={currentModelOption?.label ?? currentModelSelection.model}
-                        maxWidth="100%"
+                        maxWidth={showImplement ? 80 : 140}
                         onPress={openSettings}
                       />
                     </View>
@@ -1180,6 +1243,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       disabled={!props.canOperateThread}
                       onPress={props.onStopThread}
                     />
+                  ) : showImplement ? (
+                    implementControl
                   ) : voicePresentation.showsSend ? (
                     <SendActionButton
                       accessibilityLabel={sendBlockedReason ?? sendLabel}

@@ -73,9 +73,22 @@ function fixture(initial: Record<string, string> = {}) {
     },
   };
 }
-const route = { enabled: true, port: 4775, target: null };
+const route = { enabled: true, port: 4776, target: null };
 
 describe("WSL Tailscale routes", () => {
+  it("rejects a backend port collision before touching Tailscale", async () => {
+    const f = fixture();
+    await expect(
+      reconcileRoute({
+        io: f.io,
+        route: { ...route, port: 4775 },
+        target,
+        environmentId: descriptor.environmentId,
+      }),
+    ).rejects.toThrow("conflicts with the WSL backend");
+    expect(f.commands).toEqual([]);
+  });
+
   it("creates a verified WSL endpoint without changing Windows or other ports", async () => {
     const f = fixture({ "443": "http://127.0.0.1:8080", "4774": "http://127.0.0.1:4774" });
     const result = await reconcileRoute({
@@ -84,30 +97,30 @@ describe("WSL Tailscale routes", () => {
       target,
       environmentId: descriptor.environmentId,
     });
-    expect(result.endpointUrl).toBe("https://host.tail.ts.net:4775/");
+    expect(result.endpointUrl).toBe("https://host.tail.ts.net:4776/");
     expect(Object.fromEntries(f.mappings)).toEqual({
       "443": "http://127.0.0.1:8080",
       "4774": "http://127.0.0.1:4774",
-      "4775": target,
+      "4776": target,
     });
   });
   it("rejects another service even when it is offline", async () => {
-    const f = fixture({ "4775": "http://127.0.0.1:9999" });
+    const f = fixture({ "4776": "http://127.0.0.1:9999" });
     await expect(
       reconcileRoute({ io: f.io, route, target, environmentId: descriptor.environmentId }),
     ).rejects.toThrow("another service");
-    expect(f.mappings.get("4775")).toBe("http://127.0.0.1:9999");
+    expect(f.mappings.get("4776")).toBe("http://127.0.0.1:9999");
   });
   it("rejects a port with additional paths or raw TCP forwarding", () => {
-    expect(routeMapping({ TCP: { "4775": {} } }, 4775)).toBe("occupied");
+    expect(routeMapping({ TCP: { "4776": {} } }, 4776)).toBe("occupied");
     expect(
       routeMapping(
         {
           Web: {
-            "host:4775": { Handlers: { "/": { Proxy: target }, "/other": { Proxy: target } } },
+            "host:4776": { Handlers: { "/": { Proxy: target }, "/other": { Proxy: target } } },
           },
         },
-        4775,
+        4776,
       ),
     ).toBe("occupied");
   });
@@ -116,21 +129,21 @@ describe("WSL Tailscale routes", () => {
     f.mismatch();
     await expect(
       reconcileRoute({ io: f.io, route, target, environmentId: descriptor.environmentId }),
-    ).rejects.toThrow("could not be verified");
-    expect(f.mappings.has("4775")).toBe(false);
+    ).rejects.toThrow("different environment");
+    expect(f.mappings.has("4776")).toBe(false);
   });
   it("updates a previously owned proxy when the backend port changes", async () => {
-    const f = fixture({ "4775": target });
+    const f = fixture({ "4776": target });
     await reconcileRoute({
       io: f.io,
       route: { ...route, target },
       target: "http://127.0.0.1:4778",
       environmentId: descriptor.environmentId,
     });
-    expect(f.mappings.get("4775")).toBe("http://127.0.0.1:4778");
+    expect(f.mappings.get("4776")).toBe("http://127.0.0.1:4778");
   });
   it("restores the previous proxy after failed restart verification", async () => {
-    const f = fixture({ "4775": target });
+    const f = fixture({ "4776": target });
     f.mismatch();
     await expect(
       reconcileRoute({
@@ -140,13 +153,13 @@ describe("WSL Tailscale routes", () => {
         environmentId: descriptor.environmentId,
       }),
     ).rejects.toThrow();
-    expect(f.mappings.get("4775")).toBe(target);
+    expect(f.mappings.get("4776")).toBe(target);
   });
   it("removes only the owned mapping when WSL stops, then restores it", async () => {
-    const f = fixture({ "4775": target, "4774": "http://127.0.0.1:4774" });
+    const f = fixture({ "4776": target, "4774": "http://127.0.0.1:4774" });
     const owned = { ...route, target };
     await reconcileRoute({ io: f.io, route: owned, target: null, environmentId: null });
-    expect(f.mappings.has("4775")).toBe(false);
+    expect(f.mappings.has("4776")).toBe(false);
     expect(f.mappings.has("4774")).toBe(true);
     await reconcileRoute({
       io: f.io,
@@ -154,17 +167,17 @@ describe("WSL Tailscale routes", () => {
       target,
       environmentId: descriptor.environmentId,
     });
-    expect(f.mappings.get("4775")).toBe(target);
+    expect(f.mappings.get("4776")).toBe(target);
   });
   it("does not remove a mapping replaced by another service", async () => {
-    const f = fixture({ "4775": "http://127.0.0.1:9999" });
+    const f = fixture({ "4776": "http://127.0.0.1:9999" });
     await reconcileRoute({
       io: f.io,
       route: { ...route, target, enabled: false },
       target: null,
       environmentId: null,
     });
-    expect(f.mappings.get("4775")).toBe("http://127.0.0.1:9999");
+    expect(f.mappings.get("4776")).toBe("http://127.0.0.1:9999");
   });
 });
 
@@ -241,7 +254,7 @@ describe("managed WSL pairing", () => {
           environmentId: EnvironmentId.make("windows"),
           bearerToken: "private",
           enabled: true,
-          port: 4775,
+          port: 4776,
         })
         .pipe(Effect.flip);
       expect(error.message).toContain("not running");
@@ -258,7 +271,7 @@ describe("managed WSL pairing", () => {
           environmentId: descriptor.environmentId,
           bearerToken: "private",
           enabled: true,
-          port: 4775,
+          port: 4776,
         })
         .pipe(Effect.flip);
       expect(error.message).toContain("Permission denied");
@@ -282,7 +295,7 @@ describe("managed WSL pairing", () => {
         environmentId: descriptor.environmentId,
         bearerToken: "private",
         enabled: true,
-        port: 4775,
+        port: 4776,
       });
       yield* s.configure({
         environmentId: descriptor.environmentId,
@@ -290,8 +303,8 @@ describe("managed WSL pairing", () => {
         enabled: false,
         port: 4999,
       });
-      expect(f.mappings.has("4775")).toBe(false);
-      expect((yield* s.getState).port).toBe(4775);
+      expect(f.mappings.has("4776")).toBe(false);
+      expect((yield* s.getState).port).toBe(4776);
     }),
   );
   it.effect("moves the HTTPS route while preserving other mappings", () =>
@@ -302,7 +315,7 @@ describe("managed WSL pairing", () => {
         environmentId: descriptor.environmentId,
         bearerToken: "private",
         enabled: true,
-        port: 4775,
+        port: 4776,
       });
       yield* s.configure({
         environmentId: descriptor.environmentId,
@@ -310,7 +323,7 @@ describe("managed WSL pairing", () => {
         enabled: true,
         port: 4885,
       });
-      expect(f.mappings.has("4775")).toBe(false);
+      expect(f.mappings.has("4776")).toBe(false);
       expect(f.mappings.get("4885")).toBe(target);
       expect(f.mappings.get("4774")).toBe("http://127.0.0.1:4774");
       expect((yield* s.getState).port).toBe(4885);
@@ -325,7 +338,7 @@ describe("managed WSL pairing", () => {
         environmentId: descriptor.environmentId,
         bearerToken: "private",
         enabled: true,
-        port: 4775,
+        port: 4776,
       });
       fail = true;
       yield* s
@@ -336,9 +349,9 @@ describe("managed WSL pairing", () => {
           port: 4885,
         })
         .pipe(Effect.flip);
-      expect(f.mappings.get("4775")).toBe(target);
+      expect(f.mappings.get("4776")).toBe(target);
       expect(f.mappings.has("4885")).toBe(false);
-      expect((yield* s.getState).port).toBe(4775);
+      expect((yield* s.getState).port).toBe(4776);
     }),
   );
   it.effect("does not offer pairing for an unavailable backend", () =>
@@ -365,7 +378,7 @@ describe("WSL pairing HTTP authorization", () => {
                   policy: "remote-reachable",
                   bootstrapMethods: ["desktop-bootstrap"],
                   sessionMethods: ["bearer-access-token"],
-                  sessionCookieName: "t3_session_4775",
+                  sessionCookieName: "t3_session_4776",
                   serverUpdateScope: "environment:maintain",
                 },
                 scopes: ["access:write", "environment:maintain"],

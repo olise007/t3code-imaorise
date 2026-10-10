@@ -289,11 +289,6 @@ function BetaSettingsSection() {
   );
 }
 
-/**
- * Device-local legacy toggles. Mobile has no client-settings sync, so this is
- * the counterpart of web's Settings → General → Legacy features backed by
- * mobile preferences.
- */
 function PlanModeSettingsSection() {
   return (
     <View className="gap-3">

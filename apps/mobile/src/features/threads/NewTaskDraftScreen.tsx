@@ -1761,23 +1761,6 @@ export function NewTaskDraftScreen(props: {
                     onPickFiles={handlePickFiles}
                   />
                   <View className="min-w-0 flex-1 flex-row items-center justify-end gap-2">
-                    <View className="min-w-0 shrink">
-                      <ComposerInlineControl
-                        accessibilityLabel="Model and reasoning settings"
-                        disabled={isComposerInteractionLocked}
-                        emphasized
-                        renderIcon={(size) => (
-                          <ProviderIcon
-                            iconUrl={flow.selectedModelOption?.providerIconUrl}
-                            provider={flow.selectedModelOption?.providerDriver}
-                            size={size}
-                          />
-                        )}
-                        label={flow.selectedModelOption?.label ?? "Choose model"}
-                        maxWidth="100%"
-                        onPress={settingsSheetPresentation.open}
-                      />
-                    </View>
                     {flow.planModeEnabled ? (
                       <ComposerInlineControl
                         accessibilityHint={`Switches to ${flow.interactionMode === "plan" ? "Build" : "Plan"} mode`}
@@ -1798,6 +1781,24 @@ export function NewTaskDraftScreen(props: {
                         showChevron={false}
                       />
                     ) : null}
+                    <View className="min-w-0 shrink">
+                      <ComposerInlineControl
+                        accessibilityLabel="Model, workflow and permissions"
+                        accessibilityHint="Opens model, reasoning and workflow settings"
+                        disabled={isComposerInteractionLocked}
+                        emphasized
+                        renderIcon={(size) => (
+                          <ProviderIcon
+                            iconUrl={flow.selectedModelOption?.providerIconUrl}
+                            provider={flow.selectedModelOption?.providerDriver}
+                            size={size}
+                          />
+                        )}
+                        label={flow.selectedModelOption?.label ?? "Choose model"}
+                        maxWidth={120}
+                        onPress={settingsSheetPresentation.open}
+                      />
+                    </View>
                   </View>
                 </>
               )}

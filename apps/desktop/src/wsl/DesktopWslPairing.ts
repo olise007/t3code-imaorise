@@ -143,6 +143,11 @@ export async function reconcileRoute(input: {
   environmentId: string | null;
 }) {
   const { io, route, target, environmentId } = input;
+  if (route.enabled && target && Number(new URL(target).port) === route.port) {
+    throw new WslPairingError({
+      message: `HTTPS port ${route.port} conflicts with the WSL backend. Choose another port, such as ${route.port === 4776 ? 4777 : 4776}.`,
+    });
+  }
   const mapping = routeMapping(
     JSON.parse(await io.command(["serve", "status", "--json"])),
     route.port,
@@ -172,14 +177,17 @@ export async function reconcileRoute(input: {
         message: "The HTTPS address belongs to a different environment.",
       });
     }
-  } catch {
+  } catch (error) {
     if (mapping !== target) {
       if (mapping && mapping !== "occupied")
         await io.command(["serve", "--bg", `--https=${route.port}`, mapping]);
       else await io.command(["serve", `--https=${route.port}`, "off"]);
     }
     throw new WslPairingError({
-      message: "The WSL HTTPS endpoint could not be verified. Check Tailscale and retry.",
+      message:
+        error instanceof WslPairingError
+          ? error.message
+          : `The WSL HTTPS endpoint on port ${route.port} is unreachable. Check Tailscale connectivity or try another HTTPS port.`,
     });
   }
   return { endpointUrl, target, previousTarget: mapping };
@@ -223,6 +231,12 @@ export const make = (io: WslPairingIO) =>
       const t = yield* target;
       let endpointUrl: string | null = null;
       if (t && s.wslPairingRoute.enabled) {
+        if (Number(new URL(t.url).port) === s.wslPairingRoute.port)
+          return yield* Effect.fail(
+            new WslPairingError({
+              message: `HTTPS port ${s.wslPairingRoute.port} conflicts with the WSL backend. Choose another port, such as ${s.wslPairingRoute.port === 4776 ? 4777 : 4776}.`,
+            }),
+          );
         const status = yield* decodeStatus(
           yield* attempt(() => io.command(["status", "--json"])),
         ).pipe(
@@ -311,6 +325,17 @@ export const make = (io: WslPairingIO) =>
                 }),
               );
             yield* attempt(() => io.authorize(t.url, input.bearerToken));
+            if (input.enabled) {
+              for (const backend of yield* pool.list) {
+                const config = yield* backend.currentConfig;
+                if (Option.isSome(config) && Number(config.value.httpBaseUrl.port) === input.port)
+                  return yield* Effect.fail(
+                    new WslPairingError({
+                      message: `HTTPS port ${input.port} conflicts with a managed backend. Choose another port, such as ${input.port === 4776 ? 4777 : 4776}.`,
+                    }),
+                  );
+              }
+            }
             const s = yield* settings.get;
             const previous = s.wslPairingRoute;
             const selectedPort = input.enabled ? input.port : previous.port;

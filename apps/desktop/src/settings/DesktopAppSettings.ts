@@ -85,7 +85,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   mainWindowBounds: null,
   mainWindowMaximized: false,
   serverExposureMode: "local-only",
-  wslPairingRoute: { enabled: false, port: 4775, target: null },
+  wslPairingRoute: { enabled: false, port: 4776, target: null },
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
   updateChannel: "latest",
@@ -214,10 +214,13 @@ export function resolveDefaultDesktopSettings(appVersion: string): DesktopSettin
   };
 }
 
-function normalizeTailscaleServePort(value: unknown): number {
+function normalizeTailscaleServePort(
+  value: unknown,
+  fallback = DEFAULT_TAILSCALE_SERVE_PORT,
+): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65_535
     ? value
-    : DEFAULT_TAILSCALE_SERVE_PORT;
+    : fallback;
 }
 
 function normalizeWslDistro(value: unknown): string | null {
@@ -257,7 +260,15 @@ function normalizeDesktopSettingsDocument(
     wslPairingRoute: parsed.wslPairingRoute
       ? {
           ...parsed.wslPairingRoute,
-          port: normalizeTailscaleServePort(parsed.wslPairingRoute.port),
+          port:
+            !parsed.wslPairingRoute.enabled &&
+            parsed.wslPairingRoute.target === null &&
+            parsed.wslPairingRoute.port === 4775
+              ? defaultSettings.wslPairingRoute.port
+              : normalizeTailscaleServePort(
+                  parsed.wslPairingRoute.port,
+                  defaultSettings.wslPairingRoute.port,
+                ),
         }
       : defaultSettings.wslPairingRoute,
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
@@ -296,7 +307,7 @@ function toDesktopSettingsDocument(
   }
   if (
     settings.wslPairingRoute.enabled ||
-    settings.wslPairingRoute.port !== 4775 ||
+    settings.wslPairingRoute.port !== defaults.wslPairingRoute.port ||
     settings.wslPairingRoute.target !== null
   )
     document.wslPairingRoute = settings.wslPairingRoute;

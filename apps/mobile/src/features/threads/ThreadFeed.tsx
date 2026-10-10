@@ -1683,6 +1683,7 @@ function renderFeedEntry(
           threadId={props.threadId}
           workspaceRoot={props.workspaceRoot}
           projectedItem={message.projectedItem}
+          markdownStyles={markdownStyles.assistant}
         />
       );
     }
