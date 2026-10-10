@@ -513,6 +513,23 @@ export const DesktopServerExposureStateSchema = Schema.Struct({
   tailscaleServePort: Schema.Number,
 });
 
+export const DesktopWslPairingStateSchema = Schema.Struct({
+  environmentId: Schema.NullOr(EnvironmentId),
+  distro: Schema.NullOr(Schema.String),
+  running: Schema.Boolean,
+  enabled: Schema.Boolean,
+  port: Schema.Number,
+  endpointUrl: Schema.NullOr(Schema.String),
+  error: Schema.NullOr(Schema.String),
+});
+export type DesktopWslPairingState = typeof DesktopWslPairingStateSchema.Type;
+export const DesktopWslPairingInputSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  bearerToken: Schema.String,
+  enabled: Schema.Boolean,
+  port: Schema.Number,
+});
+
 export interface PickFolderOptions {
   initialPath?: string | null;
   // When set, the desktop dialog opens against the named backend's
@@ -1189,6 +1206,10 @@ export interface DesktopBridge {
   }) => Promise<DesktopServerExposureState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
   getWslState: () => Promise<DesktopWslState>;
+  getWslPairingState?: () => Promise<DesktopWslPairingState>;
+  setWslPairingRoute?: (
+    input: typeof DesktopWslPairingInputSchema.Type,
+  ) => Promise<DesktopWslPairingState>;
   setWslBackendEnabled: (enabled: boolean) => Promise<DesktopWslState>;
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;
   setWslOnly: (enabled: boolean) => Promise<DesktopWslState>;

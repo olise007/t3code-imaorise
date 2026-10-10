@@ -1,3 +1,4 @@
+import { getWslPairingState, setWslPairingRoute } from "./methods/wslPairing.ts";
 import * as Effect from "effect/Effect";
 
 import { receiveProviderAuthCallback, cancelProviderAuthCallback } from "./methods/providerAuth.ts";
@@ -134,6 +135,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setTailscaleServeEnabled);
   yield* ipc.handle(getAdvertisedEndpoints);
 
+  yield* ipc.handle(getWslPairingState);
+  yield* ipc.handle(setWslPairingRoute);
   yield* ipc.handle(getWslState);
   yield* ipc.handle(setWslBackendEnabled);
   yield* ipc.handle(setWslDistro);

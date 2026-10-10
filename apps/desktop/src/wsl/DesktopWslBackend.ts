@@ -1,3 +1,4 @@
+import * as DesktopWslPairing from "./DesktopWslPairing.ts";
 // Orchestrator that keeps the WSL pool instance in sync with the user's
 // settings. `reconcile` is the single entry point — bootstrap calls it
 // once after the primary backend starts, and the wsl.ts IPC calls it
@@ -94,6 +95,11 @@ const scanForWslPort = Effect.fn("desktop.wslBackend.scanForWslPort")(function* 
 export const layer = Layer.effect(
   DesktopWslBackend,
   Effect.gen(function* () {
+    const pairing = yield* Effect.serviceOption(DesktopWslPairing.DesktopWslPairing);
+    const reconcilePairing = Option.match(pairing, {
+      onNone: () => Effect.void,
+      onSome: (service) => service.reconcile,
+    });
     const pool = yield* DesktopBackendPool.DesktopBackendPool;
     const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
@@ -120,7 +126,7 @@ export const layer = Layer.effect(
     );
 
     const stopExisting = (id: DesktopBackendPool.BackendInstanceId) =>
-      pool.unregister(id).pipe(
+      reconcilePairing.pipe(Effect.andThen(pool.unregister(id))).pipe(
         Effect.catchTags({
           DesktopBackendPoolCannotUnregisterPrimaryError: (cause) =>
             // Should never happen — wsl: ids are not the primary id — but
@@ -168,7 +174,8 @@ export const layer = Layer.effect(
           // fallback — Windows is the primary and keeps working.
           onPreflightFailed: (failure) =>
             Ref.set(preflightErrorRef, Option.some(failure.reason)).pipe(Effect.as(false)),
-          onReady: () => Ref.set(preflightErrorRef, Option.none()),
+          onReady: () =>
+            Ref.set(preflightErrorRef, Option.none()).pipe(Effect.andThen(reconcilePairing)),
         })
         .pipe(
           Effect.asSome,
@@ -258,6 +265,7 @@ export const layer = Layer.effect(
         Effect.catchCause((cause) =>
           logWslBackendWarning("reconcile failed", { cause: Cause.pretty(cause) }),
         ),
+        Effect.andThen(reconcilePairing),
         Effect.withSpan("desktop.wslBackend.reconcile"),
       );
 

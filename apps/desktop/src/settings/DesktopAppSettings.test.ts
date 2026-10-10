@@ -26,6 +26,13 @@ const DesktopSettingsPatch = Schema.Struct({
   ),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
   serverExposureMode: Schema.optionalKey(Schema.Literals(["local-only", "network-accessible"])),
+  wslPairingRoute: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.Boolean,
+      port: Schema.Number,
+      target: Schema.NullOr(Schema.String),
+    }),
+  ),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
@@ -139,6 +146,7 @@ describe("DesktopSettings", () => {
         mainWindowBounds: null,
         mainWindowMaximized: false,
         serverExposureMode: "local-only",
+        wslPairingRoute: { enabled: false, port: 4775, target: null },
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
         updateChannel: "nightly",
@@ -157,6 +165,7 @@ describe("DesktopSettings", () => {
         yield* writeSettingsPatch({
           linuxPasswordStore: "gnome-libsecret",
           serverExposureMode: "network-accessible",
+          wslPairingRoute: { enabled: false, port: 4775, target: null },
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
           updateChannel: "latest",
@@ -169,6 +178,7 @@ describe("DesktopSettings", () => {
           mainWindowBounds: null,
           mainWindowMaximized: false,
           serverExposureMode: "network-accessible",
+          wslPairingRoute: { enabled: false, port: 4775, target: null },
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
           updateChannel: "latest",
@@ -277,6 +287,7 @@ describe("DesktopSettings", () => {
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
           mainWindowMaximized: false,
           serverExposureMode: "network-accessible",
+          wslPairingRoute: { enabled: false, port: 4775, target: null },
           tailscaleServeEnabled: true,
           tailscaleServePort: 8443,
           updateChannel: "latest",
@@ -334,6 +345,7 @@ describe("DesktopSettings", () => {
             mainWindowBounds: null,
             mainWindowMaximized: false,
             serverExposureMode: "network-accessible",
+            wslPairingRoute: { enabled: false, port: 4775, target: null },
             tailscaleServeEnabled: true,
             tailscaleServePort: 8443,
             updateChannel: "nightly",
@@ -411,6 +423,7 @@ describe("DesktopSettings", () => {
           mainWindowBounds: null,
           mainWindowMaximized: false,
           serverExposureMode: "local-only",
+          wslPairingRoute: { enabled: false, port: 4775, target: null },
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
           updateChannel: "nightly",
@@ -440,6 +453,7 @@ describe("DesktopSettings", () => {
           mainWindowBounds: null,
           mainWindowMaximized: false,
           serverExposureMode: "local-only",
+          wslPairingRoute: { enabled: false, port: 4775, target: null },
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
           updateChannel: "latest",
@@ -458,6 +472,7 @@ describe("DesktopSettings", () => {
       Effect.gen(function* () {
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
         yield* writeSettingsPatch({
+          wslPairingRoute: { enabled: false, port: 4775, target: null },
           tailscaleServeEnabled: true,
           tailscaleServePort: 0,
         });
@@ -468,6 +483,7 @@ describe("DesktopSettings", () => {
           mainWindowBounds: null,
           mainWindowMaximized: false,
           serverExposureMode: "local-only",
+          wslPairingRoute: { enabled: false, port: 4775, target: null },
           tailscaleServeEnabled: true,
           tailscaleServePort: 443,
           updateChannel: "latest",
@@ -566,6 +582,22 @@ describe("DesktopSettings", () => {
         const loaded = yield* settings.load;
         assert.equal(loaded.wslBackendEnabled, true);
         assert.equal(loaded.wslDistro, null);
+      }),
+    ),
+  );
+
+  it.effect("persists the WSL HTTPS route independently of primary exposure and runtime mode", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        const route = { enabled: true, port: 4999, target: "http://127.0.0.1:4780" };
+        yield* settings.setWslPairingRoute(route);
+        const loaded = yield* settings.load;
+        assert.deepEqual(loaded.wslPairingRoute, route);
+        assert.isFalse(loaded.tailscaleServeEnabled);
+        assert.isFalse(loaded.wslOnly);
+        assert.isFalse(loaded.wslBackendEnabled);
+        assert.isTrue(loaded.localEnvironmentEnabled);
       }),
     ),
   );

@@ -902,7 +902,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "WSL backend",
     to: "/settings/connections",
     searchTerms: [
-      "windows subsystem linux distro second server projects stop windows backend restart",
+      "windows subsystem linux distro second server projects stop windows backend restart pair pairing mobile android tailscale https qr link",
     ],
     desktopOnly: true,
     windowsOnly: true,

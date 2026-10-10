@@ -1,4 +1,12 @@
+import {
+  createEnvironmentPairingCredential,
+  revokeEnvironmentPairingLink,
+  revokeEnvironmentClient,
+  revokeOtherEnvironmentClients,
+} from "~/rpc/environmentAccess";
 import { SessionPermissions } from "./SessionPermissions";
+import { createAdvertisedEndpoint } from "@t3tools/shared/advertisedEndpoint";
+import { useEnvironmentSessionState } from "~/state/session";
 import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
 import {
   ChevronRightIcon,
@@ -43,6 +51,7 @@ import {
   type DesktopSshEnvironmentTarget,
   type DesktopServerExposureState,
   type DesktopWslState,
+  type DesktopWslPairingState,
   type EnvironmentId,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -1029,6 +1038,12 @@ type AuthorizedClientsHeaderActionProps = {
   isRevokingOtherClients: boolean;
   onRevokeOtherClients: () => void;
   delegatableScopes: ReadonlyArray<AuthEnvironmentScope>;
+  environmentId?: EnvironmentId;
+  createCredential?: (input: {
+    label?: string;
+    scopes?: readonly AuthGrantScope[];
+  }) => Promise<AuthPairingCredentialResult>;
+  disabled?: boolean;
 };
 
 const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderAction({
@@ -1037,8 +1052,12 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
   isRevokingOtherClients,
   onRevokeOtherClients,
   delegatableScopes,
+  environmentId,
+  createCredential,
+  disabled = false,
 }: AuthorizedClientsHeaderActionProps) {
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const defaultEnvironmentId = usePrimaryEnvironmentId();
+  const primaryEnvironmentId = environmentId ?? defaultEnvironmentId;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pairingLabel, setPairingLabel] = useState("");
   const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthGrantScope>>([
@@ -1049,6 +1068,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
 
   const handleCreatePairingLink = useCallback(async () => {
     if (
+      disabled ||
       primaryEnvironmentId === null ||
       selectedScopes.length === 0 ||
       !readEnvironmentScope(primaryEnvironmentId, AuthAccessWriteScope) ||
@@ -1057,7 +1077,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
       return;
     setIsCreatingPairingLink(true);
     try {
-      const created = await createServerPairingCredential({
+      const created = await (createCredential ?? createServerPairingCredential)({
         label: pairingLabel,
         scopes: selectedScopes,
       });
@@ -1079,7 +1099,15 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
     } finally {
       setIsCreatingPairingLink(false);
     }
-  }, [delegatableScopes, onPairingLinkCreated, pairingLabel, primaryEnvironmentId, selectedScopes]);
+  }, [
+    disabled,
+    createCredential,
+    delegatableScopes,
+    onPairingLinkCreated,
+    pairingLabel,
+    primaryEnvironmentId,
+    selectedScopes,
+  ]);
 
   const togglePairingScope = useCallback((scope: AuthGrantScope, checked: boolean) => {
     setPairingScopes((current) => togglePairingScopeSelection(current, scope, checked));
@@ -1090,7 +1118,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
       <Button
         size="xs"
         variant="destructive-outline"
-        disabled={isRevokingOtherClients || !canRevokeOtherClients(clientSessions)}
+        disabled={disabled || isRevokingOtherClients || !canRevokeOtherClients(clientSessions)}
         onClick={() => void onRevokeOtherClients()}
       >
         {isRevokingOtherClients ? "Revoking…" : "Revoke others"}
@@ -1109,7 +1137,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
       >
         <DialogTrigger
           render={
-            <Button size="xs" variant="default">
+            <Button size="xs" variant="default" disabled={disabled}>
               <PlusIcon className="size-3" />
               Create link
             </Button>
@@ -1219,7 +1247,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
               Cancel
             </Button>
             <Button
-              disabled={isCreatingPairingLink || selectedScopes.length === 0}
+              disabled={disabled || isCreatingPairingLink || selectedScopes.length === 0}
               onClick={() => void handleCreatePairingLink()}
             >
               {isCreatingPairingLink ? "Creating…" : "Create link"}
@@ -2029,6 +2057,258 @@ function CloudRemoteEnvironmentRows({
   ) : savedEnvironments.length === 0 ? (
     <EmptyRemoteEnvironments cloudEnabled={false} />
   ) : null;
+}
+
+function WslPairingSettings() {
+  const bridge = window.desktopBridge;
+  const [state, setState] = useState<DesktopWslPairingState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const refresh = useCallback(async () => {
+    if (!bridge?.getWslPairingState) return;
+    setLoading(true);
+    try {
+      setState(await bridge.getWslPairingState());
+      setError(null);
+    } catch {
+      setError("Could not inspect WSL pairing. Retry after the backend starts.");
+    } finally {
+      setLoading(false);
+    }
+  }, [bridge]);
+  useEffect(() => {
+    let cancelled = false;
+    void bridge?.getWslPairingState?.().then(
+      (value) => {
+        if (!cancelled) {
+          setState(value);
+          setLoading(false);
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setError("Could not inspect WSL pairing. Retry after the backend starts.");
+          setLoading(false);
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge]);
+  if (!bridge?.getWslPairingState) return null;
+  return (
+    <>
+      <SettingsRow
+        title="Pair WSL with another device"
+        description={
+          state
+            ? `${state.distro ?? "Default distro"} · ${state.running ? "Running" : "Not running"}${state.environmentId ? ` · ${state.environmentId}` : ""}`
+            : "Loading WSL environment…"
+        }
+        status={error ? <span className="text-destructive">{error}</span> : undefined}
+        control={
+          <Button size="xs" variant="outline" disabled={loading} onClick={() => void refresh()}>
+            Refresh
+          </Button>
+        }
+      />
+      {state?.environmentId ? (
+        <WslPairingAccess
+          key={`${state.environmentId}:${state.endpointUrl ?? "unreachable"}`}
+          state={state}
+          onState={setState}
+        />
+      ) : (
+        <p className="px-4 text-xs text-muted-foreground">
+          Start the selected WSL backend to create a pairing link.
+        </p>
+      )}
+    </>
+  );
+}
+
+function WslPairingAccess({
+  state,
+  onState,
+}: {
+  state: DesktopWslPairingState;
+  onState: (state: DesktopWslPairingState) => void;
+}) {
+  const id = state.environmentId!;
+  const session = useEnvironmentSessionState(id);
+  const prepared = Option.getOrNull(usePreparedConnection(id));
+  const canRead = useEnvironmentScope(id, AuthAccessReadScope);
+  const canWrite = useEnvironmentScope(id, AuthAccessWriteScope);
+  const canMaintain = useEnvironmentScope(id, AuthEnvironmentMaintainScope);
+  const access = useEnvironmentQuery(
+    canRead ? authEnvironment.accessChanges({ environmentId: id, input: null }) : null,
+  );
+  const [port, setPort] = useState(String(state.port));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [created, setCreated] = useState<ReadonlyMap<string, string>>(new Map());
+  const [revokingLink, setRevokingLink] = useState<string | null>(null);
+  const [revokingClient, setRevokingClient] = useState<string | null>(null);
+  const scopes = session.data?.authenticated
+    ? (session.data.permissions ?? session.data.scopes ?? [])
+    : [];
+  const snapshot = access.data?.type === "snapshot" ? access.data.payload : null;
+  const links = snapshot?.pairingLinks.map(toDesktopPairingLinkRecord) ?? [];
+  const clients = snapshot?.clientSessions.map(toDesktopClientSessionRecord) ?? [];
+  const endpoints = state.endpointUrl
+    ? [
+        createAdvertisedEndpoint({
+          provider: { id: "tailscale", label: "Tailscale", kind: "private-network", isAddon: true },
+          source: "desktop-addon",
+          id: `wsl-tailscale:${state.endpointUrl}`,
+          label: "WSL Tailscale HTTPS",
+          httpBaseUrl: state.endpointUrl,
+          reachability: "private-network",
+          status: "available",
+        }),
+      ]
+    : [];
+  const allowed =
+    state.running && canWrite && canMaintain && prepared?.httpAuthorization?._tag === "Bearer";
+  const perform = async (action: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await action();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "WSL pairing failed. Retry.");
+    } finally {
+      setBusy(false);
+      setRevokingLink(null);
+      setRevokingClient(null);
+    }
+  };
+  const configure = (enabled: boolean) =>
+    perform(async () => {
+      if (!allowed || prepared?.httpAuthorization?._tag !== "Bearer")
+        throw new Error("Reconnect with Manage access and Maintain environment permissions.");
+      const route = await window.desktopBridge!.setWslPairingRoute!({
+        environmentId: id,
+        bearerToken: prepared.httpAuthorization.token,
+        enabled,
+        port: Number(port),
+      });
+      setCreated(new Map());
+      onState(route);
+    });
+  const createCredential = async (input: {
+    label?: string;
+    scopes?: readonly AuthGrantScope[];
+  }) => {
+    const current = await window.desktopBridge!.getWslPairingState!();
+    if (
+      !current.running ||
+      current.environmentId !== id ||
+      !current.endpointUrl ||
+      current.endpointUrl !== state.endpointUrl
+    ) {
+      onState(current);
+      throw new Error("The WSL route changed or is unreachable. Refresh and retry setup.");
+    }
+    return createEnvironmentPairingCredential(id, input);
+  };
+  return (
+    <div className="space-y-2 px-3 pb-3 sm:px-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="flex items-center gap-2 text-xs">
+          HTTPS port
+          <Input
+            aria-label="WSL HTTPS port"
+            type="number"
+            min={1}
+            max={65535}
+            value={port}
+            onChange={(e) => setPort(e.target.value)}
+            disabled={busy || !allowed}
+          />
+        </label>
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={
+            busy || !allowed || !/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535
+          }
+          onClick={() => void configure(true)}
+        >
+          {busy ? "Working…" : state.endpointUrl ? "Update HTTPS route" : "Set up Tailscale HTTPS"}
+        </Button>
+        {state.enabled ? (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={busy || !allowed}
+            onClick={() => void configure(false)}
+          >
+            Disable WSL HTTPS
+          </Button>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Your other device must be connected to the same tailnet. This route exposes only the WSL
+        environment.
+      </p>
+      {!allowed ? (
+        <p className="text-xs text-muted-foreground">
+          Reconnect to WSL with Manage access and Maintain environment permissions to set up
+          pairing.
+        </p>
+      ) : null}
+      {state.endpointUrl ? (
+        <p className="break-all text-xs text-muted-foreground">{state.endpointUrl}</p>
+      ) : null}
+      {error || state.error || access.error ? (
+        <p role="alert" className="text-xs text-destructive">
+          {error ?? state.error ?? access.error}
+        </p>
+      ) : null}
+      <AuthorizedClientsHeaderAction
+        environmentId={id}
+        delegatableScopes={scopes}
+        clientSessions={clients}
+        disabled={!allowed || !state.endpointUrl || busy}
+        isRevokingOtherClients={busy}
+        onRevokeOtherClients={() => void perform(() => revokeOtherEnvironmentClients(id))}
+        createCredential={createCredential}
+        onPairingLinkCreated={(result) =>
+          setCreated((old) => new Map(old).set(result.id, result.credential))
+        }
+      />
+      <PairingClientsList
+        endpointUrl={state.endpointUrl}
+        endpoints={endpoints}
+        defaultEndpointKey={null}
+        isLoading={access.isPending}
+        pairingLinks={links}
+        clientSessions={clients}
+        createdPairingCredentials={created}
+        revokingPairingLinkId={revokingLink}
+        revokingClientSessionId={revokingClient}
+        canRevoke={canWrite && !busy}
+        onRevokePairingLink={(linkId) => {
+          setRevokingLink(linkId);
+          void perform(async () => {
+            await revokeEnvironmentPairingLink(id, linkId);
+            setCreated((old) => {
+              const next = new Map(old);
+              next.delete(linkId);
+              return next;
+            });
+          });
+        }}
+        onRevokeClientSession={(sessionId) => {
+          setRevokingClient(sessionId);
+          void perform(() => revokeEnvironmentClient(id, sessionId));
+        }}
+      />
+    </div>
+  );
 }
 
 export function ConnectionsSettings() {
@@ -3704,6 +3984,9 @@ export function ConnectionsSettings() {
                 {renderEndpointRows("endpoint-rail")}
                 {renderTailscaleRow()}
                 {renderWslRow()}
+                {desktopWslState?.enabled && !desktopWslState.wslOnly ? (
+                  <WslPairingSettings key={desktopWslState.distro ?? "default"} />
+                ) : null}
                 {canReadRelay || canManageRelay ? (
                   <CloudLinkRow canReadRelay={canReadRelay} canManageRelay={canManageRelay} />
                 ) : null}

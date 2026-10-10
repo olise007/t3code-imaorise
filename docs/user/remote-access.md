@@ -32,6 +32,19 @@ disconnect an otherwise healthy conversation.
 
 ## Pair over a LAN or private network
 
+### Pair the desktop WSL environment
+
+When Windows and WSL run together, their chats belong to separate environments.
+Open **Settings → Connections → Pair WSL with another device**, set up
+**Tailscale HTTPS**, then create and share a pairing link or QR code. Connect the
+phone to the same tailnet and add that link in **Settings → Environments**.
+This adds access to the WSL chats alongside the Windows connection.
+
+The WSL HTTPS route uses a separate port, starting at 4775. Choose another port
+if it is already used. The desktop restores the route when WSL restarts;
+**Disable WSL HTTPS** removes it. WSL-only mode uses the primary environment’s
+existing pairing controls.
+
 Use direct pairing when the other device can reach the host's network address.
 
 On a desktop host, open **Settings → Connections**, enable **Network access**,

@@ -123,3 +123,6 @@ export const RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:receive-provider-
 export const CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:cancel-provider-auth-callback";
 export const TAKE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:take-legacy-local-storage";
 export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-local-storage";
+
+export const GET_WSL_PAIRING_STATE_CHANNEL = "desktop:get-wsl-pairing-state";
+export const SET_WSL_PAIRING_ROUTE_CHANNEL = "desktop:set-wsl-pairing-route";

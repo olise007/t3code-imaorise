@@ -1,3 +1,4 @@
+import * as DesktopWslPairing from "./wsl/DesktopWslPairing.ts";
 import * as MacPermissions from "./permissions/MacPermissions.ts";
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (err: NodeJS.ErrnoException) => {
@@ -205,7 +206,7 @@ const layerDesktopBackend = DesktopBackendPool.layer.pipe(
 // pool + configuration + serverExposure; it pulls NetService and the
 // foundation services through the same provideMerge chain.
 const layerDesktopWslBackend = DesktopWslBackend.layer.pipe(
-  Layer.provideMerge(layerDesktopBackend),
+  Layer.provideMerge(DesktopWslPairing.layer.pipe(Layer.provideMerge(layerDesktopBackend))),
 );
 
 const layerDesktopLocalEnvironmentAuth = DesktopLocalEnvironmentAuth.layer.pipe(

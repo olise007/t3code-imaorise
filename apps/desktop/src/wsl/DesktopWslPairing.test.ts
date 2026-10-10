@@ -1,0 +1,348 @@
+import { describe, it } from "@effect/vitest";
+import { expect } from "vite-plus/test";
+import { EnvironmentId, ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Pool from "../backend/DesktopBackendPool.ts";
+import type { DesktopBackendStartConfig } from "../backend/DesktopBackendManager.ts";
+import * as Settings from "../settings/DesktopAppSettings.ts";
+import {
+  make,
+  reconcileRoute,
+  routeMapping,
+  WslPairingError,
+  type WslPairingIO,
+} from "./DesktopWslPairing.ts";
+
+const target = "http://127.0.0.1:4775";
+const descriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor)({
+  environmentId: "wsl-environment",
+  label: "WSL",
+  platform: { os: "linux", arch: "x64" },
+  serverVersion: "2.0.1-beta.17",
+  capabilities: {},
+});
+function fixture(initial: Record<string, string> = {}) {
+  const mappings = new Map(Object.entries(initial));
+  const commands: string[][] = [];
+  let mismatched = false;
+  let denied = false;
+  const io: WslPairingIO = {
+    command: async (args) => {
+      commands.push([...args]);
+      if (args[0] === "status")
+        return JSON.stringify({ BackendState: "Running", Self: { DNSName: "host.tail.ts.net." } });
+      if (args[1] === "status")
+        return JSON.stringify({
+          TCP: Object.fromEntries([...mappings.keys()].map((port) => [port, { HTTPS: true }])),
+          Web: Object.fromEntries(
+            [...mappings].map(([port, url]) => [
+              `host.tail.ts.net:${port}`,
+              { Handlers: { "/": { Proxy: url } } },
+            ]),
+          ),
+        });
+      const port = args.find((arg) => arg.startsWith("--https="))!.slice(8);
+      if (args.at(-1) === "off") mappings.delete(port);
+      else mappings.set(port, args.at(-1)!);
+      return "";
+    },
+    descriptor: async (url) =>
+      mismatched && url.startsWith("https:")
+        ? { ...descriptor, environmentId: EnvironmentId.make("other-environment") }
+        : descriptor,
+    authorize: async () => {
+      if (denied) throw new WslPairingError({ message: "Permission denied" });
+    },
+  };
+  return {
+    io,
+    mappings,
+    commands,
+    mismatch: () => {
+      mismatched = true;
+    },
+    deny: () => {
+      denied = true;
+    },
+  };
+}
+const route = { enabled: true, port: 4775, target: null };
+
+describe("WSL Tailscale routes", () => {
+  it("creates a verified WSL endpoint without changing Windows or other ports", async () => {
+    const f = fixture({ "443": "http://127.0.0.1:8080", "4774": "http://127.0.0.1:4774" });
+    const result = await reconcileRoute({
+      io: f.io,
+      route,
+      target,
+      environmentId: descriptor.environmentId,
+    });
+    expect(result.endpointUrl).toBe("https://host.tail.ts.net:4775/");
+    expect(Object.fromEntries(f.mappings)).toEqual({
+      "443": "http://127.0.0.1:8080",
+      "4774": "http://127.0.0.1:4774",
+      "4775": target,
+    });
+  });
+  it("rejects another service even when it is offline", async () => {
+    const f = fixture({ "4775": "http://127.0.0.1:9999" });
+    await expect(
+      reconcileRoute({ io: f.io, route, target, environmentId: descriptor.environmentId }),
+    ).rejects.toThrow("another service");
+    expect(f.mappings.get("4775")).toBe("http://127.0.0.1:9999");
+  });
+  it("rejects a port with additional paths or raw TCP forwarding", () => {
+    expect(routeMapping({ TCP: { "4775": {} } }, 4775)).toBe("occupied");
+    expect(
+      routeMapping(
+        {
+          Web: {
+            "host:4775": { Handlers: { "/": { Proxy: target }, "/other": { Proxy: target } } },
+          },
+        },
+        4775,
+      ),
+    ).toBe("occupied");
+  });
+  it("rolls back a new mapping after environment identity mismatch", async () => {
+    const f = fixture();
+    f.mismatch();
+    await expect(
+      reconcileRoute({ io: f.io, route, target, environmentId: descriptor.environmentId }),
+    ).rejects.toThrow("could not be verified");
+    expect(f.mappings.has("4775")).toBe(false);
+  });
+  it("updates a previously owned proxy when the backend port changes", async () => {
+    const f = fixture({ "4775": target });
+    await reconcileRoute({
+      io: f.io,
+      route: { ...route, target },
+      target: "http://127.0.0.1:4778",
+      environmentId: descriptor.environmentId,
+    });
+    expect(f.mappings.get("4775")).toBe("http://127.0.0.1:4778");
+  });
+  it("restores the previous proxy after failed restart verification", async () => {
+    const f = fixture({ "4775": target });
+    f.mismatch();
+    await expect(
+      reconcileRoute({
+        io: f.io,
+        route: { ...route, target },
+        target: "http://127.0.0.1:4778",
+        environmentId: descriptor.environmentId,
+      }),
+    ).rejects.toThrow();
+    expect(f.mappings.get("4775")).toBe(target);
+  });
+  it("removes only the owned mapping when WSL stops, then restores it", async () => {
+    const f = fixture({ "4775": target, "4774": "http://127.0.0.1:4774" });
+    const owned = { ...route, target };
+    await reconcileRoute({ io: f.io, route: owned, target: null, environmentId: null });
+    expect(f.mappings.has("4775")).toBe(false);
+    expect(f.mappings.has("4774")).toBe(true);
+    await reconcileRoute({
+      io: f.io,
+      route: owned,
+      target,
+      environmentId: descriptor.environmentId,
+    });
+    expect(f.mappings.get("4775")).toBe(target);
+  });
+  it("does not remove a mapping replaced by another service", async () => {
+    const f = fixture({ "4775": "http://127.0.0.1:9999" });
+    await reconcileRoute({
+      io: f.io,
+      route: { ...route, target, enabled: false },
+      target: null,
+      environmentId: null,
+    });
+    expect(f.mappings.get("4775")).toBe("http://127.0.0.1:9999");
+  });
+});
+
+function service(
+  f: ReturnType<typeof fixture>,
+  options: { wslOnly?: boolean; ready?: boolean; failSave?: () => boolean } = {},
+) {
+  const instance = {
+    id: Pool.BackendInstanceId("wsl:Ubuntu"),
+    label: Effect.succeed("WSL Ubuntu"),
+    start: Effect.void,
+    stop: () => Effect.void,
+    waitForReady: () => Effect.succeed(true),
+    snapshot: Effect.succeed({
+      ready: options.ready ?? true,
+      desiredRunning: true,
+      activePid: Option.some(1),
+      restartAttempt: 0,
+      restartScheduled: false,
+    }),
+    currentConfig: Effect.succeedSome({
+      httpBaseUrl: new URL(target),
+    } as DesktopBackendStartConfig),
+  } satisfies Pool.DesktopBackendInstance;
+  return make(f.io).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.effect(
+          Settings.DesktopAppSettings,
+          Effect.gen(function* () {
+            const settings = yield* Settings.DesktopAppSettings;
+            return Settings.DesktopAppSettings.of({
+              ...settings,
+              setWslPairingRoute: (route) =>
+                options.failSave?.()
+                  ? Effect.fail(
+                      new Settings.DesktopSettingsWriteError({
+                        operation: "replace-settings-file",
+                        path: "/test/settings.json",
+                        cause: "write denied",
+                      }),
+                    )
+                  : settings.setWslPairingRoute(route),
+            });
+          }),
+        ).pipe(
+          Layer.provide(
+            Settings.layerTest({
+              ...Settings.DEFAULT_DESKTOP_SETTINGS,
+              wslBackendEnabled: true,
+              wslDistro: "Ubuntu",
+              wslOnly: options.wslOnly ?? false,
+            }),
+          ),
+        ),
+        Layer.succeed(Pool.DesktopBackendPool, {
+          list: Effect.succeed([instance]),
+          get: () => Effect.succeedSome(instance),
+          primary: Effect.succeed(instance),
+          register: () => Effect.succeed(instance),
+          unregister: () => Effect.void,
+        }),
+      ),
+    ),
+  );
+}
+describe("managed WSL pairing", () => {
+  it.effect("rejects an environment ID mismatch before changing routes", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const s = yield* service(f);
+      const error = yield* s
+        .configure({
+          environmentId: EnvironmentId.make("windows"),
+          bearerToken: "private",
+          enabled: true,
+          port: 4775,
+        })
+        .pipe(Effect.flip);
+      expect(error.message).toContain("not running");
+      expect(f.commands).toEqual([]);
+    }),
+  );
+  it.effect("rejects denied permission before changing routes", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      f.deny();
+      const s = yield* service(f);
+      const error = yield* s
+        .configure({
+          environmentId: descriptor.environmentId,
+          bearerToken: "private",
+          enabled: true,
+          port: 4775,
+        })
+        .pipe(Effect.flip);
+      expect(error.message).toContain("Permission denied");
+      expect(f.commands).toEqual([]);
+    }),
+  );
+  it.effect("uses primary controls in WSL-only mode", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const s = yield* service(f, { wslOnly: true });
+      expect((yield* s.getState).running).toBe(false);
+      yield* s.reconcile;
+      expect(f.commands).toEqual([]);
+    }),
+  );
+  it.effect("disables the owned port even if the user edited the port field", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const s = yield* service(f);
+      yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: true,
+        port: 4775,
+      });
+      yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: false,
+        port: 4999,
+      });
+      expect(f.mappings.has("4775")).toBe(false);
+      expect((yield* s.getState).port).toBe(4775);
+    }),
+  );
+  it.effect("moves the HTTPS route while preserving other mappings", () =>
+    Effect.gen(function* () {
+      const f = fixture({ "443": "http://127.0.0.1:8080", "4774": "http://127.0.0.1:4774" });
+      const s = yield* service(f);
+      yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: true,
+        port: 4775,
+      });
+      yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: true,
+        port: 4885,
+      });
+      expect(f.mappings.has("4775")).toBe(false);
+      expect(f.mappings.get("4885")).toBe(target);
+      expect(f.mappings.get("4774")).toBe("http://127.0.0.1:4774");
+      expect((yield* s.getState).port).toBe(4885);
+    }),
+  );
+  it.effect("restores both ports when saving a route change fails", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      let fail = false;
+      const s = yield* service(f, { failSave: () => fail });
+      yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: true,
+        port: 4775,
+      });
+      fail = true;
+      yield* s
+        .configure({
+          environmentId: descriptor.environmentId,
+          bearerToken: "private",
+          enabled: true,
+          port: 4885,
+        })
+        .pipe(Effect.flip);
+      expect(f.mappings.get("4775")).toBe(target);
+      expect(f.mappings.has("4885")).toBe(false);
+      expect((yield* s.getState).port).toBe(4775);
+    }),
+  );
+  it.effect("does not offer pairing for an unavailable backend", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const s = yield* service(f, { ready: false });
+      expect((yield* s.getState).environmentId).toBeNull();
+      expect(f.commands).toEqual([]);
+    }),
+  );
+});

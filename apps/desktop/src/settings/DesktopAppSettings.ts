@@ -33,6 +33,11 @@ export interface DesktopSettings {
   readonly serverExposureMode: DesktopServerExposureMode;
   readonly tailscaleServeEnabled: boolean;
   readonly tailscaleServePort: number;
+  readonly wslPairingRoute: {
+    readonly enabled: boolean;
+    readonly port: number;
+    readonly target: string | null;
+  };
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
   // Was a "local" | "wsl" swap mode in an earlier iteration of the WSL
@@ -80,6 +85,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   mainWindowBounds: null,
   mainWindowMaximized: false,
   serverExposureMode: "local-only",
+  wslPairingRoute: { enabled: false, port: 4775, target: null },
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
   updateChannel: "latest",
@@ -102,6 +108,13 @@ const DesktopSettingsDocument = Schema.Struct({
   mainWindowBounds: Schema.optionalKey(Schema.NullOr(DesktopWindowBoundsDocument)),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
   serverExposureMode: Schema.optionalKey(DesktopServerExposureModeSchema),
+  wslPairingRoute: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.Boolean,
+      port: Schema.Number,
+      target: Schema.NullOr(Schema.String),
+    }),
+  ),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
@@ -166,6 +179,9 @@ export class DesktopAppSettings extends Context.Service<
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setServerExposureMode: (
       mode: DesktopServerExposureMode,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setWslPairingRoute: (
+      route: DesktopSettings["wslPairingRoute"],
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setTailscaleServe: (input: {
       readonly enabled: boolean;
@@ -238,6 +254,12 @@ function normalizeDesktopSettingsDocument(
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
     serverExposureMode:
       parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
+    wslPairingRoute: parsed.wslPairingRoute
+      ? {
+          ...parsed.wslPairingRoute,
+          port: normalizeTailscaleServePort(parsed.wslPairingRoute.port),
+        }
+      : defaultSettings.wslPairingRoute,
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
     tailscaleServePort: normalizeTailscaleServePort(parsed.tailscaleServePort),
     updateChannel: updateChannelConfiguredByUser
@@ -272,6 +294,12 @@ function toDesktopSettingsDocument(
   if (settings.serverExposureMode !== defaults.serverExposureMode) {
     document.serverExposureMode = settings.serverExposureMode;
   }
+  if (
+    settings.wslPairingRoute.enabled ||
+    settings.wslPairingRoute.port !== 4775 ||
+    settings.wslPairingRoute.target !== null
+  )
+    document.wslPairingRoute = settings.wslPairingRoute;
   if (settings.tailscaleServeEnabled !== defaults.tailscaleServeEnabled) {
     document.tailscaleServeEnabled = settings.tailscaleServeEnabled;
   }
@@ -554,6 +582,8 @@ export const make = Effect.gen(function* () {
       persist((settings) => setServerExposureMode(settings, mode)).pipe(
         Effect.withSpan("desktop.settings.setServerExposureMode", { attributes: { mode } }),
       ),
+    setWslPairingRoute: (wslPairingRoute) =>
+      persist((settings) => ({ ...settings, wslPairingRoute })),
     setTailscaleServe: (input) =>
       persist((settings) => setTailscaleServe(settings, input)).pipe(
         Effect.withSpan("desktop.settings.setTailscaleServe", { attributes: input }),
@@ -615,6 +645,8 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
           update((settings) => setMainWindowBounds(settings, bounds, isMaximized)),
         setServerExposureMode: (mode) =>
           update((settings) => setServerExposureMode(settings, mode)),
+        setWslPairingRoute: (wslPairingRoute) =>
+          update((settings) => ({ ...settings, wslPairingRoute })),
         setTailscaleServe: (input) => update((settings) => setTailscaleServe(settings, input)),
         setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),
         setWslBackendEnabled: (enabled) =>
