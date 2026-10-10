@@ -17,7 +17,15 @@ vi.mock("../SidebarStageBackdrop", () => ({
 
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 
-function renderPendingActions(isRunning: boolean) {
+function renderPendingActions(
+  isRunning: boolean,
+  overrides: {
+    reviewing?: boolean;
+    questionCount?: number;
+    questionIndex?: number;
+    isComplete?: boolean;
+  } = {},
+) {
   return renderToStaticMarkup(
     createElement(ComposerPrimaryActions, {
       compact: true,
@@ -28,6 +36,7 @@ function renderPendingActions(isRunning: boolean) {
         canAdvance: true,
         isResponding: false,
         isComplete: true,
+        ...overrides,
       },
       isRunning,
       canInterrupt: isRunning,
@@ -75,6 +84,20 @@ afterEach(() => {
 });
 
 describe("ComposerPrimaryActions", () => {
+  it("requires review before a batch can be submitted and keeps single-question submission direct", () => {
+    expect(renderPendingActions(false, { questionCount: 3, questionIndex: 2 })).toContain(
+      "Review answers",
+    );
+    const review = renderPendingActions(false, {
+      questionCount: 3,
+      questionIndex: 3,
+      reviewing: true,
+      isComplete: false,
+    });
+    expect(review).toContain(">Submit</button>");
+    expect(review.match(/<button[^>]*type="submit"[^>]*>/)?.[0]).toContain("disabled");
+    expect(renderPendingActions(false, { questionCount: 1 })).not.toContain("Review answers");
+  });
   it("disables and labels the send button while feedback is uploading", () => {
     const markup = renderSendButton("Sending feedback");
 

@@ -39,6 +39,37 @@ function renderPanel(pendingUserInput: PendingUserInput = prompt) {
 }
 
 describe("ComposerPendingUserInputPanel", () => {
+  it("reviews every answer with edit controls, attachments and masked secrets", () => {
+    const batch = {
+      ...prompt,
+      questions: [
+        prompt.questions[0]!,
+        { ...prompt.questions[0]!, id: "secret", options: [], isSecret: true },
+        { ...prompt.questions[0]!, id: "missing", options: [] },
+      ],
+    };
+    const markup = renderToStaticMarkup(
+      <ComposerPendingUserInputPanel
+        pendingUserInputs={[batch]}
+        respondingRequestIds={[]}
+        answers={{
+          "question-1": { selectedOptionValues: ["Incremental"], attachmentNames: ["design.md"] },
+          secret: { customAnswer: "private-answer" },
+        }}
+        questionIndex={3}
+        onSelectQuestion={() => {}}
+        onToggleOption={() => {}}
+        onDismiss={() => {}}
+      />,
+    );
+    expect(markup).toContain("Review answers");
+    expect(markup).toContain("Incremental");
+    expect(markup).toContain("design.md");
+    expect(markup).toContain("Hidden answer");
+    expect(markup).not.toContain("private-answer");
+    expect(markup).toContain("Required answer missing");
+    expect(markup.match(/Edit answer/g)).toHaveLength(3);
+  });
   it("renders the header as a disclosure control for the question body", () => {
     const markup = renderPanel();
 

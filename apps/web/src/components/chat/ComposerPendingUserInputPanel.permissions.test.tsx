@@ -14,7 +14,7 @@ vi.mock("../ui/collapsible", () => {
 
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 
-it("cancels an answer's pending auto-submit on revocation and resumes after a new grant", async () => {
+it("never auto-advances choices and blocks edits after permission revocation", async () => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", {
@@ -84,7 +84,7 @@ it("cancels an answer's pending auto-submit on revocation and resumes after a ne
       vi.runAllTimers();
     });
     expect(onToggleOption).toHaveBeenCalledTimes(2);
-    expect(onAdvance).toHaveBeenCalledTimes(1);
+    expect(onAdvance).not.toHaveBeenCalled();
   } finally {
     await act(async () => renderer?.unmount());
     vi.unstubAllGlobals();

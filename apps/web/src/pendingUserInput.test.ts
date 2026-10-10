@@ -376,6 +376,10 @@ it("accepts attachment-only answers after every upload finishes", () => {
 });
 
 describe("carryDisplacedCustomAnswerIntoPrompt", () => {
+  it("never copies a secret answer into the persisted thread draft", () => {
+    expect(carryDisplacedCustomAnswerIntoPrompt("draft", "secret value", true)).toBe("draft");
+    expect(carryDisplacedCustomAnswerIntoPrompt("", "secret value", true)).toBe("");
+  });
   it("keeps the thread draft when nothing was typed into the answer", () => {
     expect(carryDisplacedCustomAnswerIntoPrompt("draft", undefined)).toBe("draft");
     expect(carryDisplacedCustomAnswerIntoPrompt("draft", "   ")).toBe("draft");

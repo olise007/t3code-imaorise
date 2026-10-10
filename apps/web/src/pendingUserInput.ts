@@ -105,7 +105,9 @@ const DISPLACED_ANSWER_SEPARATOR = "\n\n";
 export function carryDisplacedCustomAnswerIntoPrompt(
   prompt: string,
   customAnswer: string | undefined,
+  secret = false,
 ): string {
+  if (secret) return prompt;
   const displaced = customAnswer?.trim() ?? "";
   if (displaced.length === 0) {
     return prompt;

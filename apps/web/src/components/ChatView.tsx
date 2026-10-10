@@ -10333,7 +10333,11 @@ export default function ChatView(props: ChatViewProps) {
         pendingUserInputAnswersByRequestId[activePendingRequestKey]?.[questionId]?.customAnswer;
       const currentPrompt =
         useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.prompt ?? "";
-      const nextPrompt = carryDisplacedCustomAnswerIntoPrompt(currentPrompt, displacedAnswer);
+      const nextPrompt = carryDisplacedCustomAnswerIntoPrompt(
+        currentPrompt,
+        displacedAnswer,
+        activePendingUserInput.questions.find((question) => question.id === questionId)?.isSecret,
+      );
       if (nextPrompt !== currentPrompt) {
         setComposerDraftPrompt(composerDraftTarget, nextPrompt);
       }
