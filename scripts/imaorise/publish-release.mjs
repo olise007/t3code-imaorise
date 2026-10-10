@@ -26,10 +26,13 @@ const exactly = (predicate, label) => {
   if (matches.length !== 1) throw new Error(`Expected exactly one ${label}.`);
   return matches[0];
 };
-const apk = exactly((f) => f.endsWith(".apk"), "APK");
+const includeAndroid = process.env.INCLUDE_ANDROID !== "false";
+const apk = includeAndroid ? exactly((f) => f.endsWith(".apk"), "APK") : undefined;
+if (!includeAndroid && files.some((f) => f.endsWith(".apk") || /^android-.*\.json$/.test(f)))
+  throw new Error("Unexpected Android assets in a desktop-only release.");
 const exe = exactly((f) => f.endsWith(".exe"), "NSIS installer");
 const runtime = exactly((f) => f.endsWith("-linux-x64.tar.gz"), "matching Linux runtime");
-if (!apk.includes(version) || !runtime.includes(version))
+if ((apk && !apk.includes(version)) || !runtime.includes(version))
   throw new Error("Artifacts do not match the release version.");
 const metadata = `${channel === "beta" ? "beta" : "latest"}.yml`;
 if (!files.includes(metadata)) throw new Error("Updater metadata is missing.");
@@ -40,47 +43,43 @@ const installerBytes = NodeFS.readFileSync(NodePath.join(dir, exe));
 const sha512 = NodeCrypto.createHash("sha512").update(installerBytes).digest("base64");
 if (!yml.includes(sha512) || !yml.includes(exe))
   throw new Error("Windows updater metadata does not match the installer.");
-const signature = NodeFS.readFileSync(NodePath.join(dir, "signature.txt"), "utf8");
-const certificate = signature
-  .match(/certificate SHA-256 digest:\s*([a-f0-9]{64})/i)?.[1]
-  ?.toLowerCase();
-const badging = NodeFS.readFileSync(NodePath.join(dir, "package.txt"), "utf8");
-if (
-  !certificate ||
-  !badging.includes("package: name='com.imaorise.t3code'") ||
-  !badging.includes(`versionCode='${code}'`) ||
-  !badging.includes(`versionName='${version}'`) ||
-  !badging.includes("native-code: 'arm64-v8a'")
-)
-  throw new Error("APK evidence failed verification.");
-const minimum = Number(badging.match(/sdkVersion:'(\d+)'/)?.[1]);
-if (!minimum) throw new Error("APK minimum Android version is missing.");
-const bytes = NodeFS.readFileSync(NodePath.join(dir, apk));
-const manifest = {
-  schemaVersion: 1,
-  channel,
-  version,
-  versionCode: code,
-  minimumAndroidVersion: minimum,
-  architecture: "arm64-v8a",
-  packageId: "com.imaorise.t3code",
-  apkUrl: `https://github.com/${repo}/releases/download/${tag}/${apk}`,
-  size: bytes.length,
-  sha256: NodeCrypto.createHash("sha256").update(bytes).digest("hex"),
-  certificateFingerprint: certificate,
-  sourceRevision: revision,
-  releaseNotes: `Personal ${channel} ${version}. Plan workflow and in-app updates. Windows installer is unsigned.`,
-};
-const manifestName = `android-${channel}.json`;
-NodeFS.writeFileSync(NodePath.join(dir, manifestName), JSON.stringify(manifest, null, 2) + "\n");
-const distribution = [
-  apk,
-  exe,
-  runtime,
-  metadata,
-  ...files.filter((f) => f.endsWith(".blockmap")),
-  manifestName,
-];
+const distribution = [exe, runtime, metadata, ...files.filter((f) => f.endsWith(".blockmap"))];
+if (includeAndroid) {
+  const signature = NodeFS.readFileSync(NodePath.join(dir, "signature.txt"), "utf8");
+  const certificate = signature
+    .match(/certificate SHA-256 digest:\s*([a-f0-9]{64})/i)?.[1]
+    ?.toLowerCase();
+  const badging = NodeFS.readFileSync(NodePath.join(dir, "package.txt"), "utf8");
+  if (
+    !certificate ||
+    !badging.includes("package: name='com.imaorise.t3code'") ||
+    !badging.includes(`versionCode='${code}'`) ||
+    !badging.includes(`versionName='${version}'`) ||
+    !badging.includes("native-code: 'arm64-v8a'")
+  )
+    throw new Error("APK evidence failed verification.");
+  const minimum = Number(badging.match(/sdkVersion:'(\d+)'/)?.[1]);
+  if (!minimum) throw new Error("APK minimum Android version is missing.");
+  const bytes = NodeFS.readFileSync(NodePath.join(dir, apk));
+  const manifest = {
+    schemaVersion: 1,
+    channel,
+    version,
+    versionCode: code,
+    minimumAndroidVersion: minimum,
+    architecture: "arm64-v8a",
+    packageId: "com.imaorise.t3code",
+    apkUrl: `https://github.com/${repo}/releases/download/${tag}/${apk}`,
+    size: bytes.length,
+    sha256: NodeCrypto.createHash("sha256").update(bytes).digest("hex"),
+    certificateFingerprint: certificate,
+    sourceRevision: revision,
+    releaseNotes: `Personal ${channel} ${version}. Plan workflow and in-app updates. Windows installer is unsigned.`,
+  };
+  const manifestName = `android-${channel}.json`;
+  NodeFS.writeFileSync(NodePath.join(dir, manifestName), JSON.stringify(manifest, null, 2) + "\n");
+  distribution.push(apk, manifestName);
+}
 const evidence = {
   sourceRevision: revision,
   version,
