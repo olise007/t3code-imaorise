@@ -37,7 +37,10 @@ export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$ndk"
 # overwrite tracked upstream binaries and invalidate the clean-build guarantee.
 [[ -s modules/t3-terminal/android/src/main/jniLibs/arm64-v8a/libghostty-vt.so ]] || { echo 'The committed ARM64 terminal library is missing.' >&2; exit 1; }
 cd android
-./gradlew --no-daemon --max-workers=2 assembleRelease -PreactNativeArchitectures=arm64-v8a > "$output/gradle.log" 2>&1
+if ! ./gradlew --no-daemon --max-workers=2 assembleRelease -PreactNativeArchitectures=arm64-v8a > "$output/gradle.log" 2>&1; then
+  tail -n 160 "$output/gradle.log" >&2
+  exit 1
+fi
 cd ../../..
 signing=${T3CODE_IMAORISE_SIGNING_DIRECTORY:-$HOME/.local/share/t3code-imaorise/signing}
 mkdir -p "$signing"
