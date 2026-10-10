@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./imaoriseBuild": {
+      "types": "./src/imaoriseBuild.ts",
+      "import": "./src/imaoriseBuild.ts"
+    },
     "./authScopeOptions": {
       "types": "./src/authScopeOptions.ts",
       "import": "./src/authScopeOptions.ts"

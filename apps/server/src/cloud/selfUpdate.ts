@@ -1,3 +1,4 @@
+import { imaoriseManagedUpdatesEnabled } from "@t3tools/shared/imaoriseBuild";
 import {
   ServerSelfUpdateError,
   type ServerSelfUpdateCapability,
@@ -41,6 +42,7 @@ export function resolveServerSelfUpdateCapability(input: {
   readonly desktopManaged: boolean;
   readonly launcherManaged: boolean;
 }): ServerSelfUpdateCapability | null {
+  if (!imaoriseManagedUpdatesEnabled) return null;
   if (input.desktopManaged) return "desktop-managed" as const;
   return input.launcherManaged ? ("boot-service" as const) : null;
 }
@@ -196,6 +198,9 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   const update: ServerSelfUpdate["Service"]["update"] = Effect.fn(
     "cloud.server_self_update.update",
   )(function* (input, reportProgress = () => Effect.void, onHandoffAccepted = () => Effect.void) {
+    if (!imaoriseManagedUpdatesEnabled) {
+      return yield* failWith("T3 Code Imaorise updates require update-imaorise.ps1.");
+    }
     if (capability === "desktop-managed") {
       // input.targetVersion is meaningless here: the desktop app's own
       // update feed decides what it downloads, and the result carries what
@@ -337,7 +342,9 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   return ServerSelfUpdate.of({
     update,
     commitDesktopUpdate: (requestId, onHandoffAccepted) =>
-      desktopAppUpdate.commit(requestId, onHandoffAccepted),
+      imaoriseManagedUpdatesEnabled
+        ? desktopAppUpdate.commit(requestId, onHandoffAccepted)
+        : Effect.fail(failWith("T3 Code Imaorise updates require update-imaorise.ps1.")),
   });
 });
 

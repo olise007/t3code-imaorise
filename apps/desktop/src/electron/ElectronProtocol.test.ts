@@ -47,7 +47,7 @@ describe("ElectronProtocol", () => {
         clerkFrontendApiHostname: undefined,
       });
       const request = (pathname: string, init?: RequestInit) =>
-        Effect.promise(() => handler!(new Request(`t3code://app${pathname}`, init)));
+        Effect.promise(() => handler!(new Request(`t3code-imaorise://app${pathname}`, init)));
 
       // SPA routes fall back to index.html, including ones containing dots.
       const page = yield* request("/settings/connections");
@@ -82,7 +82,7 @@ describe("ElectronProtocol", () => {
         Effect.gen(function* () {
           const protocol = yield* ElectronProtocol.ElectronProtocol;
           yield* protocol.registerDesktopProtocol({
-            scheme: "t3code-dev",
+            scheme: "t3code-imaorise-dev",
             targetOrigin: new URL("http://127.0.0.1:3773/"),
             clerkFrontendApiHostname: "clerk.t3.codes",
           });
@@ -90,11 +90,11 @@ describe("ElectronProtocol", () => {
 
           const response = yield* Effect.promise(() =>
             handler!(
-              new Request("t3code-dev://app/api/health?verbose=1", {
+              new Request("t3code-imaorise-dev://app/api/health?verbose=1", {
                 headers: {
                   accept: "application/json",
-                  origin: "t3code-dev://app",
-                  referer: "t3code-dev://app/",
+                  origin: "t3code-imaorise-dev://app",
+                  referer: "t3code-imaorise-dev://app/",
                   "sec-fetch-site": "same-origin",
                 },
               }),
@@ -111,18 +111,18 @@ describe("ElectronProtocol", () => {
           );
           assert.include(
             response.headers.get("content-security-policy") ?? "",
-            "img-src 'self' t3code-dev: blob: data: http: https:",
+            "img-src 'self' t3code-imaorise-dev: blob: data: http: https:",
           );
           assert.include(
             response.headers.get("content-security-policy") ?? "",
-            "font-src 'self' t3code-dev: data:",
+            "font-src 'self' t3code-imaorise-dev: data:",
           );
         }),
       );
 
       assert.deepEqual(
         handleMock.mock.calls.map((call) => call[0]),
-        ["t3code-dev"],
+        ["t3code-imaorise-dev"],
       );
       assert.equal(netFetchMock.mock.calls[0]?.[0], "http://127.0.0.1:3773/api/health?verbose=1");
       const forwardedHeaders = new Headers(netFetchMock.mock.calls[0]?.[1]?.headers);
@@ -130,7 +130,7 @@ describe("ElectronProtocol", () => {
       assert.isNull(forwardedHeaders.get("origin"));
       assert.isNull(forwardedHeaders.get("referer"));
       assert.isNull(forwardedHeaders.get("sec-fetch-site"));
-      assert.deepEqual(unhandleMock.mock.calls, [["t3code-dev"]]);
+      assert.deepEqual(unhandleMock.mock.calls, [["t3code-imaorise-dev"]]);
     }).pipe(Effect.provide(layerProtocol)),
   );
 
@@ -149,7 +149,7 @@ describe("ElectronProtocol", () => {
             targetOrigin: new URL("http://127.0.0.1:3773/"),
             clerkFrontendApiHostname: undefined,
           });
-          return yield* Effect.promise(() => handler!(new Request("t3code://other/")));
+          return yield* Effect.promise(() => handler!(new Request("t3code-imaorise://other/")));
         }),
       );
 
@@ -172,12 +172,12 @@ describe("ElectronProtocol", () => {
         Effect.gen(function* () {
           const protocol = yield* ElectronProtocol.ElectronProtocol;
           yield* protocol.registerDesktopProtocol({
-            scheme: "t3code-dev",
+            scheme: "t3code-imaorise-dev",
             targetOrigin: new URL("http://127.0.0.1:5733/"),
             clerkFrontendApiHostname: undefined,
           });
           const fiber = yield* Effect.forkChild(
-            Effect.promise(() => handler!(new Request("t3code-dev://app/"))),
+            Effect.promise(() => handler!(new Request("t3code-imaorise-dev://app/"))),
           );
           yield* TestClock.adjust("50 millis");
           return yield* Fiber.join(fiber);
@@ -205,13 +205,13 @@ describe("ElectronProtocol", () => {
         Effect.gen(function* () {
           const protocol = yield* ElectronProtocol.ElectronProtocol;
           yield* protocol.registerDesktopProtocol({
-            scheme: "t3code-dev",
+            scheme: "t3code-imaorise-dev",
             targetOrigin: new URL("http://127.0.0.1:5733/"),
             clerkFrontendApiHostname: undefined,
           });
           const fiber = yield* Effect.forkChild(
             Effect.promise(() =>
-              handler!(new Request("t3code-dev://app/")).then(
+              handler!(new Request("t3code-imaorise-dev://app/")).then(
                 () => null,
                 (error: unknown) => error,
               ),
@@ -243,16 +243,19 @@ describe("ElectronProtocol", () => {
       const protocol = yield* ElectronProtocol.ElectronProtocol;
       const error = yield* Effect.scoped(
         protocol.registerDesktopProtocol({
-          scheme: "t3code-dev",
+          scheme: "t3code-imaorise-dev",
           targetOrigin: new URL("http://127.0.0.1:3773/"),
           clerkFrontendApiHostname: undefined,
         }),
       ).pipe(Effect.flip);
 
       assert.instanceOf(error, ElectronProtocol.ElectronProtocolRegistrationError);
-      assert.equal(error.scheme, "t3code-dev");
+      assert.equal(error.scheme, "t3code-imaorise-dev");
       assert.strictEqual(error.cause, cause);
-      assert.equal(error.message, 'Failed to register Electron protocol scheme "t3code-dev".');
+      assert.equal(
+        error.message,
+        'Failed to register Electron protocol scheme "t3code-imaorise-dev".',
+      );
     }).pipe(Effect.provide(layerProtocol)),
   );
 
@@ -287,7 +290,7 @@ describe("ElectronProtocol", () => {
 
   it("keeps executable sources host-restricted while allowing runtime network resources", () => {
     const policy = ElectronProtocol.makeDesktopContentSecurityPolicy({
-      scheme: "t3code",
+      scheme: "t3code-imaorise",
       targetOrigin: new URL("http://127.0.0.1:3773/"),
       clerkFrontendApiHostname: "clerk.t3.codes",
     });
@@ -315,14 +318,20 @@ describe("ElectronProtocol", () => {
     ]);
     assert.deepEqual(directives["img-src"], [
       "'self'",
-      "t3code:",
+      "t3code-imaorise:",
       "blob:",
       "data:",
       "http:",
       "https:",
     ]);
-    assert.deepEqual(directives["media-src"], ["'self'", "t3code:", "blob:", "http:", "https:"]);
+    assert.deepEqual(directives["media-src"], [
+      "'self'",
+      "t3code-imaorise:",
+      "blob:",
+      "http:",
+      "https:",
+    ]);
     assert.deepEqual(directives["frame-src"], ["'self'", "blob:", "http:", "https:"]);
-    assert.deepEqual(directives["font-src"], ["'self'", "t3code:", "data:"]);
+    assert.deepEqual(directives["font-src"], ["'self'", "t3code-imaorise:", "data:"]);
   });
 });

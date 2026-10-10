@@ -1,3 +1,4 @@
+import { imaoriseManagedUpdatesEnabled } from "@t3tools/shared/imaoriseBuild";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
   CLI_RELEASE_BASE_URL_ENV,
@@ -248,6 +249,11 @@ export const updateCommand = Command.make("update", {
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
+      if (!imaoriseManagedUpdatesEnabled) {
+        return yield* new CliUpdateError({
+          reason: "T3 Code Imaorise updates require update-imaorise.ps1.",
+        });
+      }
       const logLevel = yield* GlobalFlag.LogLevel;
       const config = yield* resolveCliAuthConfig(flags, logLevel);
       return yield* runUpdate({

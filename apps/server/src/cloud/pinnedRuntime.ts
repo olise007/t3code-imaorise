@@ -1,3 +1,4 @@
+import { imaoriseManagedUpdatesEnabled } from "@t3tools/shared/imaoriseBuild";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -267,6 +268,11 @@ const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(fun
 const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(function* (
   input: PinnedRuntimeInstallInput,
 ) {
+  if (!imaoriseManagedUpdatesEnabled) {
+    return yield* new PinnedRuntimeInstallError({
+      step: "Managed runtime downloads are disabled in T3 Code Imaorise; use update-imaorise.ps1",
+    });
+  }
   const { fs } = input;
   const paths = pinnedRuntimePaths(input.path, input.baseDir, input.version, input.platform);
   const [versionDirExists, entryExists, sentinel] = yield* Effect.all([
