@@ -21,6 +21,12 @@ The Linux single executable uses an isolated Node 26.8.2 through
 Install Visual Studio 2022 C++ Build Tools, a Windows SDK and Spectre libraries.
 See [native build prerequisites](development.md#windows-installer-prerequisites).
 WSL uses `build-essential`, `pkg-config`, `libsecret-1-dev` and Rust.
+Android builds use OpenJDK 21 at `/usr/lib/jvm/java-21-openjdk-amd64` and an SDK
+under `~/.local/share/t3code-imaorise/android-sdk`. Install Google's command-line
+tools in `cmdline-tools/latest`, accept the SDK licenses, and install platform
+tools. The APK command resolves SDK, Build Tools and NDK versions from the locked
+React Native version and installs the required packages. Gradle, Zig and Ghostty
+caches have personal paths.
 Authenticate GitHub CLI with `gh auth login`; use your normal account.
 
 The build uses the public production Connect values documented in `.env.example`.
@@ -57,8 +63,9 @@ No Git push is performed by the update command.
 
 It installs frozen dependencies, runs focused browser/isolation/update tests,
 scoped lint and package typechecks, builds and smoke-tests the Linux x64 archive,
-then builds an unsigned native Windows x64 NSIS installer embedding that archive.
-Both outputs use the same committed revision. The desktop packaging process
+then builds an unsigned native Windows x64 NSIS installer embedding that archive
+and a signed Android ARM64 APK. All outputs use the same committed revision.
+The desktop packaging process
 also runs its upstream native dependency and payload checks.
 
 Artifacts are retained in dated folders below
@@ -67,6 +74,31 @@ Artifacts are retained in dated folders below
 Failed commands stop the build and leave a failed manifest and log. A successful
 build is labelled **awaiting interactive acceptance**, never automatically ready.
 Review these before installing. Keep prior installers and manifests.
+
+Android artifacts live in `android/`, including the APK, signature/package
+inspection, Gradle log and revision manifest. The app is `com.imaorise.t3code`
+with scheme `t3code-imaorise`, separate from the official Android app. Its
+version code advances with the personal branch's commit count. APK updates use
+the same private local signing key in `~/.local/share/t3code-imaorise/signing`.
+Back up that directory privately; losing the key prevents updating an installed
+personal APK without uninstalling it. Never put the key or password in Git or
+the build artifacts. Official Expo OTA updates are permanently disabled.
+The APK defaults to direct pairing over Tailscale; Connect is disabled unless
+`T3CODE_IMAORISE_MOBILE_CONNECT_ENABLED=1` is explicitly configured for a hosted
+authentication setup that supports the personal app. The standard build keeps
+it disabled. No Expo account, EAS cloud build or store publication is involved.
+
+For an APK-only rebuild of an already committed revision in WSL:
+
+```bash
+bash scripts/imaorise/android.sh /path/to/android-artifacts "$(git rev-parse HEAD)"
+```
+
+Install the APK on an ARM64 Android phone only after reviewing its evidence.
+Use Add Environment with a fresh pairing URL for the personal server. Test
+browser navigation, an agent turn, terminal output and reconnecting over
+Tailscale. Keep the official app installed. Native automation requires enabling
+T3's Device access; a compiled APK is not evidence of a working phone session.
 
 ## Isolation and acceptance
 

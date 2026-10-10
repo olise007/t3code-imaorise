@@ -135,7 +135,6 @@ export const hashBundle = Effect.fn("hashBundle")(function* (root: string) {
 });
 type FileSystemError = import("effect/PlatformError").PlatformError;
 
-const bundleId = "com.t3tools.t3code.dev";
 const roots = Effect.gen(function* () {
   const path = yield* Path.Path;
   const repo = yield* path.fromFileUrl(new URL("../", import.meta.url));
@@ -255,6 +254,7 @@ export const installedBinary = Effect.fn("installedBinary")(function* (
   device: string,
   run: typeof command = command,
 ) {
+  const bundleId = platform === "android" ? "com.imaorise.t3code.dev" : "com.t3tools.t3code.dev";
   if (platform === "ios") {
     const apps = yield* run("xcrun", ["simctl", "listapps", device]);
     if (!apps.includes(`"${bundleId}"`)) return null;
@@ -303,7 +303,7 @@ const main = Command.make(
       });
     const recordPath = path.join(
       home,
-      ".cache/t3code/native-clients",
+      ".cache/t3code-imaorise/native-clients",
       platform,
       `${yield* digest(device)}.json`,
     );
