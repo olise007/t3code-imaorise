@@ -53,8 +53,8 @@ rm "$output/aligned.apk"
 "$ANDROID_HOME/build-tools/$buildTools/apksigner" verify --verbose --print-certs "$apk" > "$output/signature.txt"
 "$ANDROID_HOME/build-tools/$buildTools/aapt" dump badging "$apk" > "$output/package.txt"
 "$ANDROID_HOME/build-tools/$buildTools/aapt" dump xmltree "$apk" AndroidManifest.xml > "$output/native-manifest.txt"
-rg -q "package: name='com.imaorise.t3code'" "$output/package.txt"
-rg -q 't3code-imaorise' "$output/native-manifest.txt"
+grep -q "package: name='com.imaorise.t3code'" "$output/package.txt"
+grep -q 't3code-imaorise' "$output/native-manifest.txt"
 [[ -z $(git status --porcelain) ]] || { echo 'Android build modified tracked source.' >&2; exit 1; }
 python3 - "$output/android-manifest.json" "$expected" "$T3CODE_IMAORISE_ANDROID_VERSION_CODE" "$ndk" "$sdk" "$buildTools" <<'PY'
 import json, subprocess, sys

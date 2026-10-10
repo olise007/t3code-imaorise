@@ -170,6 +170,14 @@ jobs:
       - name: Remove signing material
         if: always()
         run: rm -rf "$RUNNER_TEMP/personal-signing"
+      - name: Retain Android failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: personal-android-diagnostics
+          path: ${{ runner.temp }}/personal-android/*
+          retention-days: 1
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: personal-android
