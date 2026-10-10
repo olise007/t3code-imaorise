@@ -24,7 +24,12 @@ cd apps/mobile
 vp exec expo prebuild --platform android --clean --no-install
 read -r ndk sdk buildTools < <(node -e 'const s=require("fs").readFileSync("node_modules/react-native/gradle/libs.versions.toml","utf8"); const value=k=>s.match(new RegExp(k+"\\s*=\\s*\"([^\"]+)\""))?.[1]; console.log(value("ndkVersion"),value("compileSdk"),value("buildTools"))')
 [[ -n "$ndk" ]] || { echo 'Could not resolve generated Android NDK version.' >&2; exit 1; }
-"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ndk" 'cmake;3.22.1' "platforms;android-$sdk" "build-tools;$buildTools"
+catalog=$("$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --list)
+platformPackage="platforms;android-$sdk"
+if [[ "$catalog" != *"$platformPackage "* ]]; then
+  platformPackage="platforms;android-$sdk.0"
+fi
+"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ndk" 'cmake;3.22.1' "$platformPackage" "build-tools;$buildTools"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$ndk"
 export GHOSTTY_SOURCE_DIR="$HOME/.cache/t3code-imaorise/ghostty-9f62873b"
 bash modules/t3-terminal/scripts/build-libghostty-android.sh

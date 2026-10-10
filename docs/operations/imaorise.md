@@ -45,6 +45,14 @@ the current production origin restriction. Desktop Connect sign-in remains
 blocked. The user selected Tailscale as the remote-access alternative; phone
 pairing over Tailscale is the readiness gate.
 
+The first native Windows packaging attempt on this machine was blocked by
+Windows Code Integrity on 2026-10-10. Event 3077 reports that both the temporary
+NSIS executable and `T3 Code Imaorise.exe` fail the signing-level requirements.
+The unsigned workflow therefore cannot finish or launch here under the current
+policy. Preserve the failed manifest and staged payload. A policy-approved
+signing/build route must be arranged before native Windows rollout; this workflow
+does not change security policy. Linux runtime and Android builds can run separately.
+
 ## Manual builds and updates
 
 From Windows PowerShell:
