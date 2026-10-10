@@ -8,6 +8,7 @@ const mock = vi.hoisted(() => ({
   canInstall: vi.fn(),
   flushDrafts: vi.fn(),
   flushOutbox: vi.fn(),
+  installedCode: vi.fn(),
   files: new Map<string, string>(),
 }));
 vi.mock("react-native", () => ({
@@ -20,7 +21,7 @@ vi.mock("expo-constants", () => ({
 }));
 vi.mock("expo", () => ({
   requireNativeModule: () => ({
-    getInstalledPersonalVersionCode: () => 5216,
+    getInstalledPersonalVersionCode: mock.installedCode,
     verifyPersonalApk: mock.verify,
     installPersonalApk: mock.install,
     canInstallPersonalApk: mock.canInstall,
@@ -64,6 +65,7 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   mock.files.clear();
+  mock.installedCode.mockReturnValue(5216);
   vi.stubGlobal("fetch", mock.fetch);
   mock.fetch.mockImplementation(async (url: string) => ({
     ok: true,
@@ -92,6 +94,42 @@ beforeEach(() => {
   mock.flushOutbox.mockResolvedValue(undefined);
 });
 describe("personal APK updates", () => {
+  it("confirms installation after process replacement and bypasses the old check throttle", async () => {
+    let service = await import("./personal-apk-updates");
+    await service.checkPersonalApkUpdate(true);
+    await service.downloadPersonalApkUpdate();
+    await service.installPersonalApkUpdate();
+    const preferences = "file:///private/personal-updates.json";
+    expect(JSON.parse(mock.files.get(preferences)!)).toMatchObject({
+      pendingInstallVersionCode: 5217,
+    });
+    vi.resetModules();
+    mock.installedCode.mockReturnValue(5217);
+    service = await import("./personal-apk-updates");
+    await service.checkPersonalApkUpdate();
+    expect(mock.fetch).toHaveBeenCalledTimes(4);
+    expect(JSON.parse(mock.files.get(preferences)!)).toMatchObject({
+      pendingInstallVersionCode: null,
+      lastInstalledVersionCode: 5217,
+    });
+    expect(mock.install).toHaveBeenCalledOnce();
+  });
+  it("recovers an unfinished installation after a cold restart without reinstalling automatically", async () => {
+    mock.files.set(
+      "file:///private/personal-updates.json",
+      JSON.stringify({
+        channel: "beta",
+        lastCheck: Date.now(),
+        lastInstalledVersionCode: 5216,
+        pendingInstallVersionCode: 5217,
+      }),
+    );
+    const service = await import("./personal-apk-updates");
+    await service.checkPersonalApkUpdate();
+    expect(mock.fetch).toHaveBeenCalledTimes(2);
+    expect(mock.install).not.toHaveBeenCalled();
+    expect(mock.download).not.toHaveBeenCalled();
+  });
   it("throttles resume checks but lets manual checks bypass throttling", async () => {
     const service = await import("./personal-apk-updates");
     await service.checkPersonalApkUpdate();

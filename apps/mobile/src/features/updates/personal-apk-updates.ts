@@ -52,6 +52,8 @@ let lastCheck = 0;
 let busy = false;
 let readyUri: string | null = null;
 let loaded: Promise<void> | null = null;
+let lastInstalledVersionCode = 0;
+let pendingInstallVersionCode: number | null = null;
 const listeners = new Set<() => void>();
 const preferencesUri = `${FileSystem.documentDirectory}personal-updates.json`;
 const installedCode = () => bridge().getInstalledPersonalVersionCode();
@@ -63,7 +65,12 @@ function update(patch: Partial<UpdateState>) {
 async function persist() {
   await FileSystem.writeAsStringAsync(
     preferencesUri,
-    JSON.stringify({ channel: state.channel, lastCheck }),
+    JSON.stringify({
+      channel: state.channel,
+      lastCheck,
+      lastInstalledVersionCode,
+      pendingInstallVersionCode,
+    }),
   );
 }
 async function load() {
@@ -79,9 +86,34 @@ async function load() {
         update({ channel: stored.channel });
         if ("lastCheck" in stored && typeof stored.lastCheck === "number")
           lastCheck = stored.lastCheck;
+        if (
+          "lastInstalledVersionCode" in stored &&
+          typeof stored.lastInstalledVersionCode === "number"
+        )
+          lastInstalledVersionCode = stored.lastInstalledVersionCode;
+        if (
+          "pendingInstallVersionCode" in stored &&
+          typeof stored.pendingInstallVersionCode === "number"
+        )
+          pendingInstallVersionCode = stored.pendingInstallVersionCode;
       }
     } catch {
       /* First launch has no preferences. */
+    }
+    const actualVersionCode = installedCode();
+    if (actualVersionCode !== lastInstalledVersionCode) lastCheck = 0;
+    lastInstalledVersionCode = actualVersionCode;
+    if (pendingInstallVersionCode !== null) {
+      if (actualVersionCode >= pendingInstallVersionCode)
+        update({ status: "current", manifest: null, error: null });
+      else
+        Alert.alert(
+          "Update not installed",
+          "The previous installation did not complete. Check for updates and retry when ready.",
+        );
+      pendingInstallVersionCode = null;
+      lastCheck = 0;
+      await persist();
     }
   })();
   await loaded;
@@ -221,6 +253,8 @@ export async function installPersonalApkUpdate() {
       manifest.certificateFingerprint,
       manifest.size,
     );
+    pendingInstallVersionCode = manifest.versionCode;
+    await persist();
     update({ status: "installing" });
     await bridge().installPersonalApk(readyUri);
   } catch (error) {
@@ -254,6 +288,9 @@ export function usePersonalApkUpdateLifecycle() {
             status: "ready",
             error: "Installation was cancelled or did not complete. You can retry.",
           });
+        pendingInstallVersionCode = null;
+        lastInstalledVersionCode = installedCode();
+        void persist().catch(() => {});
       }
       void checkPersonalApkUpdate();
     });
