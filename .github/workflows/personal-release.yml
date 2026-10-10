@@ -149,6 +149,8 @@ jobs:
           distribution: temurin
           java-version: "21"
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Restore existing personal signing key
         env:
           KEYSTORE: ${{ secrets.IMAORISE_ANDROID_KEYSTORE_BASE64 }}
