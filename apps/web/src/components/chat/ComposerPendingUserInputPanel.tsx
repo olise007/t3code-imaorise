@@ -166,7 +166,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             <div key={question.id} className="space-y-1">
               <p className="text-sm font-medium">{question.question}</p>
               <p className="whitespace-pre-wrap text-sm text-muted-foreground">
-                {questionAnswerSummary(summary, question.isSecret)}
+                {questionAnswerSummary(summary, question.isSecret, question.required !== false)}
               </p>
               {draft?.attachmentNames?.map((name) => (
                 <p key={name} className="text-xs">

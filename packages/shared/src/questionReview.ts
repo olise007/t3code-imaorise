@@ -12,8 +12,9 @@ export function questionReviewStep(count: number, index: number) {
 export function questionAnswerSummary(
   answer: string | readonly string[] | undefined,
   secret = false,
+  required = false,
 ): string {
-  if (answer === undefined) return "Not answered";
+  if (answer === undefined) return required ? "Required answer missing" : "Not answered";
   if (secret) return "Hidden answer";
   return Array.isArray(answer) ? answer.join(", ") : String(answer);
 }

@@ -17,6 +17,8 @@ import java.net.URI
 
 class T3NativeControlsModule : Module() {
   private var filePreviewPromise: Promise? = null
+  private fun versionCode(info: android.content.pm.PackageInfo): Long =
+    if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
 
   @Suppress("TooGenericExceptionCaught") // Clear the pending promise before rethrowing.
   override fun definition() = ModuleDefinition {
@@ -34,14 +36,16 @@ class T3NativeControlsModule : Module() {
       }
       fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
       require(hex(digest.digest()).equals(expectedSha, true)) { "APK checksum mismatch." }
-      val flags = PackageManager.GET_SIGNING_CERTIFICATES
+      val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
       val archive = context.packageManager.getPackageArchiveInfo(file.path, flags) ?: error("Invalid APK.")
       val installed = context.packageManager.getPackageInfo(context.packageName, flags)
       require(context.packageName == "com.imaorise.t3code" && archive.packageName == context.packageName) { "APK package mismatch." }
-      require(archive.longVersionCode == expectedCode && archive.longVersionCode > installed.longVersionCode) { "Update would not advance the installed version." }
+      require(versionCode(archive) == expectedCode && versionCode(archive) > versionCode(installed)) { "Update would not advance the installed version." }
       require((archive.applicationInfo?.minSdkVersion ?: Int.MAX_VALUE) <= Build.VERSION.SDK_INT) { "This update requires a newer Android version." }
-      fun certificates(info: android.content.pm.PackageInfo): Set<String> =
-        info.signingInfo?.apkContentsSigners?.map { hex(MessageDigest.getInstance("SHA-256").digest(it.toByteArray())) }?.toSet() ?: emptySet()
+      fun certificates(info: android.content.pm.PackageInfo): Set<String> {
+        val signers = if (Build.VERSION.SDK_INT >= 28) info.signingInfo?.apkContentsSigners else info.signatures
+        return signers?.map { hex(MessageDigest.getInstance("SHA-256").digest(it.toByteArray())) }?.toSet() ?: emptySet()
+      }
       val trusted = certificates(installed)
       val candidate = certificates(archive)
       require(trusted.isNotEmpty() && candidate == trusted && candidate == setOf(expectedCertificate.lowercase().replace(":", ""))) { "APK signing certificate mismatch." }
@@ -55,19 +59,21 @@ class T3NativeControlsModule : Module() {
 
     Function("getInstalledPersonalVersionCode") {
       val context = appContext.reactContext ?: error("The app is not active.")
-      context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toDouble()
+      versionCode(context.packageManager.getPackageInfo(context.packageName, 0)).toDouble()
     }
     Function("canInstallPersonalApk") {
       val context = appContext.reactContext ?: error("The app is not active.")
-      context.packageManager.canRequestPackageInstalls()
+      Build.VERSION.SDK_INT < 26 || context.packageManager.canRequestPackageInstalls()
     }
     AsyncFunction("openPersonalInstallPermission") {
       val activity = appContext.currentActivity ?: error("The app is not active.")
-      activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
+      activity.startActivity(if (Build.VERSION.SDK_INT >= 26)
+        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}"))
+        else Intent(Settings.ACTION_SECURITY_SETTINGS))
     }
     AsyncFunction("installPersonalApk") { uri: String ->
       val activity = appContext.currentActivity ?: error("The app is not active.")
-      require(activity.packageManager.canRequestPackageInstalls()) { "Allow this app to install updates in Android Settings first." }
+      require(Build.VERSION.SDK_INT < 26 || activity.packageManager.canRequestPackageInstalls()) { "Allow this app to install updates in Android Settings first." }
       val file = File(URI(uri)).canonicalFile
       require(file.path.startsWith(activity.cacheDir.canonicalPath + File.separator) && file.isFile) { "Update file is unavailable." }
       val contentUri = FileProvider.getUriForFile(activity, "${activity.packageName}.FileSystemFileProvider", file)

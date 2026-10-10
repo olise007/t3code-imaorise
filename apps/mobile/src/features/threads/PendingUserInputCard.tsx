@@ -366,6 +366,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                   {questionAnswerSummary(
                     buildPendingUserInputAnswers([question], props.drafts)?.[question.id],
                     question.isSecret,
+                    question.required !== false,
                   )}
                 </Text>
                 {props.drafts[question.id]?.attachmentNames?.map((name) => (

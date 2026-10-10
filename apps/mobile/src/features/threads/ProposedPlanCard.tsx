@@ -30,7 +30,10 @@ import { useSelectedThreadProjection } from "../../state/use-thread-detail";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { threadEnvironment } from "../../state/threads";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
-import { updateComposerDraftSettings } from "../../state/use-composer-drafts";
+import {
+  getComposerDraftSnapshot,
+  updateComposerDraftSettings,
+} from "../../state/use-composer-drafts";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { uuidv4 } from "../../lib/uuid";
 import { waitForThreadShellReady } from "./threadForkNavigation";
@@ -60,11 +63,13 @@ export function ProposedPlanCard(props: {
   const navigation = useNavigation();
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [implemented, setImplemented] = useState(false);
   const submitting = useRef(false);
   const item = props.projectedItem.item;
   if (item.type !== "proposed_plan") return null;
   const plan = findLatestProposedPlan(detail?.projection ?? null, selectedThread?.latestRun?.runId);
   const actionable =
+    !implemented &&
     plan?.id === item.planId &&
     plan.status === "active" &&
     !item.streaming &&
@@ -92,6 +97,8 @@ export function ProposedPlanCard(props: {
     if (!actionable || !selectedThread || submitting.current) return;
     submitting.current = true;
     setBusy(true);
+    const draft = getComposerDraftSnapshot(scopedThreadKey(props.environmentId, props.threadId));
+    const modelSelection = draft.modelSelection ?? selectedThread.modelSelection;
     const runtimeMode =
       newThread && selectedEnvironmentRuntime?.serverConfig
         ? resolveProjectSettings(
@@ -99,7 +106,7 @@ export function ProposedPlanCard(props: {
             selectedThread.projectId,
             selectedThreadProject ?? undefined,
           ).settings.defaultRuntimeMode
-        : selectedThread.runtimeMode;
+        : (draft.runtimeMode ?? selectedThread.runtimeMode);
     const targetThreadId = newThread ? ThreadId.make(uuidv4()) : props.threadId;
     try {
       const result = await startTurn({
@@ -112,7 +119,7 @@ export function ProposedPlanCard(props: {
             text: buildPlanImplementationPrompt(item.markdown),
             attachments: [],
           },
-          modelSelection: selectedThread.modelSelection,
+          modelSelection,
           runtimeMode,
           interactionMode: "default",
           sourceProposedPlan: { threadId: props.projectedItem.sourceThreadId, planId: item.planId },
@@ -122,7 +129,7 @@ export function ProposedPlanCard(props: {
                   createThread: {
                     projectId: selectedThread.projectId,
                     title: buildPlanImplementationThreadTitle(item.markdown),
-                    modelSelection: selectedThread.modelSelection,
+                    modelSelection,
                     runtimeMode,
                     interactionMode: "default" as const,
                     branch: selectedThread.branch,
@@ -135,6 +142,7 @@ export function ProposedPlanCard(props: {
         },
       });
       if (result._tag === "Success") {
+        setImplemented(true);
         if (newThread && (await waitForThreadShell(props.environmentId, targetThreadId)))
           navigation.navigate("Thread", {
             environmentId: props.environmentId,
@@ -144,6 +152,11 @@ export function ProposedPlanCard(props: {
           updateComposerDraftSettings(scopedThreadKey(props.environmentId, props.threadId), {
             interactionMode: "default",
           });
+        else
+          Alert.alert(
+            "Thread created",
+            "The new thread is still synchronizing. Open it from the thread list when it appears.",
+          );
       }
     } finally {
       submitting.current = false;

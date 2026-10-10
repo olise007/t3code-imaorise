@@ -18,5 +18,6 @@ describe("question review progression", () => {
     expect(questionAnswerSummary("supersecret", true)).toBe("Hidden answer");
     expect(questionAnswerSummary(["one", "two"])).toBe("one, two");
     expect(questionAnswerSummary(undefined)).toBe("Not answered");
+    expect(questionAnswerSummary(undefined, true, true)).toBe("Required answer missing");
   });
 });
