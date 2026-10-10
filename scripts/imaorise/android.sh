@@ -31,8 +31,9 @@ if [[ "$catalog" != *"$platformPackage "* ]]; then
 fi
 "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$ndk" 'cmake;3.22.1' "$platformPackage" "build-tools;$buildTools"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$ndk"
-export GHOSTTY_SOURCE_DIR="$HOME/.cache/t3code-imaorise/ghostty-9f62873b"
-bash modules/t3-terminal/scripts/build-libghostty-android.sh
+# Use the native library pinned in this revision. Rebuilding it in place would
+# overwrite tracked upstream binaries and invalidate the clean-build guarantee.
+[[ -s modules/t3-terminal/android/src/main/jniLibs/arm64-v8a/libghostty-vt.so ]] || { echo 'The committed ARM64 terminal library is missing.' >&2; exit 1; }
 cd android
 ./gradlew --no-daemon --max-workers=2 assembleRelease -PreactNativeArchitectures=arm64-v8a > "$output/gradle.log" 2>&1
 cd ../../..
@@ -60,5 +61,5 @@ rg -q 't3code-imaorise' "$output/native-manifest.txt"
 [[ -z $(git status --porcelain) ]] || { echo 'Android build modified tracked source.' >&2; exit 1; }
 python3 - "$output/android-manifest.json" "$expected" "$T3CODE_IMAORISE_ANDROID_VERSION_CODE" "$ndk" "$sdk" "$buildTools" <<'PY'
 import json, subprocess, sys
-json.dump({"revision":sys.argv[2], "applicationId":"com.imaorise.t3code", "versionCode":int(sys.argv[3]), "architecture":"arm64-v8a", "tools":{"java":subprocess.check_output(['java','--version'],text=True).splitlines()[0],"ndk":sys.argv[4],"sdk":sys.argv[5],"buildTools":sys.argv[6],"zig":"0.15.2"}, "checks":"focused tests, lint, mobile typecheck, APK signature and package inspection passed", "interactiveAcceptance":"pending phone installation and pairing; installation is not approved"},open(sys.argv[1],'w'),indent=2)
+json.dump({"revision":sys.argv[2], "applicationId":"com.imaorise.t3code", "versionCode":int(sys.argv[3]), "architecture":"arm64-v8a", "nativeTerminalLibrary":"committed upstream library from the recorded revision", "tools":{"java":subprocess.check_output(['java','--version'],text=True).splitlines()[0],"ndk":sys.argv[4],"sdk":sys.argv[5],"buildTools":sys.argv[6]}, "checks":"focused tests, lint, mobile typecheck, APK signature and package inspection passed", "interactiveAcceptance":"pending phone installation and pairing; installation is not approved"},open(sys.argv[1],'w'),indent=2)
 PY
