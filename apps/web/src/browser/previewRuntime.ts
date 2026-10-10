@@ -1,7 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, PreviewRuntime, PreviewSessionSnapshot } from "@t3tools/contracts";
 
-import { isElectron } from "~/env";
 import { isPreviewSupportedInRuntime } from "~/previewStateStore";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
@@ -12,7 +11,8 @@ import {
 
 /**
  * Where a tab the user opens should run. The desktop app draws its own
- * server's tabs natively, so those stay agent-drivable at no cost. A remote
+ * server's tabs through the server stream so the visible and agent-controlled
+ * page share one owner. A remote
  * environment's tabs would stream, so the desktop opens them in its own
  * browser instead: no latency, and it reaches what this computer reaches. The
  * user can move a tab to the environment when only it can reach the page.
@@ -54,21 +54,16 @@ export function usePreviewAvailable(environmentId: EnvironmentId | null): boolea
 }
 
 /**
- * Whether this client draws a server tab with its own `<webview>`. The desktop
- * app renders tabs of the server it launched, which drives them over the
- * desktop browser channel; every other client and environment streams them.
+ * Imaorise workaround: always stream server-owned tabs. WSL-only backends
+ * lack the desktop browser channel, so a local webview would create a second
+ * browser with independent navigation. Desktop-owned tabs still render locally.
  */
 export function rendersServerTabNatively(
-  environmentId: EnvironmentId,
-  primaryEnvironmentId: EnvironmentId | null,
-  snapshot: Pick<PreviewSessionSnapshot, "runtime"> | null | undefined,
+  _environmentId: EnvironmentId,
+  _primaryEnvironmentId: EnvironmentId | null,
+  _snapshot: Pick<PreviewSessionSnapshot, "runtime"> | null | undefined,
 ): boolean {
-  return (
-    isElectron &&
-    snapshot?.runtime === "server" &&
-    primaryEnvironmentId !== null &&
-    environmentId === primaryEnvironmentId
-  );
+  return false;
 }
 
 export function useRendersServerTabNatively(

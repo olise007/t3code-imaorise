@@ -7,7 +7,11 @@ const state = vi.hoisted(() => ({
   serverBrowser: new Set<string>(),
 }));
 
-vi.mock("~/env", () => ({ isElectron: false }));
+vi.mock("~/env", () => ({
+  get isElectron() {
+    return state.desktop;
+  },
+}));
 vi.mock("~/previewStateStore", () => ({ isPreviewSupportedInRuntime: () => state.desktop }));
 vi.mock("~/rpc/atomRegistry", () => ({ appAtomRegistry: { get: () => state.primary } }));
 vi.mock("~/state/primaryEnvironment", () => ({ primaryEnvironmentIdAtom: {} }));
@@ -16,7 +20,11 @@ vi.mock("~/state/entities", () => ({
   useEnvironmentSupportsServerBrowser: () => false,
 }));
 
-import { alternatePreviewRuntime, previewRuntimeFor } from "./previewRuntime";
+import {
+  alternatePreviewRuntime,
+  previewRuntimeFor,
+  rendersServerTabNatively,
+} from "./previewRuntime";
 
 const local = "local" as EnvironmentId;
 const remote = "remote" as EnvironmentId;
@@ -56,5 +64,16 @@ describe("alternatePreviewRuntime", () => {
 
   it("offers no move outside the desktop app", () => {
     expect(alternatePreviewRuntime(remote, null, true, { runtime: "server" })).toBeNull();
+  });
+});
+
+describe("server-owned browser routing", () => {
+  it("streams the primary WSL server's tabs instead of spawning a second local browser", () => {
+    state.desktop = true;
+    state.primary = local;
+    state.serverBrowser.add(local);
+    expect(previewRuntimeFor(local)).toBe("server");
+    expect(rendersServerTabNatively(local, local, { runtime: "server" })).toBe(false);
+    expect(rendersServerTabNatively(remote, local, { runtime: "server" })).toBe(false);
   });
 });

@@ -31,7 +31,7 @@ export function ElectronBrowserHost() {
     () =>
       Object.entries(previewByThreadKey).flatMap(([threadKey, previewState]) => {
         const threadRef = parseScopedThreadKey(threadKey);
-        // Server tabs of other environments stream; this desktop's own server tabs render here.
+        // Server-owned tabs stream; desktop-owned tabs render here.
         return threadRef
           ? Object.values(previewState.sessions)
               .filter(
