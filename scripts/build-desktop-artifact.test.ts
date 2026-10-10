@@ -322,21 +322,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.deepStrictEqual(latestConfig, {
         provider: "github",
-        owner: "pingdotgg",
-        repo: "t3code",
+        owner: "olise007",
+        repo: "t3code-imaorise",
         releaseType: "release",
       });
       assert.deepStrictEqual(nightlyConfig, {
         provider: "github",
-        owner: "pingdotgg",
-        repo: "t3code",
+        owner: "olise007",
+        repo: "t3code-imaorise",
         releaseType: "prerelease",
-        channel: "nightly",
+        channel: "beta",
       });
     }),
   );
 
-  it.effect("omits official update feeds for personal and preview builds", () =>
+  it.effect("uses the personal update feed while keeping previews without feeds", () =>
     Effect.gen(function* () {
       const preview = yield* createBuildConfig(
         "mac",
@@ -369,7 +369,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.notProperty(preview, "publish");
       assert.notProperty(previewChannel, "publish");
-      assert.notProperty(release, "publish");
+      assert.deepEqual(release.publish, [
+        { provider: "github", owner: "olise007", repo: "t3code-imaorise", releaseType: "release" },
+      ]);
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(

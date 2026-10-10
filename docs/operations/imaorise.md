@@ -88,7 +88,7 @@ Review these before installing. Keep prior installers and manifests.
 Android artifacts live in `android/`, including the APK, signature/package
 inspection, Gradle log and revision manifest. The app is `com.imaorise.t3code`
 with scheme `t3code-imaorise`, separate from the official Android app. Its
-version code advances with the personal branch's commit count. APK updates use
+version code is reserved monotonically above 5215 before each release; reruns reuse the reservation. APK updates use
 the same private local signing key in `~/.local/share/t3code-imaorise/signing`.
 Back up that directory privately; losing the key prevents updating an installed
 personal APK without uninstalling it. Never put the key or password in Git or
@@ -101,7 +101,8 @@ it disabled. No Expo account, EAS cloud build or store publication is involved.
 For an APK-only rebuild of an already committed revision in WSL:
 
 ```bash
-bash scripts/imaorise/android.sh /path/to/android-artifacts "$(git rev-parse HEAD)"
+T3CODE_IMAORISE_VERSION=2.0.1-beta.1 T3CODE_IMAORISE_ANDROID_VERSION_CODE=5216 \
+  bash scripts/imaorise/android.sh /path/to/android-artifacts "$(git rev-parse HEAD)"
 ```
 
 Install the APK on an ARM64 Android phone only after reviewing its evidence.
@@ -109,6 +110,57 @@ Use Add Environment with a fresh pairing URL for the personal server. Test
 browser navigation, an agent turn, terminal output and reconnecting over
 Tailscale. Keep the official app installed. Native automation requires enabling
 T3's Device access; a compiled APK is not evidence of a working phone session.
+
+## Personal releases and in-app updates
+
+A fresh Windows installation starts its native local backend. WSL is optional;
+WSL-only stays off until the user chooses it. Existing saved choices survive updates.
+Install an updater-enabled personal bootstrap package once, then use Settings to
+check, download and restart/install. Stable and Beta choices persist; switching
+channels cannot install an older desktop version or Android version code.
+Android checks on launch/resume at most once every six hours and only notifies.
+Manual checks bypass that interval. Download and Install remain explicit actions.
+Android may ask you to allow installation from T3 Code Imaorise before opening
+its system installer. Cancellation keeps the verified download available to retry.
+
+The `Personal Windows and Android release` workflow uses standard `ubuntu-latest`
+and `windows-latest` runners, with no Actions caches. Intermediate artifacts last
+one day and are removed after a complete draft upload or publication. Distributed
+packages live in GitHub Releases. All jobs build the reservation's source revision;
+only generated package version metadata is aligned during packaging. The Windows
+installer embeds the Linux runtime built by the same run. Windows remains unsigned.
+
+Repository secrets are `IMAORISE_ANDROID_KEYSTORE_BASE64` and
+`IMAORISE_ANDROID_KEYSTORE_PASSWORD`, copied from the existing private signing key.
+The `personal-release` and `personal-stable` environments accept only `imaorise`.
+Stable requires the owner's environment approval. Neither signing nor publication
+runs on pull requests; inherited official publication workflows are guarded out
+of this fork. Keep importing upstream `main` with the existing merge command.
+
+Before hosted execution, open GitHub Settings → Billing → Budgets and alerts,
+set the Actions budget to $0, and enable **Stop usage when budget limit is reached**.
+Then record the verified setting with:
+
+```bash
+gh variable set PERSONAL_ZERO_SPEND_VERIFIED --repo olise007/t3code-imaorise --body true
+```
+
+For the bootstrap, manually dispatch the personal workflow on `imaorise`, choose
+Beta and leave `publish` false. Review the draft's NSIS installer, updater YAML,
+signed APK, channel manifest, Linux archive, `BUILD-MANIFEST.json` and `SHA256SUMS`.
+Install the bootstrap manually on suitable Windows and ARM64 Android devices.
+Test a subsequent N → N+1 update, preserving profiles, drafts and the official
+installation. A successful build is not proof of installation or in-app updating.
+Device access and Windows Application Control restrictions are unverified gates;
+do not weaken device policies to make the unsigned installer run.
+
+Only after release-pipeline and device acceptance pass, publish the reviewed beta
+and set `PERSONAL_BETA_ACCEPTED=true` as a repository variable. Trusted `imaorise`
+pushes then publish complete betas automatically. A Stable dispatch takes a tested
+published beta tag in `tested_beta` and rebuilds its pinned source revision after
+approval. Personal versions start at `2.0.1-beta.<sequence>` / `2.0.1`, advancing
+the beta patch after Stable. Draft reservations hold Android version codes; never
+replace them on reruns or overwrite a published release.
 
 ## Isolation and acceptance
 
@@ -119,8 +171,7 @@ protocol `t3code-imaorise`, Electron profile `t3code-imaorise` and T3 home
 The desktop starts scanning at port 4773, independently of the official 3773.
 Do not override `T3CODE_HOME` to the official directory or force an occupied port.
 Official legacy profiles are not migration sources for this build.
-Automatic desktop updates, CLI updates, managed service-runtime downloads and
-managed SSH archive downloads are disabled. Remote SSH hosts need a separately
+Personal desktop updates target only `olise007/t3code-imaorise`. Managed CLI, service-runtime and SSH archive downloads remain disabled. Remote SSH hosts need a separately
 prepared personal source runtime; standard upstream archives are refused.
 
 Validate fresh personal data using the unpacked app before installing. Preserve

@@ -52,7 +52,7 @@ import type {
   ScheduledTaskId,
   TurnItemId,
 } from "@t3tools/contracts";
-import { RunId, ThreadId } from "@t3tools/contracts";
+import { MessageId as MessageIdValue, RunId, ThreadId } from "@t3tools/contracts";
 import {
   classifyToolActivity,
   collectToolFilePaths,
@@ -77,6 +77,7 @@ export interface PendingUserInputDraftAnswer {
   readonly selectedOptionValues?: ReadonlyArray<string>;
   readonly customAnswer?: string;
   readonly attachmentCount?: number;
+  readonly attachmentNames?: ReadonlyArray<string>;
   readonly attachmentsBlocked?: boolean;
 }
 
@@ -413,12 +414,18 @@ function resolvePendingUserInputAnswer(
     return selectedOptionValues.length > 0
       ? selectedOptionValues
       : (customAnswer ??
-          (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0 ? "" : null));
+          (question.required === false ||
+          (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0)
+            ? ""
+            : null));
   }
   return (
     selectedOptionValues[0] ??
     customAnswer ??
-    (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0 ? "" : null)
+    (question.required === false ||
+    (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0)
+      ? ""
+      : null)
   );
 }
 
@@ -1813,20 +1820,27 @@ export function buildThreadFeed(
       entries.push(entry);
       continue;
     }
-    if (item.type === "user_message" || item.type === "assistant_message") {
+    if (
+      item.type === "user_message" ||
+      item.type === "assistant_message" ||
+      item.type === "proposed_plan"
+    ) {
+      const messageId =
+        item.type === "proposed_plan" ? MessageIdValue.make(`plan:${item.planId}`) : item.messageId;
       const updatedAt = DateTime.formatIso(item.updatedAt);
       const entry: RawThreadFeedEntry = {
         type: "message",
-        id: item.messageId,
+        id: messageId,
         createdAt,
         message: {
-          id: item.messageId,
+          id: messageId,
           role: item.type === "user_message" ? "user" : "assistant",
-          text: item.text,
+          text: item.type === "proposed_plan" ? item.markdown : item.text,
           ...(item.type === "user_message" && item.context ? { context: item.context } : {}),
-          attachments: item.attachments ?? [],
+          attachments: item.type === "proposed_plan" ? [] : (item.attachments ?? []),
           runId: item.runId,
-          streaming: item.type === "assistant_message" && item.streaming,
+          streaming:
+            (item.type === "assistant_message" || item.type === "proposed_plan") && item.streaming,
           ...(item.type === "user_message"
             ? {
                 inputIntent: item.inputIntent,

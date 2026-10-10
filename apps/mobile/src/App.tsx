@@ -1,3 +1,4 @@
+import { usePersonalApkUpdateLifecycle } from "./features/updates/personal-apk-updates";
 import { PermissionUpdateNotice } from "./components/PermissionUpdateNotice";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
@@ -64,6 +65,7 @@ function SplashScreenCoordinator() {
 }
 
 export default function App() {
+  usePersonalApkUpdateLifecycle();
   useUiRuntimeMemoryWarningGc();
 
   return (

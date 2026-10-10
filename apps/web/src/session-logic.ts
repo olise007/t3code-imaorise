@@ -1,3 +1,9 @@
+import {
+  planItemTime,
+  findLatestProposedPlan,
+  hasActionableProposedPlan,
+} from "@t3tools/shared/proposedPlan";
+export { findLatestProposedPlan, hasActionableProposedPlan };
 import { resolveThreadWorkingStartedAt } from "@t3tools/client-runtime/state/models";
 import {
   type AssetResource,
@@ -108,14 +114,7 @@ export interface ActivePlanState {
   }>;
 }
 
-export interface LatestProposedPlanState {
-  readonly id: PlanId;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly runId: RunId | null;
-  readonly planMarkdown: string;
-  readonly status: OrchestrationV2PlanArtifact["status"];
-}
+export type { LatestProposedPlanState } from "@t3tools/shared/proposedPlan";
 
 export type TimelineAttempt = Pick<
   OrchestrationV2RunAttempt,
@@ -279,51 +278,6 @@ export function deriveActivePlanState(
       ...(durationMs === undefined ? {} : { durationMs }),
     })),
   };
-}
-
-function planItemTime(projection: OrchestrationV2ThreadProjection, planId: PlanId): string {
-  const item = projection.turnItems.findLast(
-    (candidate) =>
-      (candidate.type === "proposed_plan" || candidate.type === "todo_list") &&
-      candidate.planId === planId,
-  );
-  return DateTime.formatIso(item?.updatedAt ?? projection.updatedAt);
-}
-
-function toLatestProposedPlanState(
-  projection: OrchestrationV2ThreadProjection,
-  plan: Extract<OrchestrationV2PlanArtifact, { readonly kind: "proposed_plan" }>,
-): LatestProposedPlanState {
-  const updatedAt = planItemTime(projection, plan.id);
-  return {
-    id: plan.id,
-    createdAt: updatedAt,
-    updatedAt,
-    runId: plan.runId,
-    planMarkdown: plan.markdown,
-    status: plan.status,
-  };
-}
-
-export function findLatestProposedPlan(
-  projection: OrchestrationV2ThreadProjection | null,
-  latestRunId: RunId | string | null | undefined,
-): LatestProposedPlanState | null {
-  if (projection === null) return null;
-  const plans = projection.plans.filter((plan) => plan.kind === "proposed_plan");
-  const candidates = latestRunId ? plans.filter((plan) => plan.runId === latestRunId) : plans;
-  const plan = [...(candidates.length > 0 ? candidates : plans)]
-    .toSorted(
-      (left, right) =>
-        planItemTime(projection, left.id).localeCompare(planItemTime(projection, right.id)) ||
-        left.id.localeCompare(right.id),
-    )
-    .at(-1);
-  return plan === undefined ? null : toLatestProposedPlanState(projection, plan);
-}
-
-export function hasActionableProposedPlan(plan: LatestProposedPlanState | null): boolean {
-  return plan?.status === "active";
 }
 
 const STANDALONE_V2_ITEM_TYPES = new Set<OrchestrationV2ProjectedTurnItem["item"]["type"]>([

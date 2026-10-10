@@ -119,6 +119,17 @@ describe("DesktopSettings", () => {
     ),
   );
 
+  it("starts fresh personal Stable and Beta installs on the native local backend", () => {
+    for (const version of ["2.0.1", "2.0.1-beta.1"]) {
+      const settings = DesktopAppSettings.resolveDefaultDesktopSettings(version);
+      assert.equal(settings.localEnvironmentEnabled, true);
+      assert.equal(settings.wslBackendEnabled, false);
+      assert.equal(settings.wslOnly, false);
+      assert.equal(settings.wslDistro, null);
+      assert.equal(settings.updateChannel, version.includes("-beta.") ? "nightly" : "latest");
+    }
+  });
+
   it("defaults packaged nightly builds to the nightly update channel", () => {
     assert.deepEqual(
       DesktopAppSettings.resolveDefaultDesktopSettings("0.0.17-nightly.20260415.1"),

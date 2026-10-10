@@ -1,8 +1,10 @@
+import { questionAnswerSummary } from "@t3tools/shared/questionReview";
 import { type RuntimeRequestId } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { type PendingUserInput } from "../../session-logic";
 import {
   derivePendingUserInputProgress,
+  resolvePendingUserInputAnswer,
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
 import { CheckIcon } from "lucide-react";
@@ -16,8 +18,9 @@ interface PendingUserInputPanelProps {
   respondingRequestIds: RuntimeRequestId[];
   answers: Record<string, PendingUserInputDraftAnswer>;
   questionIndex: number;
+  onSelectQuestion?: ((index: number) => void) | undefined;
+  onAdvance?: (() => void) | undefined;
   onToggleOption: (questionId: string, optionValue: string) => void;
-  onAdvance: () => void;
   onDismiss: (requestId: RuntimeRequestId) => void;
 }
 
@@ -27,8 +30,8 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   respondingRequestIds,
   answers,
   questionIndex,
+  onSelectQuestion,
   onToggleOption,
-  onAdvance,
   onDismiss,
 }: PendingUserInputPanelProps) {
   if (pendingUserInputs.length === 0) return null;
@@ -43,8 +46,8 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       isResponding={respondingRequestIds.includes(activePrompt.requestId)}
       answers={answers}
       questionIndex={questionIndex}
+      onSelectQuestion={onSelectQuestion}
       onToggleOption={onToggleOption}
-      onAdvance={onAdvance}
       onDismiss={onDismiss}
     />
   );
@@ -56,8 +59,8 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   isResponding,
   answers,
   questionIndex,
+  onSelectQuestion,
   onToggleOption,
-  onAdvance,
   onDismiss,
 }: {
   prompt: PendingUserInput;
@@ -65,8 +68,8 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   isResponding: boolean;
   answers: Record<string, PendingUserInputDraftAnswer>;
   questionIndex: number;
+  onSelectQuestion?: ((index: number) => void) | undefined;
   onToggleOption: (questionId: string, optionValue: string) => void;
-  onAdvance: () => void;
   onDismiss: (requestId: RuntimeRequestId) => void;
 }) {
   // Message-mode requests remain answerable after their provider turn ends.
@@ -74,8 +77,6 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   const responseDisabled = disabled || isResponding || !canRespond;
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
   const activeQuestion = progress.activeQuestion;
-  const autoAdvanceTimerRef = useRef<number | null>(null);
-  const onAdvanceRef = useRef(onAdvance);
   const [optimisticSingleSelect, setOptimisticSingleSelect] = useState<{
     questionId: string;
     optionValue: string;
@@ -88,17 +89,6 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   // sending from the composer advances the active question.
   const [collapsedQuestionId, setCollapsedQuestionId] = useState<string | null>(null);
   const isCollapsed = collapsedQuestionId !== null && collapsedQuestionId === activeQuestion?.id;
-
-  useEffect(() => {
-    onAdvanceRef.current = onAdvance;
-  }, [onAdvance]);
-
-  useEffect(() => {
-    if (disabled && autoAdvanceTimerRef.current !== null) {
-      window.clearTimeout(autoAdvanceTimerRef.current);
-      autoAdvanceTimerRef.current = null;
-    }
-  }, [disabled]);
 
   useEffect(() => {
     if (!activeQuestion || activeQuestion.multiSelect || !optimisticSingleSelect) {
@@ -121,15 +111,6 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     progress.selectedOptionValues,
   ]);
 
-  // Clear auto-advance timer on unmount
-  useEffect(() => {
-    return () => {
-      if (autoAdvanceTimerRef.current !== null) {
-        window.clearTimeout(autoAdvanceTimerRef.current);
-      }
-    };
-  }, []);
-
   const handleOptionSelection = useCallback(
     (questionId: string, optionValue: string) => {
       if (disabled || isResponding) return;
@@ -139,20 +120,13 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       }
       setOptimisticSingleSelect({ questionId, optionValue });
       onToggleOption(questionId, optionValue);
-      if (autoAdvanceTimerRef.current !== null) {
-        window.clearTimeout(autoAdvanceTimerRef.current);
-      }
-      autoAdvanceTimerRef.current = window.setTimeout(() => {
-        autoAdvanceTimerRef.current = null;
-        onAdvanceRef.current();
-      }, 200);
     },
     [activeQuestion, disabled, isResponding, onToggleOption],
   );
 
   // Keyboard shortcut: number keys 1-9 select corresponding options when focus is
   // outside editable fields. Multi-select prompts toggle options in place; single-
-  // select prompts keep the existing auto-advance behavior. Collapsed prompts opt
+  // select prompts wait for explicit Next. Collapsed prompts opt
   // out, since the numbers they refer to are not on screen.
   useEffect(() => {
     if (!activeQuestion || responseDisabled || isCollapsed) return;
@@ -181,6 +155,41 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     return () => document.removeEventListener("keydown", handler);
   }, [activeQuestion, handleOptionSelection, isCollapsed, responseDisabled]);
 
+  if (prompt.questions.length > 1 && questionIndex >= prompt.questions.length) {
+    return (
+      <section aria-label="Review answers" className="max-h-80 space-y-3 overflow-y-auto p-4">
+        <h3 className="font-medium">Review answers</h3>
+        {prompt.questions.map((question, index) => {
+          const draft = answers[question.id];
+          const summary = resolvePendingUserInputAnswer(question, draft) ?? undefined;
+          return (
+            <div key={question.id} className="space-y-1">
+              <p className="text-sm font-medium">{question.question}</p>
+              <p className="whitespace-pre-wrap text-sm text-muted-foreground">
+                {questionAnswerSummary(summary, question.isSecret)}
+              </p>
+              {draft?.attachmentNames?.map((name) => (
+                <p key={name} className="text-xs">
+                  {name}
+                </p>
+              ))}
+              {draft?.attachmentCount ? (
+                <p className="text-xs">{draft.attachmentCount} attachment(s)</p>
+              ) : null}
+              <button
+                type="button"
+                disabled={responseDisabled}
+                onClick={() => onSelectQuestion?.(index)}
+                className="text-sm underline"
+              >
+                Edit answer {index + 1}
+              </button>
+            </div>
+          );
+        })}
+      </section>
+    );
+  }
   if (!activeQuestion) {
     return null;
   }

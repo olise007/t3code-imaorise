@@ -48,7 +48,7 @@ export function SettingsThreadsRouteScreen() {
         >
           <AutoSettleSettingsRows />
           <BetaSettingsSection />
-          <LegacySettingsSection />
+          <PlanModeSettingsSection />
         </ScrollView>
       </SettingsScreen>
     </>
@@ -294,26 +294,15 @@ function BetaSettingsSection() {
  * the counterpart of web's Settings → General → Legacy features backed by
  * mobile preferences.
  */
-function LegacySettingsSection() {
-  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-  const preferences = useAtomValue(mobilePreferencesAtom);
-  const planModeEnabled =
-    AsyncResult.isSuccess(preferences) && preferences.value.planModeEnabled === true;
-
+function PlanModeSettingsSection() {
   return (
     <View className="gap-3">
-      <SettingsSection title="Legacy">
-        <SettingsSwitchRow
-          icon="hammer"
-          label="Plan Mode"
-          value={planModeEnabled}
-          onValueChange={(value) => savePreferences({ planModeEnabled: value })}
-        />
+      <SettingsSection title="Plan mode">
+        <Text className="px-4 py-3 text-sm text-foreground-muted">
+          Choose Build or Plan in new and existing supported chats. Refine a proposed plan or
+          implement it when ready.
+        </Text>
       </SettingsSection>
-      <Text className="px-2 text-sm text-foreground-muted">
-        Opt into retired interfaces kept for compatibility. Plan Mode restores the Build/Plan
-        control; otherwise every task runs in Build mode.
-      </Text>
     </View>
   );
 }

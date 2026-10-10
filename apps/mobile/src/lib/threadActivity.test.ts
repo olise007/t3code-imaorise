@@ -53,11 +53,11 @@ it("keeps historical plan detail accessible from its paged turn item", () => {
   } as OrchestrationV2TurnItem;
 
   const entries = buildThreadFeed([projected(item, 0)]);
-  const activity = entries.flatMap((entry) =>
-    entry.type === "activity-group" ? entry.activities : [],
-  )[0];
-  expect(activity?.detail).toBe("Full historical plan text");
-  expect(activity?.getFullDetail()).toContain("Full historical plan text");
+  const entry = entries.find((entry) => entry.type === "message");
+  expect(entry?.type).toBe("message");
+  if (entry?.type !== "message") throw new Error("Missing historical plan card");
+  expect(entry.message.text).toBe("Full historical plan text");
+  expect(entry.message.projectedItem?.item.type).toBe("proposed_plan");
 });
 
 it("shows only the structured path in expanded mobile read details", () => {

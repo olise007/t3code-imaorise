@@ -2673,7 +2673,7 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   const rawRepo = (
     Option.getOrUndefined(env.updateRepository)?.trim() ||
     Option.getOrUndefined(env.githubRepository)?.trim() ||
-    ""
+    "olise007/t3code-imaorise"
   ).trim();
   if (!rawRepo) return undefined;
 
@@ -2682,15 +2682,15 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
 
   return {
     provider: "github",
-    owner,
-    repo,
+    owner: "olise007",
+    repo: "t3code-imaorise",
     releaseType: updateChannel === "nightly" ? "prerelease" : "release",
-    ...(updateChannel === "nightly" ? { channel: "nightly" as const } : {}),
+    ...(updateChannel === "nightly" ? { channel: "beta" as const } : {}),
   };
 });
 
 export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
-  return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
+  return /-(?:nightly\.\d{8}\.\d+|beta\.\d+)$/.test(version) ? "nightly" : "latest";
 }
 
 // Pull request builds (`-pr.<n>.`) and the maintainers' preview train
@@ -2796,7 +2796,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
-  if (!isDesktopPreviewVersion(version) && mockUpdates) {
+  if (!isDesktopPreviewVersion(version)) {
     const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
     if (publishConfig) {
       buildConfig.publish = [publishConfig];
@@ -2939,7 +2939,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 
   if (platform === "win") {
     buildConfig.npmRebuild = false;
-    // Personal installers are retained and reviewed locally; there is no update feed.
+    // Generate updater metadata for the personal release feed.
     buildConfig.nsis = { differentialPackage: false };
     buildConfig.protocols = [{ name: "T3 Code Imaorise", schemes: ["t3code-imaorise"] }];
     const winConfig: Record<string, unknown> = {

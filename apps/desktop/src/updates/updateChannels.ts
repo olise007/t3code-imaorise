@@ -14,5 +14,7 @@ export function isNightlyDesktopVersion(version: string): boolean {
 }
 
 export function resolveDefaultDesktopUpdateChannel(appVersion: string): DesktopUpdateChannel {
-  return NIGHTLY_VERSION_PATTERN.test(appVersion) ? "nightly" : "latest";
+  return NIGHTLY_VERSION_PATTERN.test(appVersion) || /-beta\.\d+$/.test(appVersion)
+    ? "nightly"
+    : "latest";
 }

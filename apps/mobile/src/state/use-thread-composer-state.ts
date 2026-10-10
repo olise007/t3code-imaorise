@@ -194,6 +194,7 @@ export function useThreadComposerState() {
   const uploadThreadFeedback = useAtomCommand(threadEnvironment.uploadFeedback, {
     reportFailure: false,
   });
+  const setInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode);
   const editQueuedRun = useAtomCommand(threadEnvironment.editQueuedRun, {
     label: "edit queued message",
     reportFailure: false,
@@ -341,6 +342,13 @@ export function useThreadComposerState() {
         selectedDraft?.interactionMode ?? selectedThread.interactionMode,
       )
     : null;
+  useEffect(() => {
+    if (selectedThreadKey && selectedThread) {
+      updateComposerDraftSettings(selectedThreadKey, {
+        interactionMode: selectedThread.interactionMode,
+      });
+    }
+  }, [selectedThreadKey, selectedThread?.interactionMode]);
   // Whether the model picker may leave this thread's provider. Derived here
   // because the projection already drives this hook; the composer only needs
   // the answer, not a subscription to every projection update.
@@ -1043,11 +1051,22 @@ export function useThreadComposerState() {
       const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
         (candidate) => candidate.instanceId === modelSelection?.instanceId,
       );
-      updateComposerDraftSettings(selectedThreadKey, {
-        interactionMode: resolveProviderInteractionMode(provider, value),
-      });
+      const interactionMode = resolveProviderInteractionMode(provider, value);
+      updateComposerDraftSettings(selectedThreadKey, { interactionMode });
+      if (selectedThreadShell) {
+        void setInteractionMode({
+          environmentId: selectedThreadShell.environmentId,
+          input: { threadId: selectedThreadShell.id, interactionMode },
+        });
+      }
     },
-    [selectedEnvironmentRuntime?.serverConfig, selectedThread?.modelSelection, selectedThreadKey],
+    [
+      selectedEnvironmentRuntime?.serverConfig,
+      selectedThread?.modelSelection,
+      selectedThreadKey,
+      selectedThreadShell,
+      setInteractionMode,
+    ],
   );
 
   return {

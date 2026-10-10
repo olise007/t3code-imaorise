@@ -200,6 +200,7 @@ export interface ThreadComposerProps {
   readonly canSwitchProvider: boolean;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
+  readonly interactionMode: ProviderInteractionMode;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
   readonly onExpandedChange?: (expanded: boolean) => void;
   /** Fires on editor focus/blur; hosts use it to vet stale keyboard state. */
@@ -812,6 +813,28 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           </Pressable>
         ) : null}
 
+        {selectedProviderStatus?.showInteractionModeToggle !== false ? (
+          <View className="flex-row gap-2 px-3 pb-2">
+            {(["default", "plan"] as const).map((mode) => (
+              <Pressable
+                key={mode}
+                accessibilityRole="button"
+                accessibilityState={{ selected: props.interactionMode === mode }}
+                disabled={!props.canOperateThread}
+                onPress={() => props.onUpdateInteractionMode(mode)}
+                className="rounded-full border border-border px-4 py-2"
+              >
+                <Text
+                  className={
+                    props.interactionMode === mode ? "text-primary" : "text-foreground-muted"
+                  }
+                >
+                  {mode === "plan" ? "Plan" : "Build"}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
         <ComposerSurface
           style={
             isExpanded

@@ -1,3 +1,4 @@
+import { questionReviewStep } from "@t3tools/shared/questionReview";
 import { ThreadFind, ThreadFindCanvas, type ThreadFindControls } from "./chat/ThreadFindProvider";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { usageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
@@ -3279,7 +3280,7 @@ export default function ChatView(props: ChatViewProps) {
   const activeProviderInstanceId = selectedProviderEntry?.instanceId ?? null;
   const activeProviderStatus = selectedProviderEntry?.snapshot ?? null;
   const { enabled: interactionModeEnabled, interactionMode } = resolveComposerInteractionMode({
-    planModeEnabled: settings.planModeEnabled,
+    planModeEnabled: true,
     provider: activeProviderStatus,
     interactionMode:
       composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
@@ -3414,6 +3415,7 @@ export default function ChatView(props: ChatViewProps) {
           {
             ...pendingUserInputAnswersByRequestId[activePendingRequestKey]?.[question.id],
             attachmentCount: attachments.length,
+            attachmentNames: attachments.map((attachment) => attachment.name),
             attachmentsBlocked:
               (attachments.length > 0 && !supportsQuestionAttachments) ||
               (questionPreparations[key] ?? 0) > 0 ||
@@ -5371,6 +5373,17 @@ export default function ChatView(props: ChatViewProps) {
     ],
   );
 
+  useEffect(() => {
+    if (serverThread && !isLocalDraftThread) {
+      setComposerDraftInteractionMode(composerDraftTarget, serverThread.interactionMode);
+    }
+  }, [
+    serverThread?.interactionMode,
+    serverThread?.id,
+    isLocalDraftThread,
+    composerDraftTarget,
+    setComposerDraftInteractionMode,
+  ]);
   const handleInteractionModeChange = useCallback(
     (mode: ProviderInteractionMode) => {
       if (mode === "plan" && !interactionModeEnabled) return;
@@ -5378,10 +5391,21 @@ export default function ChatView(props: ChatViewProps) {
       setComposerDraftInteractionMode(composerDraftTarget, mode);
       if (isLocalDraftThread) {
         setDraftThreadContext(composerDraftTarget, { interactionMode: mode });
+      } else if (
+        serverThread &&
+        readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+      ) {
+        void setThreadInteractionMode({
+          environmentId,
+          input: { threadId: serverThread.id, interactionMode: mode },
+        });
       }
       scheduleComposerFocus();
     },
     [
+      environmentId,
+      serverThread,
+      setThreadInteractionMode,
       interactionMode,
       interactionModeEnabled,
       isLocalDraftThread,
@@ -9369,7 +9393,7 @@ export default function ChatView(props: ChatViewProps) {
         models: provider.models,
         modelOptions: selection.options,
         promptInjectionState: getComposerPromptInjectionState(messageTextForSend),
-        planModeEnabled: settings.planModeEnabled,
+        planModeEnabled: true,
       });
       const text = formatOutgoingPrompt({
         provider: provider.driverKind,
@@ -9387,7 +9411,7 @@ export default function ChatView(props: ChatViewProps) {
         ),
         text,
         interactionMode: resolveComposerInteractionMode({
-          planModeEnabled: settings.planModeEnabled,
+          planModeEnabled: true,
           provider: provider.snapshot,
           interactionMode: sendInteractionMode,
         }).interactionMode,
@@ -10388,23 +10412,50 @@ export default function ChatView(props: ChatViewProps) {
     [activePendingUserInput, activePendingRequestKey, composerRef],
   );
 
+  const editingPendingAnswerFromReview = useRef(false);
+  useEffect(() => {
+    editingPendingAnswerFromReview.current = false;
+  }, [activePendingRequestKey]);
+  const selectPendingQuestionForReview = useCallback(
+    (index: number) => {
+      editingPendingAnswerFromReview.current = true;
+      setActivePendingUserInputQuestionIndex(index);
+    },
+    [setActivePendingUserInputQuestionIndex],
+  );
   const onAdvanceActivePendingUserInput = useCallback(() => {
     if (
       !activePendingUserInput ||
+      activePendingIsResponding ||
       activePendingUserInput.responseCapability === "not_resumable" ||
       !activePendingProgress
     ) {
       return;
     }
+    if (editingPendingAnswerFromReview.current) {
+      editingPendingAnswerFromReview.current = false;
+      setActivePendingUserInputQuestionIndex(activePendingUserInput.questions.length);
+      return;
+    }
     if (activePendingProgress.isLastQuestion) {
+      if (
+        activePendingUserInput.questions.length > 1 &&
+        activePendingQuestionIndex < activePendingUserInput.questions.length
+      ) {
+        setActivePendingUserInputQuestionIndex(activePendingUserInput.questions.length);
+        return;
+      }
       if (activePendingResolvedAnswers) {
         void onRespondToUserInput(activePendingUserInput.requestId, activePendingResolvedAnswers);
       }
       return;
     }
-    setActivePendingUserInputQuestionIndex(activePendingProgress.questionIndex + 1);
+    setActivePendingUserInputQuestionIndex(
+      questionReviewStep(activePendingUserInput.questions.length, activePendingQuestionIndex).next,
+    );
   }, [
     activePendingProgress,
+    activePendingQuestionIndex,
     activePendingResolvedAnswers,
     activePendingUserInput,
     activePendingIsResponding,
@@ -10416,8 +10467,16 @@ export default function ChatView(props: ChatViewProps) {
     if (!activePendingProgress) {
       return;
     }
-    setActivePendingUserInputQuestionIndex(Math.max(activePendingProgress.questionIndex - 1, 0));
-  }, [activePendingProgress, setActivePendingUserInputQuestionIndex]);
+    setActivePendingUserInputQuestionIndex(
+      questionReviewStep(activePendingUserInput?.questions.length ?? 0, activePendingQuestionIndex)
+        .previous,
+    );
+  }, [
+    activePendingProgress,
+    activePendingQuestionIndex,
+    activePendingUserInput,
+    setActivePendingUserInputQuestionIndex,
+  ]);
 
   async function onSubmitPlanFollowUp({
     text,
@@ -11726,6 +11785,7 @@ export default function ChatView(props: ChatViewProps) {
                               activePendingIsResponding={activePendingIsResponding}
                               activePendingDraftAnswers={activePendingDraftAnswers}
                               activePendingQuestionIndex={activePendingQuestionIndex}
+                              onSelectPendingQuestion={selectPendingQuestionForReview}
                               respondingRequestIds={respondingRequestIds}
                               showPlanFollowUpPrompt={showPlanFollowUpPrompt}
                               activeProposedPlan={activeProposedPlan}

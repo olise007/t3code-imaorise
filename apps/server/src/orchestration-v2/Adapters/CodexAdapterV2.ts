@@ -4127,6 +4127,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
             const questions = input.questions.map((question, index) => ({
               id: nonEmptyText(question.id, `question-${index + 1}`),
+              isSecret: question.isSecret,
               header: nonEmptyText(question.header, "Question"),
               question: nonEmptyText(question.question, "Choose an answer."),
               options:

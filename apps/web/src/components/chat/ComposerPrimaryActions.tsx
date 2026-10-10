@@ -20,6 +20,8 @@ import {
 interface PendingActionState {
   questionIndex: number;
   isLastQuestion: boolean;
+  reviewing?: boolean | undefined;
+  questionCount?: number | undefined;
   canAdvance: boolean;
   isResponding: boolean;
   isComplete: boolean;
@@ -61,12 +63,16 @@ interface ComposerPrimaryActionsProps {
 const formatPendingPrimaryActionLabel = (input: {
   compact: boolean;
   isLastQuestion: boolean;
+  reviewing?: boolean | undefined;
+  questionCount?: number | undefined;
   isResponding: boolean;
   questionIndex: number;
 }) => {
   if (input.isResponding) {
     return "Submitting...";
   }
+  if (input.isLastQuestion && (input.questionCount ?? 1) > 1 && !input.reviewing)
+    return "Review answers";
   if (input.compact) {
     return input.isLastQuestion ? "Submit" : "Next";
   }
@@ -182,7 +188,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               onClick={onPreviousPendingQuestion}
               disabled={pendingAction.isResponding}
             >
-              Previous
+              Back
             </Button>
           )
         ) : null}
@@ -194,12 +200,16 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             !canOperateThread ||
             isEnvironmentUnavailable ||
             pendingAction.isResponding ||
-            (pendingAction.isLastQuestion ? !pendingAction.isComplete : !pendingAction.canAdvance)
+            (pendingAction.reviewing || pendingAction.questionCount === 1
+              ? !pendingAction.isComplete
+              : !pendingAction.canAdvance)
           }
         >
           {formatPendingPrimaryActionLabel({
             compact,
             isLastQuestion: pendingAction.isLastQuestion,
+            reviewing: pendingAction.reviewing,
+            questionCount: pendingAction.questionCount,
             isResponding: pendingAction.isResponding,
             questionIndex: pendingAction.questionIndex,
           })}

@@ -1,6 +1,12 @@
 package expo.modules.t3nativecontrols
 
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.Settings
+import android.net.Uri
+import java.security.MessageDigest
+import java.util.zip.ZipFile
 import android.text.format.DateFormat
 import androidx.core.content.FileProvider
 import expo.modules.kotlin.Promise
@@ -15,6 +21,61 @@ class T3NativeControlsModule : Module() {
   @Suppress("TooGenericExceptionCaught") // Clear the pending promise before rethrowing.
   override fun definition() = ModuleDefinition {
     Name("T3NativeControls")
+
+    AsyncFunction("verifyPersonalApk") { uri: String, expectedSha: String, expectedCode: Long, expectedCertificate: String, expectedSize: Long ->
+      val context = appContext.reactContext ?: error("The app is not active.")
+      val file = File(URI(uri)).canonicalFile
+      require(file.path.startsWith(context.cacheDir.canonicalPath + File.separator)) { "Updates must be in private cache." }
+      require(file.isFile && file.length() == expectedSize) { "APK size mismatch." }
+      val digest = MessageDigest.getInstance("SHA-256")
+      file.inputStream().use { input ->
+        val buffer = ByteArray(65536)
+        while (true) { val count = input.read(buffer); if (count < 0) break; digest.update(buffer, 0, count) }
+      }
+      fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
+      require(hex(digest.digest()).equals(expectedSha, true)) { "APK checksum mismatch." }
+      val flags = PackageManager.GET_SIGNING_CERTIFICATES
+      val archive = context.packageManager.getPackageArchiveInfo(file.path, flags) ?: error("Invalid APK.")
+      val installed = context.packageManager.getPackageInfo(context.packageName, flags)
+      require(context.packageName == "com.imaorise.t3code" && archive.packageName == context.packageName) { "APK package mismatch." }
+      require(archive.longVersionCode == expectedCode && archive.longVersionCode > installed.longVersionCode) { "Update would not advance the installed version." }
+      require((archive.applicationInfo?.minSdkVersion ?: Int.MAX_VALUE) <= Build.VERSION.SDK_INT) { "This update requires a newer Android version." }
+      fun certificates(info: android.content.pm.PackageInfo): Set<String> =
+        info.signingInfo?.apkContentsSigners?.map { hex(MessageDigest.getInstance("SHA-256").digest(it.toByteArray())) }?.toSet() ?: emptySet()
+      val trusted = certificates(installed)
+      val candidate = certificates(archive)
+      require(trusted.isNotEmpty() && candidate == trusted && candidate == setOf(expectedCertificate.lowercase().replace(":", ""))) { "APK signing certificate mismatch." }
+      require(Build.SUPPORTED_ABIS.contains("arm64-v8a")) { "This release requires ARM64." }
+      ZipFile(file).use { zip ->
+        val abis = zip.entries().asSequence().filter { it.name.startsWith("lib/") && it.name.endsWith(".so") }.map { it.name.split('/')[1] }.toSet()
+        require(abis == setOf("arm64-v8a")) { "APK architecture mismatch." }
+      }
+      true
+    }
+
+    Function("getInstalledPersonalVersionCode") {
+      val context = appContext.reactContext ?: error("The app is not active.")
+      context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toDouble()
+    }
+    Function("canInstallPersonalApk") {
+      val context = appContext.reactContext ?: error("The app is not active.")
+      context.packageManager.canRequestPackageInstalls()
+    }
+    AsyncFunction("openPersonalInstallPermission") {
+      val activity = appContext.currentActivity ?: error("The app is not active.")
+      activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
+    }
+    AsyncFunction("installPersonalApk") { uri: String ->
+      val activity = appContext.currentActivity ?: error("The app is not active.")
+      require(activity.packageManager.canRequestPackageInstalls()) { "Allow this app to install updates in Android Settings first." }
+      val file = File(URI(uri)).canonicalFile
+      require(file.path.startsWith(activity.cacheDir.canonicalPath + File.separator) && file.isFile) { "Update file is unavailable." }
+      val contentUri = FileProvider.getUriForFile(activity, "${activity.packageName}.FileSystemFileProvider", file)
+      activity.startActivity(Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(contentUri, "application/vnd.android.package-archive")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+      })
+    }
 
     Function("is24HourFormat") {
       val context = appContext.reactContext ?: error("The app is not active.")

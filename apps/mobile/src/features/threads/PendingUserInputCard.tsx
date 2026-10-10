@@ -1,3 +1,5 @@
+import { questionReviewStep, questionAnswerSummary } from "@t3tools/shared/questionReview";
+import { useState, useEffect } from "react";
 import { RequestActionButton } from "./RequestActionButton";
 import { QuestionAttachments } from "./QuestionAttachments";
 import type { RuntimeRequestId } from "@t3tools/contracts";
@@ -22,6 +24,7 @@ import { AppText as Text } from "../../components/AppText";
 import { ControlPill } from "../../components/ControlPill";
 import { cn } from "../../lib/cn";
 import {
+  buildPendingUserInputAnswers,
   isPendingUserInputOptionSelected,
   type PendingUserInput,
   type PendingUserInputDraftAnswer,
@@ -92,7 +95,18 @@ const EXPANDED_CARD_IS_OVERLAY = Platform.OS === "ios";
 const CARD_LAYOUT_TRANSITION = LinearTransition.duration(200);
 
 export function PendingUserInputCard(props: PendingUserInputCardProps) {
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [editingFromReview, setEditingFromReview] = useState(false);
+  useEffect(() => {
+    setQuestionIndex(0);
+    setEditingFromReview(false);
+  }, [props.pendingUserInput.requestId]);
   const questionCount = props.pendingUserInput.questions.length;
+  const step = questionReviewStep(questionCount, questionIndex);
+  const currentQuestion = props.pendingUserInput.questions[step.index];
+  const currentAnswers = currentQuestion
+    ? buildPendingUserInputAnswers([currentQuestion], props.drafts)
+    : props.answers;
   // Message responses start a new run and remain available after the provider exits.
   const canRespond = props.pendingUserInput.responseCapability !== "not_resumable";
   const isResponding = props.respondingUserInputId === props.pendingUserInput.requestId;
@@ -270,7 +284,10 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
             run to continue.
           </Text>
         ) : null}
-        {props.pendingUserInput.questions.map((question) => {
+        {(step.reviewing
+          ? []
+          : props.pendingUserInput.questions.slice(step.index, step.index + 1)
+        ).map((question) => {
           const draft = props.drafts[question.id];
           return (
             <View key={question.id} className="gap-2 pt-1">
@@ -339,13 +356,67 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
             </View>
           );
         })}
+        {step.reviewing ? (
+          <View className="gap-3 p-3">
+            <Text className="font-t3-bold">Review answers</Text>
+            {props.pendingUserInput.questions.map((question, index) => (
+              <View key={question.id} className="gap-1">
+                <Text>{question.question}</Text>
+                <Text>
+                  {questionAnswerSummary(
+                    buildPendingUserInputAnswers([question], props.drafts)?.[question.id],
+                    question.isSecret,
+                  )}
+                </Text>
+                {props.drafts[question.id]?.attachmentNames?.map((name) => (
+                  <Text key={name}>{name}</Text>
+                ))}
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={responseDisabled}
+                  onPress={() => {
+                    setEditingFromReview(true);
+                    setQuestionIndex(index);
+                  }}
+                >
+                  <Text className="text-primary">Edit answer {index + 1}</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        ) : null}
       </ScrollView>
+      {step.index > 0 ? (
+        <Pressable
+          accessibilityRole="button"
+          disabled={responseDisabled}
+          onPress={() => setQuestionIndex(step.previous)}
+        >
+          <Text>Back</Text>
+        </Pressable>
+      ) : null}
       <RequestActionButton
-        label="Submit answers"
+        label={
+          step.reviewing || questionCount === 1
+            ? "Submit answers"
+            : editingFromReview || step.index === questionCount - 1
+              ? "Review answers"
+              : "Next"
+        }
         size="large"
         tone={props.answers ? "primary" : "secondary"}
-        disabled={!props.canOperateThread || responseDisabled || props.answers === null}
-        onPress={() => void props.onSubmit()}
+        disabled={
+          !props.canOperateThread ||
+          responseDisabled ||
+          (step.reviewing ? props.answers === null : currentAnswers === null)
+        }
+        onPress={() => {
+          if (questionCount === 1 || step.reviewing) void props.onSubmit();
+          else if (editingFromReview) {
+            setEditingFromReview(false);
+            setQuestionIndex(questionCount);
+          } else setQuestionIndex(step.next);
+        }}
       />
       {props.pendingUserInput.dismissible ? (
         <Pressable

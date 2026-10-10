@@ -1586,6 +1586,7 @@ export interface ChatComposerProps {
   activePendingIsResponding: boolean;
   activePendingDraftAnswers: Record<string, PendingUserInputDraftAnswer>;
   activePendingQuestionIndex: number;
+  onSelectPendingQuestion: (index: number) => void;
   respondingRequestIds: RuntimeRequestId[];
 
   // Plan
@@ -1745,6 +1746,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activePendingIsResponding: incomingPendingIsResponding,
     activePendingDraftAnswers,
     activePendingQuestionIndex,
+    onSelectPendingQuestion,
     respondingRequestIds,
     showPlanFollowUpPrompt,
     activeProposedPlan,
@@ -2342,7 +2344,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         models: selectedProviderModels,
         promptInjectionState: composerPromptInjectionState,
         modelOptions: composerModelOptions?.[selectedInstanceId],
-        planModeEnabled: settings.planModeEnabled,
+        planModeEnabled: true,
       }),
     [
       composerModelOptions,
@@ -2351,14 +2353,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedModel,
       selectedProvider,
       selectedProviderModels,
-      settings.planModeEnabled,
+      true,
     ],
   );
 
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const { enabled: planModeUiEnabled, interactionMode } = resolveComposerInteractionMode({
-    planModeEnabled: settings.planModeEnabled,
+    planModeEnabled: true,
     provider: selectedProviderStatus,
     interactionMode: requestedInteractionMode,
   });
@@ -2871,7 +2873,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerSuggestionListVisible = composerSuggestionsVisible && composerMenuItems.length > 0;
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const isChoiceOnlyPendingQuestion =
-    activePendingProgress?.activeQuestion?.allowCustomAnswer === false;
+    activePendingProgress?.activeQuestion?.allowCustomAnswer === false ||
+    Boolean(
+      activePendingUserInput &&
+      activePendingQuestionIndex >= activePendingUserInput.questions.length,
+    );
   const showComposerTopDrawer =
     isComposerApprovalState ||
     pendingUserInputs.length > 0 ||
@@ -2982,7 +2988,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     reportedModelSelection,
     prompt,
     onPromptChange: setPromptFromTraits,
-    planModeEnabled: settings.planModeEnabled,
+    planModeEnabled: true,
   });
   const providerTraitsPickerInput = {
     provider: selectedProvider,
@@ -2995,7 +3001,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     reportedModelSelection,
     prompt,
     onPromptChange: setPromptFromTraits,
-    planModeEnabled: settings.planModeEnabled,
+    planModeEnabled: true,
     isComposerOwned: true,
   } satisfies Parameters<typeof renderProviderTraitsPicker>[0];
   const providerTraitsPicker = renderProviderTraitsPicker(providerTraitsPickerInput);
@@ -3014,7 +3020,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () =>
       activePendingProgress
         ? {
-            questionIndex: activePendingProgress.questionIndex,
+            questionIndex: activePendingQuestionIndex,
+            reviewing: Boolean(
+              activePendingUserInput &&
+              activePendingQuestionIndex >= activePendingUserInput.questions.length,
+            ),
+            questionCount: activePendingUserInput?.questions.length ?? 1,
             isLastQuestion: activePendingProgress.isLastQuestion,
             canAdvance:
               activePendingProgress.canAdvance &&
@@ -3026,6 +3037,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         : null,
     [
       activePendingIsResponding,
+      activePendingQuestionIndex,
+      activePendingUserInput,
       activePendingProgress,
       activePendingResolvedAnswers,
       attachmentBlockReason,
@@ -6802,8 +6815,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     }
                     answers={activePendingDraftAnswers}
                     questionIndex={activePendingQuestionIndex}
+                    onSelectQuestion={onSelectPendingQuestion}
                     onToggleOption={onSelectActivePendingUserInputOption}
-                    onAdvance={onAdvanceActivePendingUserInput}
                     onDismiss={onDismissActivePendingUserInput}
                   />
                 ) : !isComposerCollapsedMobile && showPlanFollowUpPrompt && activeProposedPlan ? (
@@ -6823,8 +6836,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       }
                       answers={activePendingDraftAnswers}
                       questionIndex={activePendingQuestionIndex}
+                      onSelectQuestion={onSelectPendingQuestion}
                       onToggleOption={onSelectActivePendingUserInputOption}
-                      onAdvance={onAdvanceActivePendingUserInput}
                       onDismiss={onDismissActivePendingUserInput}
                     />
                     {!isChoiceOnlyPendingQuestion ||

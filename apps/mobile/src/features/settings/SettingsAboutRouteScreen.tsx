@@ -1,3 +1,4 @@
+import { PersonalApkUpdateSettings } from "../updates/PersonalApkUpdateSettings";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import Constants from "expo-constants";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -29,6 +30,7 @@ export function SettingsAboutRouteScreen() {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         <AppSettingsSection />
+        <PersonalApkUpdateSettings />
       </ScrollView>
     </SettingsScreen>
   );

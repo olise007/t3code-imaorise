@@ -24,7 +24,13 @@ import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
 import { Atom } from "effect/reactivity";
 
 import { threadEnvironment } from "../state/threads";
-import { scopedRequestKey } from "../lib/scopedEntities";
+function scopedUserInputDraftKey(
+  environmentId: string,
+  threadId: string,
+  requestId: string,
+): string {
+  return JSON.stringify([environmentId, threadId, requestId]);
+}
 import {
   buildPendingUserInputAnswers,
   setPendingUserInputCustomAnswer,
@@ -107,8 +113,9 @@ export function useSelectedThreadRequests() {
   const activePendingUserInput = activePendingUserInputs[0] ?? null;
   useEffect(() => {
     if (!activePendingUserInput || !selectedThreadShell) return;
-    const requestKey = scopedRequestKey(
+    const requestKey = scopedUserInputDraftKey(
       selectedThreadShell.environmentId,
+      selectedThreadShell.id,
       activePendingUserInput.requestId,
     );
     const existing = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
@@ -173,12 +180,14 @@ export function useSelectedThreadRequests() {
               question.id,
               {
                 ...userInputDraftsByRequestKey[
-                  scopedRequestKey(
+                  scopedUserInputDraftKey(
                     selectedThreadShell.environmentId,
+                    selectedThreadShell.id,
                     activePendingUserInput.requestId,
                   )
                 ]?.[question.id],
                 attachmentCount: attachments.length,
+                attachmentNames: attachments.map((attachment) => attachment.name),
                 attachmentsBlocked:
                   (attachments.length > 0 &&
                     questionServerConfigs.get(selectedThreadShell.environmentId)?.environment
@@ -204,7 +213,11 @@ export function useSelectedThreadRequests() {
         return;
       }
 
-      const requestKey = scopedRequestKey(selectedThreadShell.environmentId, requestId);
+      const requestKey = scopedUserInputDraftKey(
+        selectedThreadShell.environmentId,
+        selectedThreadShell.id,
+        requestId,
+      );
       setUserInputDraftOption(requestKey, question, value);
     },
     [selectedThreadShell],
@@ -219,7 +232,11 @@ export function useSelectedThreadRequests() {
         return;
       }
 
-      const requestKey = scopedRequestKey(selectedThreadShell.environmentId, requestId);
+      const requestKey = scopedUserInputDraftKey(
+        selectedThreadShell.environmentId,
+        selectedThreadShell.id,
+        requestId,
+      );
       setUserInputDraftCustomAnswer(requestKey, question, customAnswer);
     },
     [activePendingUserInputs, selectedThreadShell],

@@ -4611,3 +4611,7 @@ export function finalizePromotedDraftThreadByRef(threadRef: ScopedThreadRef): vo
   }
   clearBackgroundDraftSubmissionByRef(threadRef);
 }
+
+export function flushComposerDraftWrites(): void {
+  composerDebouncedStorage.flush();
+}

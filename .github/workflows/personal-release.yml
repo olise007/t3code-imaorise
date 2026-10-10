@@ -1,0 +1,207 @@
+name: Personal Windows and Android release
+on:
+  push:
+    branches: [imaorise]
+  workflow_dispatch:
+    inputs:
+      channel:
+        type: choice
+        options: [beta, stable]
+        default: beta
+      publish:
+        description: Publish after reviewing acceptance evidence; false keeps a draft
+        type: boolean
+        default: false
+      tested_beta:
+        description: Published tested beta tag required for Stable
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: personal-release
+  cancel-in-progress: false
+jobs:
+  reserve:
+    if: github.repository == 'olise007/t3code-imaorise' && github.ref == 'refs/heads/imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true' && (github.event_name == 'workflow_dispatch' || vars.PERSONAL_BETA_ACCEPTED == 'true')
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.channel == 'stable' && 'personal-stable' || 'personal-release' }}
+    permissions:
+      contents: write
+    outputs:
+      revision: ${{ steps.reserve.outputs.revision }}
+      version: ${{ steps.reserve.outputs.version }}
+      version_code: ${{ steps.reserve.outputs.version_code }}
+      tag: ${{ steps.reserve.outputs.tag }}
+      channel: ${{ steps.reserve.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - id: reserve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CHANNEL: ${{ inputs.channel || 'beta' }}
+          TESTED_BETA: ${{ inputs.tested_beta }}
+        run: node scripts/imaorise/release-reservation.mjs
+  linux:
+    needs: reserve
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.reserve.outputs.revision }}
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+      - run: vp install --frozen-lockfile
+      - name: Focused release checks
+        run: vp test run apps/web/src/proposedPlan.test.ts packages/shared/src/questionReview.test.ts apps/mobile/src/features/updates/personal-apk-manifest.test.ts apps/mobile/src/features/updates/personal-apk-updates.test.ts apps/desktop/src/settings/DesktopAppSettings.test.ts
+      - name: Record clean source and align generated package metadata
+        run: |
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
+          node scripts/update-release-package-versions.ts "$RELEASE_VERSION"
+        env:
+          SOURCE_REVISION: ${{ needs.reserve.outputs.revision }}
+          RELEASE_VERSION: ${{ needs.reserve.outputs.version }}
+      - run: vp run build:desktop
+        env:
+          APP_VERSION: ${{ needs.reserve.outputs.version }}
+      - name: Build matching Linux runtime
+        env:
+          VP_NODE_VERSION: "26.8.2"
+          RELEASE_VERSION: ${{ needs.reserve.outputs.version }}
+        run: |
+          node apps/server/scripts/cli.ts build-exe --verbose
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml
+          mkdir -p apps/server/dist/resource-monitor/linux-x64
+          cp native/resource-monitor/target/release/t3-resource-monitor apps/server/dist/resource-monitor/linux-x64/
+          node scripts/build-cli-archive.ts --platform linux --arch x64 --version "$RELEASE_VERSION" --output-dir release-cli
+          node scripts/smoke-cli-archive.ts --archive release-cli/*.tar.gz --expect-version "$RELEASE_VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: personal-wsl-runtime
+          path: release-cli/*.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+  windows:
+    needs: [reserve, linux]
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.reserve.outputs.revision }}
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - uses: dtolnay/rust-toolchain@stable
+      - run: vp install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: personal-wsl-runtime
+          path: ${{ runner.temp }}/wsl-runtime
+      - name: Build unsigned personal NSIS with matching WSL runtime
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ needs.reserve.outputs.version }}
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: olise007/t3code-imaorise
+          APP_VERSION: ${{ needs.reserve.outputs.version }}
+        run: |
+          if (git status --porcelain) { throw 'Source must be clean before generating package metadata.' }
+          node scripts/update-release-package-versions.ts $env:RELEASE_VERSION
+          $runtime = (Get-ChildItem "$env:RUNNER_TEMP/wsl-runtime/*.tar.gz").FullName
+          node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64 --build-version $env:RELEASE_VERSION --wsl-runtime $runtime --output-dir personal-windows --verbose
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: personal-windows
+          path: |
+            personal-windows/*.exe
+            personal-windows/*.yml
+            personal-windows/*.blockmap
+          retention-days: 1
+          if-no-files-found: error
+  android:
+    needs: reserve
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: personal-release
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.reserve.outputs.revision }}
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@v3
+      - name: Restore existing personal signing key
+        env:
+          KEYSTORE: ${{ secrets.IMAORISE_ANDROID_KEYSTORE_BASE64 }}
+          KEY_PASSWORD: ${{ secrets.IMAORISE_ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/personal-signing"
+          printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/personal-signing/android.keystore"
+          printf '%s' "$KEY_PASSWORD" > "$RUNNER_TEMP/personal-signing/password"
+      - name: Build and verify signed ARM64 APK
+        env:
+          SOURCE_REVISION: ${{ needs.reserve.outputs.revision }}
+          T3CODE_IMAORISE_VERSION: ${{ needs.reserve.outputs.version }}
+          T3CODE_IMAORISE_ANDROID_VERSION_CODE: ${{ needs.reserve.outputs.version_code }}
+          T3CODE_IMAORISE_SIGNING_DIRECTORY: ${{ runner.temp }}/personal-signing
+        run: bash scripts/imaorise/android.sh "$RUNNER_TEMP/personal-android" "$SOURCE_REVISION"
+      - name: Remove signing material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/personal-signing"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: personal-android
+          path: ${{ runner.temp }}/personal-android/*
+          retention-days: 1
+          if-no-files-found: error
+  publish:
+    needs: [reserve, linux, windows, android]
+    runs-on: ubuntu-latest
+    environment: personal-release
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.reserve.outputs.revision }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: personal-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify complete assets and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.reserve.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.reserve.outputs.version }}
+          RELEASE_CHANNEL: ${{ needs.reserve.outputs.channel }}
+          PUBLISH_RELEASE: ${{ github.event_name == 'push' || inputs.publish }}
+          VERSION_CODE: ${{ needs.reserve.outputs.version_code }}
+          SOURCE_REVISION: ${{ needs.reserve.outputs.revision }}
+        run: node scripts/imaorise/publish-release.mjs
+      - name: Remove temporary workflow artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[].id' | while read -r artifact; do gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact"; done

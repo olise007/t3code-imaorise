@@ -482,7 +482,12 @@
     "./PtyAdapter": {
       "types": "./src/PtyAdapter.ts",
       "import": "./src/PtyAdapter.ts"
-    }
+    },
+    "./questionReview": {
+      "types": "./src/questionReview.ts",
+      "import": "./src/questionReview.ts"
+    },
+    "./proposedPlan": "./src/proposedPlan.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

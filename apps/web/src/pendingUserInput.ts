@@ -4,6 +4,7 @@ export interface PendingUserInputDraftAnswer {
   selectedOptionValues?: string[];
   customAnswer?: string;
   attachmentCount?: number;
+  attachmentNames?: ReadonlyArray<string>;
   attachmentsBlocked?: boolean;
 }
 
@@ -61,13 +62,19 @@ export function resolvePendingUserInputAnswer(
     return selectedOptionValues.length > 0
       ? selectedOptionValues
       : (customAnswer ??
-          (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0 ? "" : null));
+          (question.required === false ||
+          (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0)
+            ? ""
+            : null));
   }
 
   return (
     selectedOptionValues[0] ??
     customAnswer ??
-    (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0 ? "" : null)
+    (question.required === false ||
+    (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0)
+      ? ""
+      : null)
   );
 }
 
