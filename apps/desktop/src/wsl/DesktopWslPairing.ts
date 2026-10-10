@@ -36,7 +36,7 @@ export class WslPairingError extends Data.TaggedError("WslPairingError")<{
   readonly message: string;
 }> {}
 const decodeDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
-const decodeSession = Schema.decodeUnknownSync(AuthSessionState);
+const decodeSession = Schema.decodeUnknownSync(Schema.toCodecJson(AuthSessionState));
 const decodeStatus = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
     Schema.Struct({
@@ -44,7 +44,7 @@ const decodeStatus = Schema.decodeUnknownEffect(
     }),
   ),
 );
-const makeLiveIO = Effect.gen(function* () {
+export const makeLiveIO = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   const client = yield* HttpClient.HttpClient;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;

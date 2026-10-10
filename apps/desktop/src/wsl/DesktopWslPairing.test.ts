@@ -1,6 +1,9 @@
 import { describe, it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { EnvironmentId, ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -10,6 +13,7 @@ import type { DesktopBackendStartConfig } from "../backend/DesktopBackendManager
 import * as Settings from "../settings/DesktopAppSettings.ts";
 import {
   make,
+  makeLiveIO,
   reconcileRoute,
   routeMapping,
   WslPairingError,
@@ -343,6 +347,41 @@ describe("managed WSL pairing", () => {
       const s = yield* service(f, { ready: false });
       expect((yield* s.getState).environmentId).toBeNull();
       expect(f.commands).toEqual([]);
+    }),
+  );
+});
+
+describe("WSL pairing HTTP authorization", () => {
+  it.effect("accepts an authorized session with its JSON-encoded expiry", () =>
+    Effect.gen(function* () {
+      const client = HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(
+              JSON.stringify({
+                authenticated: true,
+                auth: {
+                  policy: "remote-reachable",
+                  bootstrapMethods: ["desktop-bootstrap"],
+                  sessionMethods: ["bearer-access-token"],
+                  sessionCookieName: "t3_session_4775",
+                  serverUpdateScope: "environment:maintain",
+                },
+                scopes: ["access:write", "environment:maintain"],
+                expiresAt: "2026-10-12T00:00:00.000Z",
+              }),
+              { headers: { "content-type": "application/json" } },
+            ),
+          ),
+        ),
+      );
+      const io = yield* makeLiveIO.pipe(
+        Effect.provideService(HttpClient.HttpClient, client),
+        Effect.provideService(HostProcess.Platform, "win32"),
+        Effect.provide(NodeServices.layer),
+      );
+      yield* Effect.promise(() => io.authorize(target, "test-only-bearer"));
     }),
   );
 });
