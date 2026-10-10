@@ -761,7 +761,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     [navigation, settingsSheetPresentation.onStackTransitionsFinished],
   );
 
-  const showImplement = planActions.actionable && !hasContent && queuedEdit === null;
+  const showImplement =
+    planActions.actionable && !hasContent && queuedEdit === null && !isVoiceInputPresented;
   const implementControl = (
     <View className="flex-row items-center">
       <Pressable
@@ -950,6 +951,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             ) : null}
             <Animated.View
               className={isExpanded ? "px-[14px]" : "min-w-0 flex-1 px-[4px]"}
+              style={showImplement && !isVoiceInputPresented ? { paddingRight: 52 } : undefined}
               layout={COMPOSER_LAYOUT_TRANSITION}
             >
               <ComposerEditor
@@ -1137,6 +1139,16 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 )}
               </View>
             ) : null}
+            {isExpanded && showImplement && !isVoiceInputPresented ? (
+              <View style={{ position: "absolute", top: 0, right: 4 }}>
+                <ComposerDictationStartAction
+                  state={voiceInput.state}
+                  isAvailable={voiceInput.isAvailable}
+                  onStart={voiceInput.start}
+                  onCancel={voiceInput.cancel}
+                />
+              </View>
+            ) : null}
             {isExpanded ? <View className="h-1" /> : null}
           </ComposerDictationDraftContent>
           <Animated.View
@@ -1219,8 +1231,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                             size={size}
                           />
                         )}
-                        label={currentModelOption?.label ?? currentModelSelection.model}
-                        maxWidth={showImplement ? 80 : 140}
+                        label={
+                          showImplement
+                            ? ""
+                            : (currentModelOption?.label ?? currentModelSelection.model)
+                        }
+                        showChevron={!showImplement}
+                        maxWidth={showImplement ? 44 : 140}
                         onPress={openSettings}
                       />
                     </View>
@@ -1230,7 +1247,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   <ComposerDictationPrimaryAction
                     state={voiceInput.state}
                     presentation={voicePresentation}
-                    isAvailable={voiceInput.isAvailable}
+                    isAvailable={
+                      voiceInput.isAvailable && (!showImplement || isVoiceInputPresented)
+                    }
                     onStart={voiceInput.start}
                     onConfirm={voiceInput.stop}
                     onCancel={voiceInput.cancel}
