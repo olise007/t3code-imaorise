@@ -6,9 +6,20 @@ if (process.env.GITHUB_REPOSITORY !== repo || process.env.GITHUB_REF !== "refs/h
 const gh = (...args) =>
   NodeChildProcess.execFileSync("gh", args, {
     encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
     stdio: ["pipe", "pipe", "inherit"],
   });
-const releases = JSON.parse(gh("api", `repos/${repo}/releases?per_page=100`));
+const releases = gh(
+  "api",
+  "--paginate",
+  `repos/${repo}/releases?per_page=100`,
+  "--jq",
+  ".[] | {tag_name, draft, prerelease, body}",
+)
+  .trim()
+  .split("\n")
+  .filter(Boolean)
+  .map((line) => JSON.parse(line));
 const channel = process.env.RELEASE_CHANNEL === "stable" ? "stable" : "beta";
 let revision = process.env.GITHUB_SHA;
 let base = "2.0.1";
