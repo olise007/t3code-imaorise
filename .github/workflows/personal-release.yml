@@ -66,6 +66,13 @@ jobs:
       - run: vp install --frozen-lockfile
       - name: Focused release checks
         run: vp test run apps/mobile/src/features/threads/plan-action-state.test.ts apps/mobile/src/state/legacy-plan-mode.test.ts apps/web/src/connection/platformPairing.test.ts apps/desktop/src/wsl/DesktopWslPairing.test.ts apps/web/src/rpc/environmentAccess.test.ts apps/web/src/proposedPlan.test.ts apps/web/src/pendingUserInput.test.ts apps/web/src/components/chat/ComposerPendingUserInputPanel.test.tsx apps/web/src/components/chat/ComposerPendingUserInputPanel.permissions.test.tsx apps/web/src/components/chat/ComposerPrimaryActions.test.tsx packages/shared/src/questionReview.test.ts apps/mobile/src/features/updates/personal-apk-manifest.test.ts apps/mobile/src/features/updates/personal-apk-updates.test.ts apps/desktop/src/settings/DesktopAppSettings.test.ts
+      - name: Backend startup recovery checks
+        run: |
+          vp test run apps/desktop/src/backend/DesktopBackendManager.test.ts apps/desktop/src/backend/startupRecovery.test.ts apps/desktop/src/backend/DesktopBackendConfiguration.test.ts apps/desktop/src/backend/DesktopBackendPool.test.ts apps/desktop/src/wsl/DesktopWslBackend.test.ts apps/desktop/src/wsl/DesktopWslEnvironment.test.ts apps/desktop/src/ipc/methods/window.test.ts
+          vp run --filter @t3tools/desktop typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=2048
+          GOMEMLIMIT: 2GiB
       - name: Record clean source and align generated package metadata
         run: |
           test -z "$(git status --porcelain)"

@@ -279,6 +279,8 @@ export const layer = Layer.effect(
       },
     );
 
+    let startupDialogShown = false;
+    let primaryForRetry: DesktopBackendInstance | undefined;
     const primary = yield* DesktopBackendManager.makeBackendInstance({
       id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
       // Keep this lazy. The pool layer is initialized before startup loads
@@ -287,6 +289,38 @@ export const layer = Layer.effect(
       // primaries as Windows.
       label: configuration.resolvePrimaryLabel,
       configResolve: configuration.resolvePrimary,
+      onStartupStatus: (status) =>
+        Effect.gen(function* () {
+          if (status.phase === "starting" || status.phase === "running") startupDialogShown = false;
+          if (startupDialogShown || !["slow", "failed"].includes(status.phase)) return;
+          startupDialogShown = true;
+          // Never await UI input under the instance lifecycle mutex.
+          yield* electronDialog
+            .showMessageBox({
+              type: "warning",
+              title: "Backend startup",
+              message: status.diagnostic ?? `Backend startup failed on port ${status.port}.`,
+              buttons: ["Retry", status.phase === "failed" ? "Dismiss" : "Keep waiting"],
+              defaultId: 1,
+              cancelId: 1,
+            })
+            .pipe(
+              Effect.flatMap((result) =>
+                result.response === 0
+                  ? (primaryForRetry?.retryStartup ?? Effect.void)
+                  : Effect.void,
+              ),
+              Effect.catch((error) =>
+                logBackendPoolWarning("could not show startup recovery", { error: error.message }),
+              ),
+              Effect.forkIn(layerScope),
+            );
+        }),
+      verifyEnvironment: (config) =>
+        configuration.verifyEnvironment?.(DesktopBackendManager.PRIMARY_INSTANCE_ID, config) ??
+        Effect.succeed("ready" as const),
+      recoverPort: (config, ports) =>
+        configuration.recoverPort?.(config, ports, true) ?? Effect.succeed(Option.none()),
       // Window creation errors propagating out of handleBackendReady must
       // not block the readiness callback (that would prevent restartAttempt
       // from being reset), so we absorb them here. The window service only
@@ -305,6 +339,7 @@ export const layer = Layer.effect(
       onPreflightFailed: handlePrimaryPreflightFailure,
     });
 
+    primaryForRetry = primary;
     const instancesRef = yield* SynchronizedRef.make<
       ReadonlyMap<BackendInstanceId, RegisteredInstance>
     >(

@@ -3,6 +3,9 @@ import {
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
   DesktopTelemetryControlMessage,
 } from "@t3tools/contracts";
+import * as NodeNet from "node:net";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -119,6 +122,9 @@ function decodeBootstrap(raw: string) {
 }
 
 interface MakeInstanceInput {
+  readonly verifyEnvironment?: DesktopBackendManager.BackendInstanceSpec["verifyEnvironment"];
+  readonly onStartupStatus?: DesktopBackendManager.BackendInstanceSpec["onStartupStatus"];
+  readonly recoverPort?: DesktopBackendManager.BackendInstanceSpec["recoverPort"];
   readonly spawnerLayer: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>;
   readonly httpClientLayer?: Layer.Layer<HttpClient.HttpClient>;
   readonly backendOutputLog?: Partial<DesktopObservability.DesktopBackendOutputLogShape>;
@@ -184,6 +190,9 @@ function makeTestInstance(input: MakeInstanceInput) {
     id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
     label: Effect.succeed("Windows"),
     configResolve: input.configResolve ?? Effect.succeed(input.config ?? baseConfig),
+    ...(input.recoverPort ? { recoverPort: input.recoverPort } : {}),
+    ...(input.onStartupStatus ? { onStartupStatus: input.onStartupStatus } : {}),
+    ...(input.verifyEnvironment ? { verifyEnvironment: input.verifyEnvironment } : {}),
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
     ...(input.onPreflightFailed ? { onPreflightFailed: input.onPreflightFailed } : {}),
@@ -193,6 +202,232 @@ function makeTestInstance(input: MakeInstanceInput) {
 }
 
 describe("DesktopBackendManager", () => {
+  it.effect("blocks a mismatched environment without reallocating its port", () => Effect.scoped(Effect.gen(function* () {
+    const blocked = yield* Deferred.make<void>();
+    let recoveryCalls = 0;
+    const instance = yield* makeTestInstance({
+      spawnerLayer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, ChildProcessSpawner.make(() => Effect.succeed(makeProcess({ exitCode: Effect.never })))),
+      verifyEnvironment: () => Effect.succeed("identity-mismatch" as const),
+      recoverPort: () => Effect.sync(() => { recoveryCalls++; return Option.none(); }),
+      onStartupStatus: (status) => status.category === "identity-mismatch" ? Deferred.succeed(blocked, undefined).pipe(Effect.asVoid) : Effect.void,
+    });
+    yield* instance.start;
+    yield* Deferred.await(blocked);
+    assert.isFalse((yield* instance.snapshot).ready);
+    assert.equal(recoveryCalls, 0);
+    assert.equal((yield* instance.snapshot).startupStatus?.port, 3773);
+  })));
+  it.effect("a quiet living child becomes slow after sixty seconds without changing ports", () => Effect.scoped(Effect.gen(function* () {
+    const launched = yield* Deferred.make<void>();
+    const slow = yield* Deferred.make<void>();
+    let recoveryCalls = 0;
+    const instance = yield* makeTestInstance({
+      httpClientLayer: layerHttpClient(() => Effect.never),
+      spawnerLayer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, ChildProcessSpawner.make(() => Deferred.succeed(launched, undefined).pipe(Effect.as(makeProcess({ exitCode: Effect.never }))))),
+      recoverPort: () => Effect.sync(() => { recoveryCalls++; return Option.none(); }),
+      onStartupStatus: (status) => status.phase === "slow" ? Deferred.succeed(slow, undefined).pipe(Effect.asVoid) : Effect.void,
+    });
+    yield* instance.start;
+    yield* Deferred.await(launched);
+    yield* TestClock.adjust(Duration.seconds(60));
+    yield* Deferred.await(slow);
+    assert.equal(recoveryCalls, 0);
+    assert.isTrue((yield* instance.snapshot).desiredRunning);
+  })).pipe(Effect.provide(TestClock.layer())));
+  it.live("recovers a real child bind failure without touching the occupied listener", () =>
+    Effect.gen(function* () {
+      const occupied = NodeNet.createServer((socket) => socket.destroy());
+      yield* Effect.promise(
+        () => new Promise<void>((resolve) => occupied.listen(0, "127.0.0.1", resolve)),
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => new Promise<void>((resolve) => occupied.close(() => resolve()))),
+      );
+      const address = occupied.address();
+      if (!address || typeof address === "string") return yield* Effect.die("Missing test port");
+      const available = NodeNet.createServer();
+      yield* Effect.promise(
+        () => new Promise<void>((resolve) => available.listen(0, "127.0.0.1", resolve)),
+      );
+      const next = available.address();
+      if (!next || typeof next === "string") return yield* Effect.die("Missing replacement port");
+      yield* Effect.promise(() => new Promise<void>((resolve) => available.close(() => resolve())));
+      const fs = yield* FileSystem.FileSystem;
+      const temp = yield* fs.makeTempDirectoryScoped({ prefix: "t3-startup-recovery-" });
+      const entry = `${temp}/child.cjs`;
+      yield* fs.writeFileString(
+        entry,
+        `const fs=require('node:fs'); const http=require('node:http'); const b=JSON.parse(fs.readFileSync(3,'utf8')); const s=http.createServer((q,r)=>r.end('{}')); s.on('error',e=>{console.error('listen '+e.code+': address already in use 127.0.0.1:'+b.port);process.exit(1)}); s.listen(b.port,'127.0.0.1');`,
+      );
+      const ready = yield* Deferred.make<void>();
+      const instance = yield* makeTestInstance({
+        config: {
+          ...baseConfig,
+          executablePath: process.execPath,
+          args: [entry],
+          entryPath: entry,
+          cwd: temp,
+          env: {},
+          bootstrap: { ...baseConfig.bootstrap, port: address.port },
+          httpBaseUrl: new URL(`http://127.0.0.1:${address.port}`),
+        },
+        spawnerLayer: Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          yield* ChildProcessSpawner.ChildProcessSpawner,
+        ),
+        httpClientLayer: Layer.succeed(HttpClient.HttpClient, yield* HttpClient.HttpClient),
+        onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+        recoverPort: (config) =>
+          Effect.succeed(
+            Option.some({
+              ...config,
+              bootstrap: { ...config.bootstrap, port: next.port },
+              httpBaseUrl: new URL(`http://127.0.0.1:${next.port}`),
+            }),
+          ),
+      });
+      yield* instance.start;
+      yield* Deferred.await(ready).pipe(Effect.timeout("10 seconds"));
+      assert.equal(
+        (yield* instance.currentConfig).pipe(
+          Option.map((config) => config.bootstrap.port),
+          Option.getOrUndefined,
+        ),
+        next.port,
+      );
+      assert.isTrue(occupied.listening);
+      yield* instance.stop();
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici))),
+  );
+  it.effect("stops after five occupied ports and explicit Retry starts a fresh cycle", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const failed = yield* Queue.unbounded<void>();
+        const launches = yield* Queue.unbounded<number>();
+        const recovered = yield* Queue.unbounded<void>();
+        let count = 0;
+        const instance = yield* makeTestInstance({
+          httpClientLayer: layerHttpClient(() => Effect.never),
+          onStartupStatus: (status) =>
+            status.phase === "failed"
+              ? Queue.offer(failed, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+          recoverPort: (config) =>
+            Queue.offer(recovered, undefined).pipe(
+              Effect.as(
+                Option.some({
+                  ...config,
+                  bootstrap: { ...config.bootstrap, port: config.bootstrap.port + 1 },
+                  httpBaseUrl: new URL(`http://127.0.0.1:${config.bootstrap.port + 1}`),
+                }),
+              ),
+            ),
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make((command) =>
+              Effect.gen(function* () {
+                const fd =
+                  command._tag === "StandardCommand"
+                    ? command.options.additionalFds?.fd3
+                    : undefined;
+                if (fd?.type !== "input" || !fd.stream)
+                  return yield* Effect.die("Missing bootstrap");
+                const bootstrap = yield* fd.stream.pipe(
+                  Stream.decodeText(),
+                  Stream.mkString,
+                  Effect.flatMap(decodeDesktopBackendBootstrap),
+                  Effect.orDie,
+                );
+                count++;
+                yield* Queue.offer(launches, bootstrap.port);
+                return makeProcess({
+                  stderr: Stream.make(
+                    new TextEncoder().encode(
+                      `listen EADDRINUSE: address already in use 0.0.0.0:${bootstrap.port}\n`,
+                    ),
+                  ),
+                  exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+                });
+              }),
+            ),
+          ),
+        });
+        yield* instance.start;
+        for (const delay of [500, 1000, 2000, 4000]) {
+          yield* Queue.take(launches);
+          yield* Queue.take(recovered);
+          yield* TestClock.adjust(Duration.millis(delay));
+        }
+        assert.equal(yield* Queue.take(launches), 3777);
+        yield* Queue.take(failed);
+        assert.equal(count, 5);
+        assert.isFalse((yield* instance.snapshot).desiredRunning);
+        yield* instance.retryStartup ?? Effect.void;
+        assert.equal(yield* Queue.take(launches), 3773);
+      }),
+    ).pipe(Effect.provide(TestClock.layer())),
+  );
+  it.effect("reassigns only a confirmed startup bind conflict and launches fresh bootstrap", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const launches = yield* Queue.unbounded<number>();
+        const recovered = yield* Deferred.make<void>();
+        let spawnCount = 0;
+        const instance = yield* makeTestInstance({
+          httpClientLayer: layerHttpClient(() => Effect.never),
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make((command) =>
+              Effect.gen(function* () {
+                const fd =
+                  command._tag === "StandardCommand"
+                    ? command.options.additionalFds?.fd3
+                    : undefined;
+                if (fd?.type === "input" && fd.stream) {
+                  const bootstrap = yield* fd.stream.pipe(
+                    Stream.decodeText(),
+                    Stream.mkString,
+                    Effect.flatMap(decodeDesktopBackendBootstrap),
+                    Effect.orDie,
+                  );
+                  yield* Queue.offer(launches, bootstrap.port);
+                }
+                spawnCount++;
+                return makeProcess(
+                  spawnCount === 1
+                    ? {
+                        stderr: Stream.make(
+                          new TextEncoder().encode(
+                            "ServeError: listen EADDRINUSE: address already in use 127.0.0.1:3773\n",
+                          ),
+                        ),
+                        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+                      }
+                    : { exitCode: Effect.never },
+                );
+              }),
+            ),
+          ),
+          recoverPort: (config, ports) =>
+            Effect.gen(function* () {
+              assert.deepEqual(ports, [3773]);
+              yield* Deferred.succeed(recovered, undefined);
+              return Option.some({
+                ...config,
+                bootstrap: { ...config.bootstrap, port: 3775 },
+                httpBaseUrl: new URL("http://127.0.0.1:3775"),
+              });
+            }),
+        });
+        yield* instance.start;
+        assert.equal(yield* Queue.take(launches), 3773);
+        yield* Deferred.await(recovered);
+        yield* TestClock.adjust(Duration.millis(500));
+        assert.equal(yield* Queue.take(launches), 3775);
+        assert.equal((yield* instance.snapshot).startupStatus?.attempt, 2);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
   it.effect("spawns the backend with fd3 bootstrap and fd4 telemetry", () =>
     Effect.scoped(
       Effect.gen(function* () {

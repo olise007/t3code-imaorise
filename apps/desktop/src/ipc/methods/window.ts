@@ -111,7 +111,11 @@ export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
       // endpoints keep the renderer from dialing the dead port, avoiding the
       // needless /api/auth/bootstrap/bearer error cycles a real endpoint would
       // trigger.
-      if (Option.isNone(config) || Option.isSome(config.value.preflightFailure)) {
+      if (
+        Option.isNone(config) ||
+        Option.isSome(config.value.preflightFailure) ||
+        !snapshot.ready
+      ) {
         // Skip the primary (same-origin, no "connecting" affordance) and skip a
         // secondary whose preflight failed *fatally* (no node, wrong version,
         // missing build tools): it has stopped retrying, so an indefinite
@@ -128,6 +132,7 @@ export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
         if (isPrimary || fatalPreflight || stoppedPreflight) continue;
         bootstraps.push({
           id: instance.id,
+          ...(snapshot.startupStatus ? { startupStatus: snapshot.startupStatus } : {}),
           label: yield* instance.label,
           runningDistro: null,
           httpBaseUrl: null,
@@ -139,6 +144,7 @@ export const getLocalEnvironmentBootstraps = DesktopIpc.makeSyncIpcMethod({
       const runningDistro = config.value.runningDistro ?? null;
       bootstraps.push({
         id: instance.id,
+        ...(snapshot.startupStatus ? { startupStatus: snapshot.startupStatus } : {}),
         label: runningDistro === null ? yield* instance.label : `WSL (${runningDistro})`,
         runningDistro,
         httpBaseUrl: httpBaseUrl.href,

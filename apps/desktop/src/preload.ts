@@ -185,6 +185,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setWslPairingRoute: (input) =>
     ipcRenderer.invoke(IpcChannels.SET_WSL_PAIRING_ROUTE_CHANNEL, input),
   getWslState: () => ipcRenderer.invoke(IpcChannels.GET_WSL_STATE_CHANNEL),
+  getBackendStartupStates: () => ipcRenderer.invoke(IpcChannels.GET_BACKEND_STARTUP_STATES_CHANNEL),
+  retryBackendStartup: (id) => ipcRenderer.invoke(IpcChannels.RETRY_BACKEND_STARTUP_CHANNEL, id),
   setWslBackendEnabled: (enabled) =>
     ipcRenderer.invoke(IpcChannels.SET_WSL_BACKEND_ENABLED_CHANNEL, enabled),
   setWslDistro: (distro) => ipcRenderer.invoke(IpcChannels.SET_WSL_DISTRO_CHANNEL, distro),

@@ -84,6 +84,27 @@ const layerNet = Layer.succeed(NetService.NetService, {
 } satisfies NetService.NetService["Service"]);
 
 describe("DesktopWslBackend", () => {
+  it.effect("skips distro-local listeners even when the Windows bind succeeds", () =>
+    Effect.gen(function* () {
+      const port = yield* DesktopWslBackend.scanForWslPort(4774, [4774, 4776], (candidate) =>
+        Effect.succeed(candidate !== 4775),
+      );
+      assert.equal(port, 4777);
+    }).pipe(Effect.provide(layerNet)),
+  );
+  it.effect("stops allocation when the selected distro cannot be inspected", () =>
+    Effect.gen(function* () {
+      let probes = 0;
+      const error = yield* DesktopWslBackend.scanForWslPort(4774, [], () =>
+        Effect.sync(() => {
+          probes++;
+          return null;
+        }),
+      ).pipe(Effect.flip);
+      assert.include(error.message, "Could not inspect WSL ports");
+      assert.equal(probes, 1);
+    }).pipe(Effect.provide(layerNet)),
+  );
   it.effect("skips HTTPS routes and ports occupied outside loopback", () => {
     const probes: Array<[number, string]> = [];
     return Effect.gen(function* () {

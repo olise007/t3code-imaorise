@@ -78,16 +78,22 @@ const buildLabel = (distro: string | null): string =>
 export const scanForWslPort = Effect.fn("desktop.wslBackend.scanForWslPort")(function* (
   startPort: number,
   reservedPorts: ReadonlyArray<number> = [],
+  probeDistro?: (port: number) => Effect.Effect<boolean | null>,
 ): Effect.fn.Return<number, NetService.NetError, NetService.NetService> {
   const net = yield* NetService.NetService;
-  for (let port = startPort; port <= MAX_TCP_PORT; port += 1) {
+  for (let port = startPort; port <= Math.min(MAX_TCP_PORT, startPort + 99); port += 1) {
     if (reservedPorts.includes(port)) continue;
-    if (yield* net.canListenOnHost(port, "0.0.0.0")) {
-      return port;
-    }
+    if (!(yield* net.canListenOnHost(port, "0.0.0.0"))) continue;
+    const available = yield* probeDistro?.(port) ?? Effect.succeed(true);
+    if (available === null)
+      return yield* new NetService.NetError({
+        message:
+          "Could not inspect WSL ports. Check the selected distro and its ss utility, then Retry.",
+      });
+    if (available) return port;
   }
   return yield* new NetService.NetError({
-    message: `No loopback port available for WSL backend between ${startPort} and ${MAX_TCP_PORT}.`,
+    message: `No available WSL backend port between ${startPort} and ${Math.min(MAX_TCP_PORT, startPort + 99)}.`,
   });
 });
 
@@ -144,16 +150,20 @@ export const layer = Layer.effect(
       const settings = yield* appSettings.get;
       // Mirrored WSL shares host ports. Tailscale can listen on a different
       // interface while Windows loopback still appears available.
-      const port = yield* scanForWslPort(primaryConfig.port + 1, [
-        settings.tailscaleServePort,
-        settings.wslPairingRoute.port,
-      ]).pipe(
+      const port = yield* scanForWslPort(
+        primaryConfig.port + 1,
+        [settings.tailscaleServePort, settings.wslPairingRoute.port],
+        (port) => wslEnvironment.isPortAvailable?.(input.distro, port) ?? Effect.succeed(false),
+      ).pipe(
         Effect.provideService(NetService.NetService, net),
         Effect.asSome,
         Effect.catch((error) =>
           logWslBackendWarning("could not allocate port for WSL backend", {
             error: error.message,
-          }).pipe(Effect.as(Option.none<number>())),
+          }).pipe(
+            Effect.andThen(Ref.set(preflightErrorRef, Option.some(error.message))),
+            Effect.as(Option.none<number>()),
+          ),
         ),
       );
 
@@ -161,6 +171,7 @@ export const layer = Layer.effect(
         return;
       }
       const allocatedPort = port.value;
+      let selectedPort = allocatedPort;
 
       const targetId = resolveTargetInstanceId(input.distro);
       yield* logWslBackendInfo("registering WSL backend with pool", {
@@ -173,7 +184,21 @@ export const layer = Layer.effect(
         .register({
           id: targetId,
           label: Effect.succeed(buildLabel(input.distro)),
-          configResolve: configuration.resolveWsl({ port: allocatedPort, distro: input.distro }),
+          verifyEnvironment: (config) =>
+            configuration.verifyEnvironment?.(targetId, config) ?? Effect.succeed("ready" as const),
+          configResolve: Effect.suspend(() =>
+            configuration.resolveWsl({ port: selectedPort, distro: input.distro }),
+          ),
+          recoverPort: (config, ports) =>
+            (
+              configuration.recoverPort?.(config, ports, false) ?? Effect.succeed(Option.none())
+            ).pipe(
+              Effect.tap((replacement) =>
+                Effect.sync(() => {
+                  if (Option.isSome(replacement)) selectedPort = replacement.value.bootstrap.port;
+                }),
+              ),
+            ),
           // Dual-mode secondary: record a fatal preflight failure so Connections
           // settings can show why the WSL backend never appeared. No dialog or
           // fallback — Windows is the primary and keeps working.

@@ -5,6 +5,7 @@ import {
   revokeOtherEnvironmentClients,
 } from "~/rpc/environmentAccess";
 import { SessionPermissions } from "./SessionPermissions";
+import { BackendStartupSettings } from "./BackendStartupSettings";
 import { createAdvertisedEndpoint } from "@t3tools/shared/advertisedEndpoint";
 import { useEnvironmentSessionState } from "~/state/session";
 import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
@@ -3984,6 +3985,9 @@ export function ConnectionsSettings() {
                 {renderEndpointRows("endpoint-rail")}
                 {renderTailscaleRow()}
                 {renderWslRow()}
+                {desktopBridge && canManageLocalBackend && (
+                  <BackendStartupSettings bridge={desktopBridge} />
+                )}
                 {desktopWslState?.enabled && !desktopWslState.wslOnly ? (
                   <WslPairingSettings key={desktopWslState.distro ?? "default"} />
                 ) : null}

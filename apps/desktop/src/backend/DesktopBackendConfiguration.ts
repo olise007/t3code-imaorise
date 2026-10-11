@@ -1,4 +1,8 @@
 import * as NodeOS from "node:os";
+import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
+import { HttpClient } from "effect/http";
+import { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import * as NetService from "@t3tools/shared/Net";
 
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { currentDesktopBootstrapToken } from "@t3tools/shared/desktopBootstrapToken";
@@ -23,6 +27,7 @@ import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
+const decodeEnvironmentDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedError<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
@@ -39,6 +44,15 @@ export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedE
 export class DesktopBackendConfiguration extends Context.Service<
   DesktopBackendConfiguration,
   {
+    readonly verifyEnvironment?: (
+      id: string,
+      config: DesktopBackendManager.DesktopBackendStartConfig,
+    ) => Effect.Effect<"ready" | "identity-mismatch" | "unreachable-endpoint">;
+    readonly recoverPort?: (
+      config: DesktopBackendManager.DesktopBackendStartConfig,
+      attemptedPorts: ReadonlyArray<number>,
+      primary: boolean,
+    ) => Effect.Effect<Option.Option<DesktopBackendManager.DesktopBackendStartConfig>>;
     // Build the Windows-native primary backend's start config. Reads the
     // primary's port/host/exposure from DesktopServerExposure. Can fail
     // with PlatformError because bootstrap token generation now uses
@@ -841,6 +855,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
+  const environmentIds = new Map<string, string>();
+  const wslPorts = new Map<string, number>();
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
@@ -955,7 +971,107 @@ export const make = Effect.gen(function* () {
     return currentDesktopBootstrapToken(secret, yield* Clock.currentTimeMillis);
   });
 
+  const resolvePrimary = Effect.gen(function* () {
+    const { useWsl } = yield* describePrimary;
+    return yield* useWsl ? buildWslPrimaryConfig : buildWindowsPrimaryConfig;
+  });
   return DesktopBackendConfiguration.of({
+    verifyEnvironment: (id, config) =>
+      Effect.gen(function* () {
+        const client = yield* HttpClient.HttpClient;
+        const response = yield* client.get(
+          new URL("/.well-known/t3/environment", config.httpBaseUrl).href,
+        );
+        if (response.status !== 200) return "unreachable-endpoint" as const;
+        const descriptor = yield* response.json.pipe(
+          Effect.flatMap((value) => Effect.try(() => decodeEnvironmentDescriptor(value))),
+        );
+        const key = `${id}:${config.runningDistro ?? "native"}`;
+        let expected = environmentIds.get(key);
+        if (expected === undefined) {
+          const stored =
+            config.runningDistro !== undefined
+              ? yield* (
+                  wslEnvironment.readEnvironmentId?.(config.runningDistro) ?? Effect.succeedNone
+                )
+              : yield* fileSystem
+                  .readFileString(
+                    environment.path.join(
+                      config.bootstrap.t3Home ?? environment.baseDir,
+                      "userdata",
+                      "environment-id",
+                    ),
+                  )
+                  .pipe(
+                    Effect.map((value) => value.trim()),
+                    Effect.option,
+                  );
+          if (Option.isNone(stored) || stored.value.length === 0)
+            return "unreachable-endpoint" as const;
+          expected = stored.value;
+          environmentIds.set(key, expected);
+        }
+        if (expected !== descriptor.environmentId) return "identity-mismatch" as const;
+        return "ready" as const;
+      }).pipe(
+        Effect.provide(NodeHttpClient.layerUndici),
+        Effect.timeoutOption("5 seconds"),
+        Effect.map((result) => Option.getOrElse(result, () => "unreachable-endpoint" as const)),
+        Effect.orElseSucceed(() => "unreachable-endpoint" as const),
+      ),
+    recoverPort: (previous, attemptedPorts, primary) =>
+      Effect.gen(function* () {
+        const net = yield* NetService.NetService;
+        const persisted = yield* settings.get;
+        const exposure = yield* serverExposure.backendConfig;
+        const reserved = new Set([
+          ...wslPorts.values(),
+          ...attemptedPorts,
+          persisted.tailscaleServePort,
+          persisted.wslPairingRoute.port,
+          ...(primary ? [] : [exposure.port]),
+        ]);
+        const distro = previous.runningDistro;
+        // Limit allocation work as well as launch attempts. Unknown WSL probe
+        // results fail closed rather than treating a missing tool as a free port.
+        for (
+          let port = previous.bootstrap.port + 1;
+          port <= Math.min(65535, previous.bootstrap.port + 100);
+          port++
+        ) {
+          if (
+            reserved.has(port) ||
+            !(yield* net.canListenOnHost(port, previous.bootstrap.host ?? "127.0.0.1"))
+          )
+            continue;
+          if (distro !== undefined) {
+            const available = yield* (
+              wslEnvironment.isPortAvailable?.(distro, port) ?? Effect.succeed(null)
+            );
+            if (available === null)
+              return Option.none<DesktopBackendManager.DesktopBackendStartConfig>();
+            if (!available) continue;
+          }
+          if (primary) {
+            yield* serverExposure.configureFromSettings({ port });
+            return Option.some(yield* resolvePrimary);
+          }
+          const shared = yield* sharedInputs;
+          wslPorts.set(distro ?? "default", port);
+          return Option.some(
+            yield* resolveWslStartConfig({ ...shared, port, distro: distro ?? null }).pipe(
+              Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+              Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
+              Effect.provideService(DesktopWslServerTree.DesktopWslServerTree, wslServerTree),
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+            ),
+          );
+        }
+        return Option.none<DesktopBackendManager.DesktopBackendStartConfig>();
+      }).pipe(
+        Effect.provide(NetService.layer),
+        Effect.orElseSucceed(() => Option.none()),
+      ),
     currentBootstrapToken,
     resolvePrimary: Effect.gen(function* () {
       const { useWsl, wslRequested } = yield* describePrimary;
@@ -979,6 +1095,7 @@ export const make = Effect.gen(function* () {
     resolveWsl: (input) =>
       Effect.gen(function* () {
         const shared = yield* sharedInputs;
+        wslPorts.set(input.distro ?? "default", input.port);
         return yield* resolveWslStartConfig({ ...shared, ...input }).pipe(
           Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
           Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),

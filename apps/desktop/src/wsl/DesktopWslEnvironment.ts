@@ -114,6 +114,11 @@ export class DesktopWslEnvironment extends Context.Service<
     // (the backend can be listening for 30+ seconds before wslhost starts
     // forwarding 127.0.0.1:port to WSL-side localhost).
     readonly getDistroIp: (distro: string | null) => Effect.Effect<Option.Option<string>>;
+    readonly readEnvironmentId?: (distro: string | null) => Effect.Effect<Option.Option<string>>;
+    readonly isPortAvailable?: (
+      distro: string | null,
+      port: number,
+    ) => Effect.Effect<boolean | null>;
     readonly prepareRuntime: (
       distro: string | null,
       archive: WslRuntimeArchive,
@@ -1200,6 +1205,8 @@ export const layerTest = (stub: DesktopWslEnvironmentTestStub = {}) => {
         Effect.succeed(stub.windowsToWslPath?.(distro, windowsPath) ?? Option.none()),
       getUserHome: (distro) => Effect.succeed(stub.getUserHome?.(distro) ?? Option.none<string>()),
       getDistroIp: (distro) => Effect.succeed(stub.getDistroIp?.(distro) ?? Option.none<string>()),
+      readEnvironmentId: () => Effect.succeedNone,
+      isPortAvailable: () => Effect.succeed(true),
       prepareRuntime: (distro, archive) =>
         Effect.succeed(
           stub.prepareRuntime?.(distro, archive) ?? {
@@ -1284,6 +1291,33 @@ export const layer = Layer.effect(
     );
 
     return DesktopWslEnvironment.of({
+      readEnvironmentId: (distro) =>
+        provideSpawner(
+          runWslShell(distro, 'cat "$HOME/.t3-imaorise/userdata/environment-id"', PROBE_TIMEOUT, {
+            resolveNode: false,
+          }),
+        ).pipe(
+          Effect.map((result) =>
+            result.exitCode === 0 &&
+            result.stdout.trim().length > 0 &&
+            result.stdout.trim().length <= 128
+              ? Option.some(result.stdout.trim())
+              : Option.none(),
+          ),
+        ),
+      isPortAvailable: (distro, port) =>
+        provideSpawner(
+          runWslShell(
+            distro,
+            `command -v ss >/dev/null || exit 2\nports=$(ss -H -ltn 'sport = :${port}') || exit 2\n[ -z "$ports" ]`,
+            PROBE_TIMEOUT,
+            { resolveNode: false },
+          ),
+        ).pipe(
+          Effect.map((result) =>
+            result.exitCode === 0 ? true : result.exitCode === 1 ? false : null,
+          ),
+        ),
       isAvailable,
       listDistros: probeDistros.pipe(
         Effect.orElseSucceed(() => []),

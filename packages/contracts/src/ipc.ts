@@ -362,6 +362,7 @@ export const DesktopUpdateCheckResultSchema = Schema.Struct({
 export const PRIMARY_LOCAL_ENVIRONMENT_ID = "primary";
 
 export interface DesktopEnvironmentBootstrap {
+  startupStatus?: DesktopBackendStartupStatus;
   // Stable backend instance id (e.g. "primary" or "wsl:ubuntu"). The
   // web env runtime keys local environments off this so projects
   // routed to a specific backend reopen against the same one.
@@ -376,7 +377,31 @@ export interface DesktopEnvironmentBootstrap {
   bootstrapToken?: string;
 }
 
+export const DesktopBackendStartupStatusSchema = Schema.Struct({
+  phase: Schema.Literals(["starting", "retrying", "slow", "running", "failed"]),
+  category: Schema.optionalKey(
+    Schema.Literals([
+      "port-conflict",
+      "process-exit",
+      "readiness-timeout",
+      "unreachable-endpoint",
+      "identity-mismatch",
+    ]),
+  ),
+  port: Schema.Number,
+  attempt: Schema.Number,
+  diagnostic: Schema.optionalKey(Schema.String),
+});
+export type DesktopBackendStartupStatus = typeof DesktopBackendStartupStatusSchema.Type;
+export const DesktopBackendStartupStateSchema = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  status: Schema.optionalKey(DesktopBackendStartupStatusSchema),
+});
+export type DesktopBackendStartupState = typeof DesktopBackendStartupStateSchema.Type;
+
 export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
+  startupStatus: Schema.optionalKey(DesktopBackendStartupStatusSchema),
   id: Schema.String,
   label: Schema.String,
   runningDistro: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -1152,6 +1177,8 @@ export interface DesktopBridge {
   // info (omits instances whose backend hasn't produced a config yet).
   // The primary backend is identified by id === PRIMARY_LOCAL_ENVIRONMENT_ID.
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
+  getBackendStartupStates?: () => Promise<readonly DesktopBackendStartupState[]>;
+  retryBackendStartup?: (id: string) => Promise<void>;
   getLocalEnvironmentEnabled?: () => boolean;
   setLocalEnvironmentEnabled?: (enabled: boolean) => Promise<void>;
   getLocalEnvironmentBearerToken: () => Promise<string>;

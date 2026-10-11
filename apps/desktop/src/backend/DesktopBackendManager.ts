@@ -24,6 +24,12 @@
 //     so each instance lands in its own rotating file.
 
 import * as Brand from "effect/Brand";
+import {
+  appendStartupOutput,
+  isAssignedPortConflict,
+  MAX_PORT_ATTEMPTS,
+  type StartupStatus,
+} from "./startupRecovery.ts";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -222,6 +228,7 @@ export const BackendProcessError = Schema.Union([
 export type BackendProcessError = typeof BackendProcessError.Type;
 
 interface RunBackendProcessOptions extends DesktopBackendStartConfig {
+  readonly verifyReady?: Effect.Effect<boolean>;
   readonly desktopTelemetryStream: Stream.Stream<Uint8Array>;
   /** Events for the desktop's browser tabs, written to `desktopBrowserFd`. */
   readonly desktopBrowserStream?: Stream.Stream<Uint8Array>;
@@ -244,6 +251,7 @@ interface RunBackendProcessOptions extends DesktopBackendStartConfig {
 }
 
 export interface DesktopBackendSnapshot {
+  readonly startupStatus?: StartupStatus;
   readonly desiredRunning: boolean;
   readonly ready: boolean;
   readonly activePid: Option.Option<number>;
@@ -267,6 +275,7 @@ export const PRIMARY_INSTANCE_ID: BackendInstanceId = BackendInstanceId(
 // `DesktopBackendManagerShape`; the id and label give the pool registry
 // + UI something to route on.
 export interface DesktopBackendInstance {
+  readonly retryStartup?: Effect.Effect<void>;
   readonly id: BackendInstanceId;
   readonly label: Effect.Effect<string>;
   readonly start: Effect.Effect<void>;
@@ -287,6 +296,14 @@ export interface DesktopBackendInstance {
 // open, global readiness flag) without coupling the factory to those
 // concerns; other instances pass them as undefined.
 export interface BackendInstanceSpec {
+  readonly onStartupStatus?: (status: StartupStatus) => Effect.Effect<void>;
+  readonly verifyEnvironment?: (
+    config: DesktopBackendStartConfig,
+  ) => Effect.Effect<"ready" | "identity-mismatch" | "unreachable-endpoint">;
+  readonly recoverPort?: (
+    config: DesktopBackendStartConfig,
+    attemptedPorts: ReadonlyArray<number>,
+  ) => Effect.Effect<Option.Option<DesktopBackendStartConfig>>;
   readonly id: BackendInstanceId;
   readonly label: Effect.Effect<string>;
   // configResolve can now fail with PlatformError because the
@@ -621,8 +638,12 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       httpBaseUrl: options.httpBaseUrl,
       timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
     }).pipe(
-      Effect.flatMap(() => options.onReady?.() ?? Effect.void),
-      Effect.as(true),
+      Effect.andThen(options.verifyReady ?? Effect.succeed(true)),
+      Effect.flatMap((verified) =>
+        verified
+          ? (options.onReady?.() ?? Effect.void).pipe(Effect.as(true))
+          : Effect.sleep(DEFAULT_BACKEND_READINESS_INTERVAL).pipe(Effect.as(false)),
+      ),
       Effect.catchTags({
         BackendReadinessTimeoutError: (error) =>
           (options.onReadinessFailure?.(error) ?? Effect.void).pipe(Effect.as(false)),
@@ -693,6 +714,14 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
   const state = yield* Ref.make(initialState);
+  const startupStatus = yield* Ref.make<StartupStatus | undefined>(undefined);
+  const setStartupStatus = (status: StartupStatus) =>
+    Ref.set(startupStatus, status).pipe(
+      Effect.andThen(spec.onStartupStatus?.(status) ?? Effect.void),
+    );
+  const retrying = yield* Ref.make(false);
+  let attemptedPorts: number[] = [];
+  let replacementConfig: DesktopBackendStartConfig | undefined;
   const mutex = yield* Semaphore.make(1);
 
   const { logWarning: logInstanceWarning, logError: logInstanceError } =
@@ -701,15 +730,18 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const updateActiveRun = (runId: number, f: (run: ActiveBackendRun) => ActiveBackendRun) =>
     Ref.update(state, withActiveRun(runId, f));
 
-  const snapshot = Ref.get(state).pipe(
-    Effect.map((current): DesktopBackendSnapshot => ({
+  const snapshot = Effect.gen(function* (): Effect.fn.Return<DesktopBackendSnapshot> {
+    const current = yield* Ref.get(state);
+    const status = yield* Ref.get(startupStatus);
+    return {
+      ...(status === undefined ? {} : { startupStatus: status }),
       desiredRunning: current.desiredRunning,
       ready: current.ready,
       activePid: activePid(current.active),
       restartAttempt: current.restartAttempt,
       restartScheduled: Option.isSome(current.restartFiber),
-    })),
-  );
+    };
+  });
   const currentConfig = Ref.get(state).pipe(Effect.map((current) => current.config));
 
   const cancelRestart = Effect.gen(function* () {
@@ -747,7 +779,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             latest.ready ? { ...latest, ready: false } : latest,
           );
         }
-        const config = yield* spec.configResolve.pipe(
+        if (!current.desiredRunning) {
+          attemptedPorts = [];
+          replacementConfig = undefined;
+        }
+        const config = yield* (
+          replacementConfig ? Effect.succeed(replacementConfig) : spec.configResolve
+        ).pipe(
           Effect.tapError((error) =>
             logInstanceError("failed to generate desktop backend configuration", {
               cause: error.message,
@@ -761,6 +799,16 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           }
           return;
         }
+        replacementConfig = undefined;
+        if (!attemptedPorts.includes(config.value.bootstrap.port))
+          attemptedPorts.push(config.value.bootstrap.port);
+        yield* setStartupStatus({
+          phase: attemptedPorts.length > 1 ? "retrying" : "starting",
+          port: config.value.bootstrap.port,
+          attempt: attemptedPorts.length,
+        });
+        let startupOutput = "";
+        let startupPortConflict = false;
         const entryExists = yield* fileSystem
           .exists(config.value.entryPath)
           .pipe(Effect.orElseSucceed(() => false));
@@ -937,14 +985,89 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               }
 
               if (isCurrentRun && nextState.desiredRunning) {
+                if (!wasReady && !stopRequested && startupPortConflict) {
+                  const replacement =
+                    attemptedPorts.length < MAX_PORT_ATTEMPTS && spec.recoverPort
+                      ? yield* spec.recoverPort(config.value, attemptedPorts)
+                      : Option.none<DesktopBackendStartConfig>();
+                  if (
+                    Option.isSome(replacement) &&
+                    !attemptedPorts.includes(replacement.value.bootstrap.port)
+                  ) {
+                    replacementConfig = replacement.value;
+                  } else {
+                    yield* Ref.update(state, (latest) => ({ ...latest, desiredRunning: false }));
+                    yield* setStartupStatus({
+                      phase: "failed",
+                      category: "port-conflict",
+                      port: config.value.bootstrap.port,
+                      attempt: attemptedPorts.length,
+                      diagnostic: `Port ${config.value.bootstrap.port} is occupied. Retry to select another port.`,
+                    });
+                    return;
+                  }
+                }
+                if (!wasReady && !startupPortConflict) {
+                  yield* setStartupStatus({
+                    phase: "retrying",
+                    category: "process-exit",
+                    port: config.value.bootstrap.port,
+                    attempt: attemptedPorts.length,
+                    diagnostic: "Backend exited before becoming ready. Retrying the same port.",
+                  });
+                }
                 yield* scheduleRestart(reason);
               }
             }),
           );
         });
 
+        yield* Effect.sleep(Duration.seconds(60)).pipe(
+          Effect.andThen(
+            Effect.gen(function* () {
+              const latest = yield* Ref.get(state);
+              const status = yield* Ref.get(startupStatus);
+              if (
+                Option.getOrUndefined(latest.active)?.id === runId &&
+                !latest.ready &&
+                status?.category !== "identity-mismatch"
+              ) {
+                yield* setStartupStatus({
+                  phase: "slow",
+                  category: "readiness-timeout",
+                  port: config.value.bootstrap.port,
+                  attempt: attemptedPorts.length,
+                  diagnostic:
+                    "Taking longer than expected. The backend is still starting; Retry is available.",
+                });
+              }
+            }),
+          ),
+          Effect.forkIn(runScope),
+        );
         const program = runBackendProcess({
           ...config.value,
+          verifyReady: Effect.gen(function* () {
+            const result = yield* (
+              spec.verifyEnvironment?.(config.value) ?? Effect.succeed("ready" as const)
+            );
+            const latest = yield* Ref.get(state);
+            if (Option.getOrUndefined(latest.active)?.id !== runId || !latest.desiredRunning)
+              return false;
+            if (result !== "ready") {
+              yield* setStartupStatus({
+                phase: result === "identity-mismatch" ? "failed" : "slow",
+                category: result,
+                port: config.value.bootstrap.port,
+                attempt: attemptedPorts.length,
+                diagnostic:
+                  result === "identity-mismatch"
+                    ? "The endpoint belongs to a different environment. Connection blocked; Retry is available."
+                    : "The backend endpoint could not be verified. Check networking or Retry.",
+              });
+            }
+            return result === "ready";
+          }),
           desktopTelemetryStream: desktopTelemetryPublisher.encoded,
           // Only a bootstrap that names the browser fds (the local primary) gets them.
           desktopBrowserStream: desktopBrowserHost.events,
@@ -985,6 +1108,12 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               return;
             }
 
+            yield* setStartupStatus({
+              phase: "running",
+              port: config.value.bootstrap.port,
+              attempt: attemptedPorts.length,
+            });
+            attemptedPorts = [];
             yield* spec.onReady?.(config.value.httpBaseUrl) ?? Effect.void;
             if (
               config.value.runningDistro !== undefined &&
@@ -1006,7 +1135,14 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               });
             },
           ),
-          onOutput: (streamName, chunk) => backendOutputLog.writeOutputChunk(streamName, chunk),
+          onOutput: (streamName, chunk) =>
+            Effect.sync(() => {
+              startupOutput = appendStartupOutput(startupOutput, new TextDecoder().decode(chunk));
+              startupPortConflict ||= isAssignedPortConflict(
+                startupOutput,
+                config.value.bootstrap.port,
+              );
+            }).pipe(Effect.andThen(backendOutputLog.writeOutputChunk(streamName, chunk))),
         }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -1092,6 +1228,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   }) {
     const { active, restartFiber, notifyShutdown } = yield* mutex.withPermits(1)(
       Effect.gen(function* () {
+        yield* Ref.set(startupStatus, undefined);
         const result = yield* Ref.modify(state, (latest) => {
           const active = Option.map(latest.active, (run) =>
             run.exitObserved ? run : { ...run, stopRequested: true },
@@ -1199,6 +1336,21 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   yield* Effect.addFinalizer(() => stop());
 
   return {
+    retryStartup: Effect.gen(function* () {
+      const accepted = yield* Ref.modify(retrying, (pending) => [!pending, true]);
+      if (!accepted) return;
+      yield* Effect.gen(function* () {
+        const current = yield* snapshot;
+        if (
+          current.ready ||
+          !current.startupStatus ||
+          !["slow", "failed"].includes(current.startupStatus.phase)
+        )
+          return;
+        yield* stop();
+        yield* start;
+      }).pipe(Effect.ensuring(Ref.set(retrying, false)));
+    }),
     id: spec.id,
     label: spec.label,
     start,
