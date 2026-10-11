@@ -1,4 +1,5 @@
 import { usePlanActions } from "./use-plan-actions";
+import { showMobilePlanImplementation } from "./plan-action-availability";
 import { registerPlanComposer } from "./plan-action-state";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -764,8 +765,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     [navigation, settingsSheetPresentation.onStackTransitionsFinished],
   );
 
-  const showImplement =
-    planActions.actionable && !hasContent && queuedEdit === null && !isVoiceInputPresented;
+  const showImplement = showMobilePlanImplementation({
+    actionable: planActions.actionable,
+    hasContent,
+    editingQueuedMessage: queuedEdit !== null,
+    voiceInputPresented: isVoiceInputPresented,
+  });
   const implementControl = (
     <View className="flex-row items-center">
       <Pressable

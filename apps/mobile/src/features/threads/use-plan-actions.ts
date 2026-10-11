@@ -33,6 +33,8 @@ import { waitForThreadShellReady } from "./threadForkNavigation";
 import { environmentThreadShells } from "../../state/threads";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { deriveLatestThreadRun } from "@t3tools/client-runtime/state/thread-execution";
+import { isMobilePlanActionable } from "./plan-action-availability";
 import {
   beginPlanAction,
   finishPlanAction,
@@ -57,7 +59,9 @@ export function usePlanActions(props: {
   const canOperate = useEnvironmentScope(props.environmentId, AuthOrchestrationOperateScope);
   const setMode = useAtomCommand(threadEnvironment.setInteractionMode);
   const navigation = useNavigation();
-  const plan = findLatestProposedPlan(detail?.projection ?? null, selectedThread?.latestRun?.runId);
+  const projection = detail?.projection ?? null;
+  const latestRun = projection ? deriveLatestThreadRun(projection) : null;
+  const plan = findLatestProposedPlan(projection, latestRun?.runId);
   const projectedItem =
     props.projectedItem ??
     detail?.projection.visibleTurnItems.findLast(
@@ -69,18 +73,9 @@ export function usePlanActions(props: {
   const busy = status === "busy";
   const implemented = status === "submitted";
   const actionable =
-    item !== null &&
-    !implemented &&
-    plan?.id === item.planId &&
-    plan.status === "active" &&
-    !item.streaming &&
-    (!selectedThread?.latestRun || item.runId === selectedThread.latestRun.runId) &&
+    isMobilePlanActionable({ item, plan, latestRun, implemented }) &&
     selectedThread?.id === props.threadId &&
     selectedThread.environmentId === props.environmentId &&
-    (!selectedThread.latestRun ||
-      ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
-        selectedThread.latestRun.status,
-      )) &&
     !detail?.projection.runtimeRequests.some((request) => request.status === "pending") &&
     canOperate;
   const exportPlan = async () => {
@@ -111,6 +106,19 @@ export function usePlanActions(props: {
         : (draft.runtimeMode ?? selectedThread.runtimeMode);
     const targetThreadId = newThread ? ThreadId.make(uuidv4()) : props.threadId;
     try {
+      if (!newThread) {
+        const modeResult = await setMode({
+          environmentId: props.environmentId,
+          input: { threadId: props.threadId, interactionMode: "default" },
+        });
+        if (modeResult._tag !== "Success") {
+          Alert.alert("Could not implement plan", "Could not switch to Build. Please retry.");
+          return;
+        }
+        updateComposerDraftSettings(scopedThreadKey(props.environmentId, props.threadId), {
+          interactionMode: "default",
+        });
+      }
       const result = await startTurn({
         environmentId: props.environmentId,
         input: {
@@ -150,11 +158,7 @@ export function usePlanActions(props: {
             environmentId: props.environmentId,
             threadId: targetThreadId,
           });
-        else if (!newThread)
-          updateComposerDraftSettings(scopedThreadKey(props.environmentId, props.threadId), {
-            interactionMode: "default",
-          });
-        else
+        else if (newThread)
           Alert.alert(
             "Thread created",
             "The new thread is still synchronizing. Open it from the thread list when it appears.",

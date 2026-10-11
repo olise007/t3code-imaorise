@@ -106,9 +106,11 @@ export function ProposedPlanCard(props: {
         <Text className="text-xs text-foreground-muted">Generating plan…</Text>
       ) : null}
       <View style={expanded ? undefined : { maxHeight: 240, overflow: "hidden" }}>
-        <Markdown options={{ gfm: true }} {...props.markdownStyles}>
-          {stripDisplayedPlanMarkdown(item.markdown)}
-        </Markdown>
+        <View style={{ width: "100%", flexShrink: 0 }}>
+          <Markdown options={{ gfm: true }} {...props.markdownStyles}>
+            {stripDisplayedPlanMarkdown(item.markdown)}
+          </Markdown>
+        </View>
         {!expanded ? (
           <View
             pointerEvents="none"
