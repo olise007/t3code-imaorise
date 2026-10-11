@@ -23,7 +23,15 @@ const alive = (pid) => {
 };
 
 /** Sequential, pinned-source supervision. Progress never contains commands or environment values. */
-export async function runSupervisedBuild({ revision, output, steps, resume = false }) {
+export async function runSupervisedBuild({
+  revision,
+  output,
+  steps,
+  resume = false,
+  memoryLimitBytes = 6 * 1024 ** 3,
+}) {
+  if (!Number.isSafeInteger(memoryLimitBytes) || memoryLimitBytes < 0)
+    throw new Error("Invalid memory limit.");
   if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error("A full source revision is required.");
   const order = ["android", "linux", "windows"];
   if (
@@ -121,10 +129,32 @@ export async function runSupervisedBuild({ revision, output, steps, resume = fal
       };
       progress.steps[step.name] = record;
       await save();
+      if (memoryLimitBytes && (platform !== "linux" || step.name === "windows"))
+        throw new Error(
+          "Use hosted packaging for native Windows; local limits cannot cover Windows processes.",
+        );
+      const unit = memoryLimitBytes ? `t3-personal-build-${NodeCrypto.randomUUID()}` : null;
+      record.memoryLimitBytes = memoryLimitBytes;
+      record.unit = unit;
+      await save();
+      const command = unit ? "systemd-run" : step.command;
+      const args = unit
+        ? [
+            "--user",
+            "--scope",
+            "--quiet",
+            `--unit=${unit}`,
+            `--property=MemoryMax=${memoryLimitBytes}`,
+            "--property=MemorySwapMax=0",
+            "--",
+            step.command,
+            ...(step.args ?? []),
+          ]
+        : (step.args ?? []);
       const result = await new Promise((resolve, reject) => {
-        child = NodeChildProcess.spawn(step.command, step.args ?? [], {
+        child = NodeChildProcess.spawn(command, args, {
           cwd: step.cwd,
-          env: process.env,
+          env: { ...process.env, NODE_OPTIONS: "--max-old-space-size=3072", GOMEMLIMIT: "3GiB" },
           stdio: "inherit",
           detached: platform !== "win32",
         });

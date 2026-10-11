@@ -37,7 +37,7 @@ async function fixture() {
     args: ["-e", code],
     artifacts: [artifact],
   });
-  return { root, cwd, revision, output, artifact, step };
+  return { root, cwd, revision, output, artifact, step, memoryLimitBytes: 0 };
 }
 
 describe("personal build supervision", () => {
@@ -93,6 +93,7 @@ describe("personal build supervision", () => {
         JSON.stringify({
           revision: f.revision,
           output: f.output,
+          memoryLimitBytes: 0,
           steps: [f.step("android", "console.log('READY'); setInterval(() => {}, 1000)")],
         }),
       );

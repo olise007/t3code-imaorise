@@ -1,0 +1,37 @@
+name: Personal provider recovery validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: personal-provider-recovery-validation
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.repository == 'olise007/t3code-imaorise' && github.ref == 'refs/heads/imaorise'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 3GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Focused recovery and build supervision tests
+        run: vp test run scripts/imaorise/supervised-build.test.ts packages/effect-codex-app-server/src/client.test.ts packages/effect-codex-app-server/src/protocol.test.ts packages/effect-codex-app-server/src/_internal/stdio.test.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts apps/server/src/orchestration-v2/ProviderSessionManager.test.ts apps/server/src/orchestration-v2/RunExecutionService.test.ts
+      - name: Codex transport typecheck
+        run: vp run --filter effect-codex-app-server typecheck
+      - name: Mobile typecheck
+        run: vp run --filter @t3tools/mobile typecheck
+      - name: Server typecheck
+        run: vp run --filter t3 typecheck
+      - name: Scoped lint
+        run: vp lint packages/effect-codex-app-server/src/client.ts packages/effect-codex-app-server/src/client.test.ts packages/effect-codex-app-server/src/_internal/stdio.ts packages/effect-codex-app-server/src/protocol.ts packages/effect-codex-app-server/src/protocol.test.ts packages/effect-codex-app-server/src/errors.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts apps/server/src/orchestration-v2/RunExecutionService.ts apps/mobile/src/features/threads/InterruptedRunRecoveryCard.tsx scripts/imaorise/supervised-build.mjs scripts/imaorise/supervised-build.test.ts

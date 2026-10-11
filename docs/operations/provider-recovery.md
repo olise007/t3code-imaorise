@@ -19,3 +19,5 @@ The configuration contains a full `revision`, an absolute `output` directory, an
 Windows packaging can use `scripts/imaorise/windows-build.ps1` with `-Repository`, `-Revision`, `-Version`, `-WslRuntime` and `-Output`. It clones an isolated checkout and checks out the exact revision, avoiding fast-forward merges into developer checkouts. Configure the existing Windows Node/Vite+/Rust tool paths before invocation. Use the matching verified Linux runtime archive.
 
 Installed Windows/WSL interruption recovery and Android appearance remain device acceptance checks. Test with a disposable chat/provider; never terminate the live server to exercise this path.
+
+Local supervised Linux steps default to a 6 GiB systemd cgroup limit, zero cgroup swap and a 3 GiB Node heap limit. If systemd scopes are unavailable, the build fails instead of running unbounded. Native Windows packaging uses GitHub-hosted runners because a WSL cgroup cannot constrain a Windows process. `memoryLimitBytes: 0` explicitly opts out of the cgroup limit (intended for small test fixtures). Run validation one command at a time and keep evidence outside `/tmp` so WSL restarts do not erase it.
