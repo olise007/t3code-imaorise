@@ -23,7 +23,9 @@ jobs:
       options: --memory=6g --memory-swap=6g --cpus=2
     env:
       NODE_OPTIONS: --max-old-space-size=3072
-      GOMEMLIMIT: 3GiB
+      # The server checker exceeded 4 GiB locally. Avoid GC thrashing below
+      # its working set while retaining the container's hard 6 GiB ceiling.
+      GOMEMLIMIT: 5GiB
     steps:
       - uses: actions/checkout@v6
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
