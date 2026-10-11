@@ -4629,124 +4629,134 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     );
   });
 
-  // The app-server exits after the root turn, before the command's own
-  // item/completed (Codex always sends one, so only a lost notification or a
-  // gone process leaves it running). Nothing tracks the command any more, yet
-  // the thread still shows it, and Stop is the only way to clear it.
-  it.effect("Stop ends a background command no Codex process tracks any more", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-bg-stale-workspace-" });
-        const staleTranscript = makeCodexReplayTranscript({
-          scenario: "codex-bg-stop-untracked",
-          entries: [
-            ...backgroundExecTranscript.entries.slice(0, -1),
-            { type: "runtime_exit", status: "success" },
-          ],
-        });
-        const localTranscript = yield* decodeReplayTranscriptJson(
-          (yield* encodeReplayTranscriptJson(staleTranscript)).replaceAll(
-            yield* encodeStringJson("/workspace"),
-            yield* encodeStringJson(cwd),
-          ),
-        );
-        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        for (const args of [
-          ["init", "--quiet"],
-          [
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "--allow-empty",
-            "--quiet",
-            "-m",
-            "Initial commit",
-          ],
-        ]) {
-          assert.equal(Number(yield* spawner.exitCode(ChildProcess.make("git", args, { cwd }))), 0);
-        }
-        yield* Effect.gen(function* () {
-          const orchestrator = yield* Orchestrator.OrchestratorV2;
-          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-          const threadId = ThreadId.make("thread:background-stop-untracked");
-          yield* orchestrator.dispatch({
-            type: "thread.create",
-            commandId: CommandId.make("create-background-stop-untracked"),
-            threadId,
-            projectId: ProjectId.make("project:background-stop-untracked"),
-            title: "Background stop untracked",
-            modelSelection: CODEX_TEST_MODEL_SELECTION,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: cwd,
-            createdBy: "user",
-            creationSource: "web",
+  // Loss before and after root completion must clear unfinished commands.
+  it.effect.each([true, false])(
+    "provider exit clears unfinished work (root already completed: %s)",
+    (rootCompleted) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-bg-stale-workspace-" });
+          const staleTranscript = makeCodexReplayTranscript({
+            scenario: "codex-bg-stop-untracked",
+            entries: [
+              ...backgroundExecTranscript.entries
+                .slice(0, -1)
+                .filter(
+                  (entry) =>
+                    rootCompleted ||
+                    entry.type !== "emit_inbound" ||
+                    !(
+                      typeof entry.frame === "object" &&
+                      entry.frame !== null &&
+                      "method" in entry.frame &&
+                      entry.frame.method === "turn/completed"
+                    ),
+                ),
+              { type: "runtime_exit", status: "success" },
+            ],
           });
-          const settled = yield* orchestrator.streamDomainEvents.pipe(
-            Stream.filter(
-              (event) =>
-                event.type === "run.updated" &&
-                (event.payload.status === "waiting" || event.payload.status === "completed"),
+          const localTranscript = yield* decodeReplayTranscriptJson(
+            (yield* encodeReplayTranscriptJson(staleTranscript)).replaceAll(
+              yield* encodeStringJson("/workspace"),
+              yield* encodeStringJson(cwd),
             ),
-            Stream.runHead,
-            Effect.forkChild({ startImmediately: true }),
           );
-          yield* orchestrator.dispatch({
-            type: "message.dispatch",
-            commandId: CommandId.make("start-background-stop-untracked"),
-            threadId,
-            messageId: MessageId.make("message:background-stop-untracked"),
-            text: BG_PROMPT,
-            attachments: [],
-            createdBy: "user",
-            creationSource: "web",
-            dispatchMode: { type: "start_immediately" },
-          });
-          yield* worker.drain();
-          yield* Fiber.join(settled);
-          yield* worker.drain();
-          const before = yield* orchestrator.getThreadShell(threadId);
-          assert.deepEqual(
-            before?.pendingBackgroundTasks?.map((task) => task.kind),
-            ["command"],
-            "the thread still shows the command the gone process never finished",
-          );
-          const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
-          yield* orchestrator.dispatch({
-            type: "run.interrupt",
-            commandId: CommandId.make("stop-background-untracked"),
-            threadId,
-            runId: run.id,
-            holdQueue: true,
-          });
-          yield* worker.drain();
-          const projection = yield* orchestrator.getThreadProjection(threadId);
-          assert.deepEqual(
-            projection.turnItems.flatMap((item) =>
-              item.type === "command_execution" ? [item.status] : [],
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          for (const args of [
+            ["init", "--quiet"],
+            [
+              "-c",
+              "user.name=Test",
+              "-c",
+              "user.email=test@example.com",
+              "commit",
+              "--allow-empty",
+              "--quiet",
+              "-m",
+              "Initial commit",
+            ],
+          ]) {
+            assert.equal(
+              Number(yield* spawner.exitCode(ChildProcess.make("git", args, { cwd }))),
+              0,
+            );
+          }
+          yield* Effect.gen(function* () {
+            const orchestrator = yield* Orchestrator.OrchestratorV2;
+            const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+            const threadId = ThreadId.make("thread:background-stop-untracked");
+            yield* orchestrator.dispatch({
+              type: "thread.create",
+              commandId: CommandId.make("create-background-stop-untracked"),
+              threadId,
+              projectId: ProjectId.make("project:background-stop-untracked"),
+              title: "Background stop untracked",
+              modelSelection: CODEX_TEST_MODEL_SELECTION,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: cwd,
+              createdBy: "user",
+              creationSource: "web",
+            });
+            const settled = yield* orchestrator.streamDomainEvents.pipe(
+              Stream.filter((event) =>
+                rootCompleted
+                  ? event.type === "turn-item.updated" &&
+                    event.payload.type === "command_execution" &&
+                    event.payload.status === "interrupted"
+                  : event.type === "run.updated" && event.payload.status === "interrupted",
+              ),
+              Stream.runHead,
+              Effect.forkChild({ startImmediately: true }),
+            );
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make("start-background-stop-untracked"),
+              threadId,
+              messageId: MessageId.make("message:background-stop-untracked"),
+              text: BG_PROMPT,
+              attachments: [],
+              createdBy: "user",
+              creationSource: "web",
+              dispatchMode: { type: "start_immediately" },
+            });
+            yield* worker.drain();
+            yield* Fiber.join(settled);
+            yield* worker.drain();
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            assert.deepEqual(
+              projection.turnItems.flatMap((item) =>
+                item.type === "command_execution" ? [item.status] : [],
+              ),
+              ["interrupted"],
+            );
+            assert.equal(
+              projection.runs.at(-1)?.status,
+              rootCompleted ? "completed" : "interrupted",
+            );
+            if (!rootCompleted)
+              assert.isTrue(
+                projection.turnItems.some(
+                  (item) => item.type === "error" && item.failure.code === "provider_disconnected",
+                ),
+              );
+            assert.deepEqual(
+              (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
+              [],
+            );
+          }).pipe(
+            Effect.provide(
+              ProviderReplayHarness.layerWithRegistry(
+                { name: "codex-background-stop-untracked", runtimePolicyOverride: { cwd } },
+                CodexAdapterV2Testkit.layer({ transcript: localTranscript }),
+                { runEffectWorker: false },
+              ),
             ),
-            ["interrupted"],
           );
-          assert.equal(projection.runs.at(-1)?.status, "completed");
-          assert.deepEqual(
-            (yield* orchestrator.getThreadShell(threadId))?.pendingBackgroundTasks,
-            [],
-          );
-        }).pipe(
-          Effect.provide(
-            ProviderReplayHarness.layerWithRegistry(
-              { name: "codex-background-stop-untracked", runtimePolicyOverride: { cwd } },
-              CodexAdapterV2Testkit.layer({ transcript: localTranscript }),
-              { runEffectWorker: false },
-            ),
-          ),
-        );
-      }).pipe(Effect.provide(NodeServices.layer)),
-    ),
+        }).pipe(Effect.provide(NodeServices.layer)),
+      ),
   );
 
   const PRE_SETTLE_SCENARIO = "codex-bg-exec-pre-settle";

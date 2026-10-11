@@ -1,4 +1,5 @@
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -20,6 +21,10 @@ import {
 import { makeChildStdio, makeTerminationError } from "./_internal/stdio.ts";
 
 export interface CodexAppServerClientOptions {
+  readonly onTermination?: (
+    error: CodexError.CodexAppServerError,
+    diagnostics?: { readonly stderrTail: ReadonlyArray<string> },
+  ) => Effect.Effect<void>;
   readonly logIncoming?: boolean;
   readonly logOutgoing?: boolean;
   readonly logger?: (
@@ -39,6 +44,7 @@ interface CodexAppServerClientRaw {
 export class CodexAppServerClient extends Context.Service<
   CodexAppServerClient,
   {
+    readonly termination: Effect.Effect<never, CodexError.CodexAppServerError>;
     readonly raw: CodexAppServerClientRaw;
     readonly request: <M extends CodexRpc.ClientRequestMethod>(
       method: M,
@@ -100,6 +106,7 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
   terminationError?: Effect.Effect<CodexError.CodexAppServerError>,
 ): Effect.fn.Return<CodexAppServerClient["Service"], never, Scope.Scope> {
   const requestHandlers = new Map<string, ServerRequestHandler>();
+  const termination = yield* Deferred.make<never, CodexError.CodexAppServerError>();
   const notificationHandlers = new Map<string, Array<ServerNotificationHandler>>();
   let unknownRequestHandler:
     | ((method: string, params: unknown) => Effect.Effect<unknown, CodexError.CodexAppServerError>)
@@ -203,6 +210,11 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
     ...(options.logger ? { logger: options.logger } : {}),
     onNotification: dispatchNotification,
     onRequest: dispatchRequest,
+    onTermination: (error) =>
+      Deferred.fail(termination, error).pipe(
+        Effect.andThen(options.onTermination?.(error) ?? Effect.void),
+        Effect.asVoid,
+      ),
   });
 
   const request = <M extends CodexRpc.ClientRequestMethod>(
@@ -238,6 +250,7 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
       respond: transport.respond,
       respondError: transport.respondError,
     },
+    termination: Deferred.await(termination),
     request,
     notify,
     handleServerRequest: (method, handler) =>
@@ -270,6 +283,37 @@ export const layerChildProcess = (
 const makeChildProcessClient = Effect.fn(
   "effect-codex-app-server/CodexAppServerClient.makeChildProcessClient",
 )(function* (handle: ChildProcessSpawner.ChildProcessHandle, options: CodexAppServerClientOptions) {
-  yield* Stream.runDrain(handle.stderr).pipe(Effect.ignore, Effect.forkScoped);
-  return yield* make(makeChildStdio(handle), options, makeTerminationError(handle));
+  const stderrTail: Array<string> = [];
+  // Arbitrary stderr may contain credentials. Retain only bounded categories.
+  yield* handle.stderr.pipe(
+    Stream.decodeText(),
+    Stream.runForEach((chunk) =>
+      Effect.sync(() => {
+        for (const line of chunk.slice(-4096).split("\n").filter(Boolean)) {
+          const category = /panicked|panic:/i.test(line)
+            ? "panic diagnostic"
+            : /out of memory|allocation failed/i.test(line)
+              ? "memory diagnostic (not proof of OOM kill)"
+              : /broken pipe|connection reset|unexpected eof/i.test(line)
+                ? "transport diagnostic"
+                : /error|failed/i.test(line)
+                  ? "error diagnostic"
+                  : "unstructured diagnostic omitted";
+          stderrTail.push(category);
+          if (stderrTail.length > 16) stderrTail.shift();
+        }
+      }),
+    ),
+    Effect.ignore,
+    Effect.forkScoped,
+  );
+  return yield* make(
+    makeChildStdio(handle),
+    {
+      ...options,
+      onTermination: (error) =>
+        options.onTermination?.(error, { stderrTail: [...stderrTail] }) ?? Effect.void,
+    },
+    makeTerminationError(handle),
+  );
 });

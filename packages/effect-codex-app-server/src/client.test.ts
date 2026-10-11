@@ -3,6 +3,8 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
@@ -10,6 +12,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 
 import * as CodexClient from "./client.ts";
+import * as CodexError from "./errors.ts";
 
 const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(import.meta.dirname, "../test/fixtures/codex-app-server-mock-peer.ts"),
@@ -17,6 +20,29 @@ const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
 const mockPeerArgs = (path: string) => [path];
 
 it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
+  it.effect("reports process exit even when stdout remains open and no RPC is pending", () =>
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const handle = yield* spawner.spawn(
+        ChildProcess.make(process.execPath, ["-e", "process.exit(7)"]),
+      );
+      // Model an inherited pipe: the provider exits but stdout never reaches EOF.
+      const context = yield* Layer.build(
+        CodexClient.layerChildProcess({ ...handle, stdout: Stream.never }),
+      );
+      const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+        Effect.provide(context),
+      );
+      yield* handle.exitCode;
+      yield* TestClock.adjust("1 second");
+      const result = yield* Effect.flip(client.termination);
+      assert.instanceOf(result, CodexError.CodexAppServerProcessExitedError);
+      assert.equal(result.code, 7);
+      assert.equal(result.pid, handle.pid);
+      const requestExit = yield* Effect.exit(client.raw.request("test/afterExit"));
+      assert.isTrue(Exit.isFailure(requestExit));
+    }),
+  );
   const makeHandle = (env?: Record<string, string>) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;

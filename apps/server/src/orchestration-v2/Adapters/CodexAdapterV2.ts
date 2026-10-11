@@ -1538,14 +1538,33 @@ export const layerAppServerClientFactory: Layer.Layer<
             threadId: input.threadId,
             providerSessionId: input.providerSessionId,
           });
-          const clientOptions: CodexClient.CodexAppServerClientOptions =
-            protocolLogger === undefined
+          const clientOptions: CodexClient.CodexAppServerClientOptions = {
+            onTermination: (error, diagnostics) =>
+              Effect.gen(function* () {
+                const event = {
+                  provider: CODEX_PROVIDER,
+                  kind: "runtime_termination",
+                  providerSessionId: input.providerSessionId,
+                  threadId: input.threadId,
+                  pid: handle.pid,
+                  reason: error._tag,
+                  exitCode:
+                    error._tag === "CodexAppServerProcessExitedError" ? (error.code ?? null) : null,
+                  signal: null,
+                  stderrTail: diagnostics?.stderrTail ?? [],
+                };
+                yield* Effect.logWarning("orchestration-v2.codex-provider-disconnected", event);
+                if (nativeEventLogger)
+                  yield* nativeEventLogger.write(event, input.threadId).pipe(Effect.ignore);
+              }),
+            ...(protocolLogger === undefined
               ? {}
               : {
                   logIncoming: true,
                   logOutgoing: true,
                   logger: protocolLogger,
-                };
+                }),
+          };
           const context = yield* Layer.build(CodexClient.layerChildProcess(handle, clientOptions));
           return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
             Effect.provide(context),
@@ -1803,7 +1822,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           model: input.modelSelection.model,
           now,
         });
-        const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        const events = yield* Queue.unbounded<
+          ProviderAdapter.ProviderAdapterV2Event,
+          ProviderAdapter.ProviderAdapterEventStreamError
+        >();
         const rateLimitSnapshot = yield* Ref.make<CodexRateLimitSnapshot | undefined>(undefined);
         const limitedTurnItems = yield* Ref.make(
           new Map<ProviderThreadId, Extract<OrchestrationV2TurnItem, { type: "error" }>>(),
@@ -6406,6 +6428,78 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return { contents: response.contents };
             }).pipe(Effect.mapError(mcpAppsError("Codex MCP resource read failed."))),
         };
+
+        // A transport exit does not produce turn/completed. Close only tracked
+        // unfinished work before draining the event queue into the session manager.
+        yield* client.termination.pipe(
+          Effect.catch((cause) =>
+            Effect.gen(function* () {
+              const completedAt = yield* DateTime.now;
+              const contexts = [...(yield* Ref.get(activeTurns)).values()].toReversed();
+              for (const context of contexts) {
+                if (context.subagent === null) {
+                  yield* emitProviderEvent({
+                    type: "turn_item.updated",
+                    driver: CODEX_PROVIDER,
+                    turnItem: makeProviderFailureTurnItem({
+                      driver: CODEX_PROVIDER,
+                      threadId: context.projectionThreadId,
+                      runId: context.projectionRunId,
+                      nodeId: context.providerNodeId,
+                      providerThreadId: context.providerThread.id,
+                      providerTurnId: context.providerTurnId,
+                      itemOrdinal: yield* resolveItemOrdinal(
+                        context,
+                        `disconnect:${context.providerTurnId}`,
+                      ),
+                      failure: makeProviderFailure({
+                        message:
+                          "Provider disconnected. Resume to continue; completed commands will not be restarted automatically.",
+                        code: "provider_disconnected",
+                        class: "provider_error",
+                      }),
+                      occurredAt: completedAt,
+                    }),
+                  });
+                }
+                yield* finalizeCodexTurn({
+                  context,
+                  nativeTurnId: context.nativeTurnId,
+                  status: "interrupted",
+                  completedAt,
+                });
+              }
+              for (const context of (yield* Ref.get(settledTurns)).values()) {
+                yield* terminalizeRunningCommandItems(
+                  context,
+                  context.nativeTurnId,
+                  "interrupted",
+                  completedAt,
+                );
+                yield* terminalizeRunningDynamicTools(
+                  context,
+                  context.nativeTurnId,
+                  "interrupted",
+                  completedAt,
+                  true,
+                );
+                yield* terminalizeMcpAppCaptures(context, context.nativeTurnId);
+              }
+            }).pipe(
+              Effect.ensuring(
+                Queue.fail(
+                  events,
+                  new ProviderAdapter.ProviderAdapterEventStreamError({
+                    driver: CODEX_PROVIDER,
+                    providerSessionId: input.providerSessionId,
+                    cause,
+                  }),
+                ),
+              ),
+            ),
+          ),
+          Effect.forkScoped,
+        );
 
         const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
           instanceId: adapterOptions.instanceId,

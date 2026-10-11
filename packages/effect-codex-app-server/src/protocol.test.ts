@@ -3,6 +3,9 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Sink from "effect/Sink";
+import * as PlatformError from "effect/PlatformError";
+import * as Exit from "effect/Exit";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
 
@@ -35,6 +38,36 @@ const decodeConsumeRateLimitResetCreditResponse = Schema.decodeUnknownEffect(
 );
 
 it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
+  it.effect("reports broken output pipes and rejects pending requests", () =>
+    Effect.gen(function* () {
+      const { stdio: base } = yield* makeInMemoryStdio();
+      const terminated = yield* Deferred.make<CodexError.CodexAppServerError>();
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio: Stdio.make({
+          args: base.args,
+          stdin: base.stdin,
+          stderr: base.stderr,
+          stdout: () =>
+            Sink.fail(
+              PlatformError.systemError({
+                _tag: "Unknown",
+                module: "ChildProcess",
+                method: "stdin",
+                cause: new Error("private credential"),
+              }),
+            ),
+        }),
+        onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
+      });
+      const pending = yield* transport.request("test/pending").pipe(Effect.exit, Effect.forkChild);
+      const error = yield* Deferred.await(terminated);
+      assert.instanceOf(error, CodexError.CodexAppServerTransportError);
+      assert.equal(error.operation, "write-output-stream");
+      assert.notInclude(error.message, "private credential");
+      assert.isTrue(Exit.isFailure(yield* Fiber.join(pending)));
+    }),
+  );
+
   it.effect("maps account usage responses to the upstream token usage schema", () =>
     Effect.gen(function* () {
       assert.strictEqual(
