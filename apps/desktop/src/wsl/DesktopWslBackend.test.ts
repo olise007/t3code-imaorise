@@ -84,6 +84,31 @@ const layerNet = Layer.succeed(NetService.NetService, {
 } satisfies NetService.NetService["Service"]);
 
 describe("DesktopWslBackend", () => {
+  it.effect("skips HTTPS routes and ports occupied outside loopback", () => {
+    const probes: Array<[number, string]> = [];
+    return Effect.gen(function* () {
+      const port = yield* DesktopWslBackend.scanForWslPort(4774, [4774, 4776]);
+      assert.equal(port, 4777);
+      assert.deepEqual(probes, [
+        [4775, "0.0.0.0"],
+        [4777, "0.0.0.0"],
+      ]);
+    }).pipe(
+      Effect.provideService(NetService.NetService, {
+        ...NetService.NetService.of({
+          canListenOnHost: (port, host) =>
+            Effect.sync(() => {
+              probes.push([port, host]);
+              return port !== 4775;
+            }),
+          isPortAvailableOnLoopback: () => Effect.succeed(true),
+          hasListenerOnHost: () => Effect.succeed(false),
+          reserveLoopbackPort: () => Effect.succeed(41773),
+          findAvailablePort: (preferred) => Effect.succeed(preferred),
+        }),
+      }),
+    );
+  });
   it.effect("does not discover or start WSL when local execution is disabled", () =>
     Effect.gen(function* () {
       const backend = yield* DesktopWslBackend.DesktopWslBackend;

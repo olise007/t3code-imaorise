@@ -17,9 +17,8 @@ import * as DesktopWslPairing from "./DesktopWslPairing.ts";
 //
 // Port allocation: each WSL instance gets a freshly scanned port to
 // avoid colliding with the primary or with a previously-registered WSL
-// instance that's still tearing down. The scan only checks loopback
-// (127.0.0.1) since the WSL backend is loopback-only — the primary
-// owns LAN exposure when the user opts in.
+// instance that's still tearing down. Check the wildcard bind used by WSL
+// and exclude HTTPS routes that share ports in mirrored networking.
 
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -75,15 +74,15 @@ const isWslInstanceId = (id: DesktopBackendPool.BackendInstanceId): boolean =>
 const buildLabel = (distro: string | null): string =>
   distro === null ? "WSL (default distro)" : `WSL (${distro})`;
 
-// Loopback-only port scan starting one above the primary's port. The
-// WSL backend is reachable via 127.0.0.1 from Windows (wslhost
-// auto-forwards), so we only need to verify the IPv4 loopback can bind.
-const scanForWslPort = Effect.fn("desktop.wslBackend.scanForWslPort")(function* (
+// Start above the primary and test the wildcard address the WSL server uses.
+export const scanForWslPort = Effect.fn("desktop.wslBackend.scanForWslPort")(function* (
   startPort: number,
+  reservedPorts: ReadonlyArray<number> = [],
 ): Effect.fn.Return<number, NetService.NetError, NetService.NetService> {
   const net = yield* NetService.NetService;
   for (let port = startPort; port <= MAX_TCP_PORT; port += 1) {
-    if (yield* net.canListenOnHost(port, "127.0.0.1")) {
+    if (reservedPorts.includes(port)) continue;
+    if (yield* net.canListenOnHost(port, "0.0.0.0")) {
       return port;
     }
   }
@@ -142,7 +141,13 @@ export const layer = Layer.effect(
       readonly distro: string | null;
     }) {
       const primaryConfig = yield* serverExposure.backendConfig;
-      const port = yield* scanForWslPort(primaryConfig.port + 1).pipe(
+      const settings = yield* appSettings.get;
+      // Mirrored WSL shares host ports. Tailscale can listen on a different
+      // interface while Windows loopback still appears available.
+      const port = yield* scanForWslPort(primaryConfig.port + 1, [
+        settings.tailscaleServePort,
+        settings.wslPairingRoute.port,
+      ]).pipe(
         Effect.provideService(NetService.NetService, net),
         Effect.asSome,
         Effect.catch((error) =>
