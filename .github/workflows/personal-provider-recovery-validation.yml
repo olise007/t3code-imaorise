@@ -1,5 +1,12 @@
 name: Personal provider recovery validation
 on:
+  push:
+    branches: [imaorise]
+    paths:
+      - .github/workflows/personal-provider-recovery-validation.yml
+      - packages/effect-codex-app-server/**
+      - apps/server/src/orchestration-v2/Adapters/CodexAdapterV2*
+      - scripts/imaorise/supervised-build*
   workflow_dispatch:
 permissions:
   contents: read
@@ -8,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validate:
-    if: github.repository == 'olise007/t3code-imaorise' && github.ref == 'refs/heads/imaorise'
+    if: github.repository == 'olise007/t3code-imaorise' && github.ref == 'refs/heads/imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     container:
