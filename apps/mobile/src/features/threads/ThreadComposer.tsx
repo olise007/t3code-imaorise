@@ -68,6 +68,8 @@ import { useProject, useThreadShells } from "../../state/entities";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 
 import { AppText as Text } from "../../components/AppText";
+import { SymbolView } from "../../components/AppSymbol";
+import { useAndroidControlSizing } from "../../components/useAndroidControlSizing";
 import { ComposerAttachmentButton } from "../../components/ComposerAttachmentButton";
 import {
   ComposerAttachmentStrip,
@@ -378,6 +380,7 @@ export function ComposerSurface(props: {
 }
 
 export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
+  const { scale: controlScale } = useAndroidControlSizing();
   const project = useProject(scopeProjectRef(props.environmentId, props.selectedThread.projectId));
   const { themeVariables: materialTheme } = useAppearancePreferences();
   const composerPanel = materialTheme["--color-composer-panel"];
@@ -805,7 +808,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           }
           className="size-11 items-center justify-center"
         >
-          <Text>⌄</Text>
+          <SymbolView
+            name="chevron.down"
+            size={Math.round(10 * controlScale)}
+            tintColorClassName="accent-icon-muted"
+            type="monochrome"
+          />
         </Pressable>
       </ControlPillMenu>
     </View>
