@@ -642,4 +642,22 @@ describe("DesktopSettings", () => {
       }),
     ),
   );
+  it.effect("retains the WSL IP protocol across settings reloads, including when disabled", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        const route = {
+          enabled: true,
+          port: 4777,
+          target: "http://127.0.0.1:4780",
+          protocol: "http" as const,
+        };
+        yield* settings.setWslPairingRoute(route);
+        assert.deepEqual((yield* settings.load).wslPairingRoute, route);
+        const disabled = { ...route, enabled: false, port: 4776, target: null };
+        yield* settings.setWslPairingRoute(disabled);
+        assert.deepEqual((yield* settings.load).wslPairingRoute, disabled);
+      }),
+    ),
+  );
 });
