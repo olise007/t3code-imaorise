@@ -1,3 +1,8 @@
+import { CollapsibleUserMessageBody } from "./CollapsibleUserMessageBody";
+import {
+  shouldCollapseUserMessage,
+  toggleExpandedUserMessage,
+} from "@t3tools/shared/userMessageCollapse";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ThreadContextDivider } from "./thread-context-divider";
 import { ThreadHandoffRow } from "./thread-handoff-row";
@@ -1524,6 +1529,8 @@ function renderFeedEntry(
   > & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
+    readonly expandedUserMessages: ReadonlySet<string>;
+    readonly onToggleUserMessage: (messageId: string, anchorKey: string) => void;
     readonly workRowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
     readonly workGroupScrollPositions: Map<string, ThreadWorkGroupScrollPosition>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
@@ -1700,6 +1707,8 @@ function renderFeedEntry(
     // is clamped, so the paragraphs around the block end up drawn on top of
     // each other. Pinning the width removes that pass.
     const hasWideBlock = hasWideMarkdownBlock(renderedText, WIDE_MARKDOWN_BLOCK_OPTIONS);
+    const canCollapseUserMessage = isUser && shouldCollapseUserMessage(presentation.text);
+    const userMessageKey = `${props.environmentId}:${props.threadId}:${message.id}`;
     const assistantTurnStillInProgress =
       message.role === "assistant" &&
       props.unsettledTurnId !== null &&
@@ -1755,7 +1764,7 @@ function renderFeedEntry(
                   : props.userBubbleMaxWidth,
               ...(hasReviewCommentContext
                 ? { width: props.reviewCommentBubbleWidth }
-                : hasWideBlock
+                : hasWideBlock || canCollapseUserMessage
                   ? {
                       width:
                         props.usesNativeWorkspaceColumns && Platform.OS === "ios" && !Platform.isPad
@@ -1820,20 +1829,27 @@ function renderFeedEntry(
               </View>
             ) : null}
             {message.text.trim().length > 0 ? (
-              <MarkdownImageAvailableWidthContext
-                value={props.userBubbleMaxWidth - USER_BUBBLE_HORIZONTAL_PADDING * 2}
+              <CollapsibleUserMessageBody
+                collapsible={canCollapseUserMessage}
+                expanded={props.expandedUserMessages.has(userMessageKey)}
+                backgroundColor={userBubbleColor}
+                onToggle={() => props.onToggleUserMessage(userMessageKey, entry.id)}
               >
-                <UserMessageContent
-                  text={renderedText}
-                  environmentId={props.environmentId}
-                  context={message.context}
-                  markdownStyles={styles}
-                  reviewCommentColors={props.reviewCommentColors}
-                  skills={props.skills}
-                  linkHandlers={props.markdownLinkHandlers}
-                  renderImage={props.renderMarkdownImage}
-                />
-              </MarkdownImageAvailableWidthContext>
+                <MarkdownImageAvailableWidthContext
+                  value={props.userBubbleMaxWidth - USER_BUBBLE_HORIZONTAL_PADDING * 2}
+                >
+                  <UserMessageContent
+                    text={renderedText}
+                    environmentId={props.environmentId}
+                    context={message.context}
+                    markdownStyles={styles}
+                    reviewCommentColors={props.reviewCommentColors}
+                    skills={props.skills}
+                    linkHandlers={props.markdownLinkHandlers}
+                    renderImage={props.renderMarkdownImage}
+                  />
+                </MarkdownImageAvailableWidthContext>
+              </CollapsibleUserMessageBody>
             ) : null}
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
@@ -2265,13 +2281,21 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     readonly expandedWorkGroups: Record<string, boolean>;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly expandedTurnIds: ReadonlySet<RunId>;
+    readonly expandedUserMessages: ReadonlySet<string>;
   }>({
     copiedRowId: null,
     expandedWorkGroups: {},
     expandedWorkRows: {},
     expandedTurnIds: new Set(),
+    expandedUserMessages: new Set(),
   });
-  const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
+  const {
+    copiedRowId,
+    expandedWorkGroups,
+    expandedWorkRows,
+    expandedTurnIds,
+    expandedUserMessages,
+  } = interactionState;
   const [expandedFile, setExpandedFile] = useState<FilePreviewSource | null>(null);
   const [expandedVideo, setExpandedVideo] = useState<VideoPreviewSource | null>(null);
   const fileShareSourceIdentifier = useId();
@@ -2567,6 +2591,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       copiedRowId,
       expandedWorkGroups,
       expandedWorkRows,
+      expandedUserMessages,
       workRowSizing,
       iconSubtleColor,
       markdownStyles,
@@ -2583,6 +2608,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       copiedRowId,
       expandedWorkGroups,
       expandedWorkRows,
+      expandedUserMessages,
       workRowSizing,
       iconSubtleColor,
       markdownStyles,
@@ -2861,7 +2887,13 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     if (disclosureAnchorKeyRef.current !== null) {
       settleDisclosureAfterLayout();
     }
-  }, [expandedTurnIds, expandedWorkGroups, expandedWorkRows, settleDisclosureAfterLayout]);
+  }, [
+    expandedTurnIds,
+    expandedWorkGroups,
+    expandedWorkRows,
+    expandedUserMessages,
+    settleDisclosureAfterLayout,
+  ]);
 
   const handleItemSizeChanged = useCallback(() => {
     if (disclosureAnchorKeyRef.current !== null) {
@@ -2899,6 +2931,17 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       copyFeedbackTimeoutRef.current = null;
     }, 1200);
   }, []);
+
+  const onToggleUserMessage = useCallback(
+    (messageId: string, anchorKey: string) => {
+      suspendEndScrollMaintenanceForDisclosure(anchorKey);
+      setInteractionState((current) => ({
+        ...current,
+        expandedUserMessages: toggleExpandedUserMessage(current.expandedUserMessages, messageId),
+      }));
+    },
+    [suspendEndScrollMaintenanceForDisclosure],
+  );
 
   const onToggleWorkGroup = useCallback(
     (groupId: string, anchorKey?: string) => {
@@ -3009,18 +3052,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [contentWidth, expandedWorkRows, workRowSizing.fixedRowHeight],
   );
-  // HTML render rows' fixed heights follow the width, so a rotation or split
-  // resize drops the cached sizes, as a text-size change does.
-  const hasHtmlRenders = useMemo(
-    () => presentedFeed.some((entry) => entry.type === "html-render"),
-    [presentedFeed],
-  );
+  // Width changes reflow message Markdown as well as fixed-height HTML rows.
+  // Drop stale list measurements after rotation or split-column resizing.
   const previousContentWidth = useRef(contentWidth);
   useLayoutEffect(() => {
     if (previousContentWidth.current === contentWidth) return;
     previousContentWidth.current = contentWidth;
-    if (hasHtmlRenders) props.listRef.current?.clearCaches({ mode: "sizes" });
-  }, [contentWidth, hasHtmlRenders, props.listRef]);
+    props.listRef.current?.clearCaches({ mode: "sizes" });
+  }, [contentWidth, props.listRef]);
 
   // Disclosures can mount existing offscreen rows as well as new work rows.
   // Fade those in after movement; never retain removed rows over replacements.
@@ -3039,6 +3078,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             threadId: props.threadId,
             copiedRowId,
             expandedWorkRows,
+            expandedUserMessages,
+            onToggleUserMessage,
             workRowSizing,
             workGroupScrollPositions,
             terminalAssistantMessageIds,
@@ -3087,6 +3128,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       copiedRowId,
       disclosureToggleSettling,
       expandedWorkRows,
+      expandedUserMessages,
+      onToggleUserMessage,
       workRowSizing,
       workGroupScrollPositions,
       terminalAssistantMessageIds,

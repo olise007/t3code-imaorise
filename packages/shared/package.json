@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./userMessageCollapse": {
+      "types": "./src/userMessageCollapse.ts",
+      "import": "./src/userMessageCollapse.ts"
+    },
     "./imaoriseBuild": {
       "types": "./src/imaoriseBuild.ts",
       "import": "./src/imaoriseBuild.ts"

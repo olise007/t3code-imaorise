@@ -1,0 +1,34 @@
+name: Personal mobile message validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Message disclosure and submission regressions
+        run: vp test run packages/shared/src/userMessageCollapse.test.ts apps/web/src/components/chat/MessagesTimeline.logic.test.ts apps/mobile/src/features/threads/plan-action-state.test.ts apps/mobile/src/state/legacy-plan-mode.test.ts
+      - name: Scoped lint
+        run: vp lint packages/shared/src/userMessageCollapse.ts packages/shared/src/userMessageCollapse.test.ts apps/mobile/src/features/threads/CollapsibleUserMessageBody.tsx apps/mobile/src/features/threads/ThreadFeed.tsx apps/web/src/components/chat/MessagesTimeline.logic.ts
+      - name: Mobile types
+        run: timeout 600 vp run --filter @t3tools/mobile typecheck
+      - name: Web types
+        run: timeout 600 vp run --filter @t3tools/web typecheck
+      - name: Shared types
+        run: timeout 300 vp run --filter @t3tools/shared typecheck
