@@ -23,9 +23,9 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - name: Message disclosure and submission regressions
-        run: vp test run packages/shared/src/userMessageCollapse.test.ts apps/web/src/components/chat/MessagesTimeline.logic.test.ts apps/mobile/src/features/threads/plan-action-state.test.ts apps/mobile/src/state/legacy-plan-mode.test.ts
+        run: vp test run packages/shared/src/questionReview.test.ts packages/shared/src/userMessageCollapse.test.ts apps/web/src/components/chat/MessagesTimeline.logic.test.ts apps/mobile/src/features/threads/plan-action-state.test.ts apps/mobile/src/state/legacy-plan-mode.test.ts
       - name: Scoped lint
-        run: vp lint packages/shared/src/userMessageCollapse.ts packages/shared/src/userMessageCollapse.test.ts apps/mobile/src/features/threads/CollapsibleUserMessageBody.tsx apps/mobile/src/features/threads/ThreadFeed.tsx apps/web/src/components/chat/MessagesTimeline.logic.ts
+        run: vp lint packages/shared/src/questionReview.test.ts packages/shared/src/userMessageCollapse.ts packages/shared/src/userMessageCollapse.test.ts apps/mobile/src/features/threads/CollapsibleUserMessageBody.tsx apps/mobile/src/features/threads/ThreadFeed.tsx apps/web/src/components/chat/MessagesTimeline.logic.ts
       - name: Mobile types
         run: timeout 600 vp run --filter @t3tools/mobile typecheck
       - name: Web types
