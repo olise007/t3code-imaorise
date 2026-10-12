@@ -31,6 +31,7 @@ const DesktopSettingsPatch = Schema.Struct({
       enabled: Schema.Boolean,
       port: Schema.Number,
       target: Schema.NullOr(Schema.String),
+      protocol: Schema.optionalKey(Schema.Literals(["https", "http"])),
     }),
   ),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
@@ -98,6 +99,28 @@ function writeSettingsPatch(patch: typeof DesktopSettingsPatch.Type) {
 }
 
 describe("DesktopSettings", () => {
+  it.effect("migrates beta65 IP settings without losing the configured route", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        const legacy = {
+          enabled: true,
+          port: 4999,
+          target: "http://127.0.0.1:4780",
+          protocol: "http" as const,
+        };
+        yield* writeSettingsPatch({ wslPairingRoute: legacy });
+        const loaded = yield* settings.load;
+        assert.deepEqual(loaded.wslIpPairingRoute, legacy);
+        assert.isFalse(loaded.wslPairingRoute.enabled);
+        assert.equal(loaded.wslPairingRoute.port, 4776);
+        yield* settings.setWslPairingRoute({ enabled: true, port: 4776, target: legacy.target });
+        const reloaded = yield* settings.load;
+        assert.deepEqual(reloaded.wslIpPairingRoute, legacy);
+        assert.isTrue(reloaded.wslPairingRoute.enabled);
+      }),
+    ),
+  );
   it.effect("migrates only unused conflicting pairing defaults", () =>
     withSettings(
       Effect.gen(function* () {
@@ -653,10 +676,10 @@ describe("DesktopSettings", () => {
           protocol: "http" as const,
         };
         yield* settings.setWslPairingRoute(route);
-        assert.deepEqual((yield* settings.load).wslPairingRoute, route);
+        assert.deepEqual((yield* settings.load).wslIpPairingRoute, route);
         const disabled = { ...route, enabled: false, port: 4776, target: null };
         yield* settings.setWslPairingRoute(disabled);
-        assert.deepEqual((yield* settings.load).wslPairingRoute, disabled);
+        assert.deepEqual((yield* settings.load).wslIpPairingRoute, disabled);
       }),
     ),
   );

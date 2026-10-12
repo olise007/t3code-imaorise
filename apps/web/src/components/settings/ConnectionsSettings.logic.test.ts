@@ -1,4 +1,4 @@
-import type { AdvertisedEndpoint, DesktopWslState } from "@t3tools/contracts";
+import { EnvironmentId, type AdvertisedEndpoint, type DesktopWslState } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   applyWslEnableSelection,
@@ -6,8 +6,44 @@ import {
   isQrShareableEndpoint,
   isWslSettingsRowVisible,
   selectQrEndpointOption,
+  wslPairingEndpoints,
   togglePairingScopeSelection,
 } from "./ConnectionsSettings.logic";
+
+describe("WSL pairing choices", () => {
+  it("offers both verified routes and selects the matching IP QR target", () => {
+    const endpoints = wslPairingEndpoints({
+      environmentId: EnvironmentId.make("wsl"),
+      distro: "Ubuntu",
+      running: true,
+      enabled: true,
+      port: 4776,
+      endpointUrl: "https://host.tail.ts.net:4776/",
+      error: null,
+      ipRoute: { enabled: true, port: 4777, endpointUrl: "http://100.90.1.2:4777/", error: null },
+    });
+    expect(endpoints.map((e) => e.label)).toEqual(["Tailscale DNS (HTTPS)", "Tailscale IP (HTTP)"]);
+    const options = endpoints.map((e) => ({
+      id: e.id,
+      preferenceKey: e.id,
+      qrShareable: isQrShareableEndpoint(e),
+    }));
+    expect(selectQrEndpointOption(options, endpoints[1]!.id, null)?.id).toBe(endpoints[1]!.id);
+  });
+  it("keeps IP available when the DNS route is unavailable", () => {
+    const endpoints = wslPairingEndpoints({
+      environmentId: EnvironmentId.make("wsl"),
+      distro: "Ubuntu",
+      running: true,
+      enabled: true,
+      port: 4776,
+      endpointUrl: null,
+      error: "DNS unavailable",
+      ipRoute: { enabled: true, port: 4777, endpointUrl: "http://100.90.1.2:4777/", error: null },
+    });
+    expect(endpoints.map((e) => e.label)).toEqual(["Tailscale IP (HTTP)"]);
+  });
+});
 
 describe("togglePairingScopeSelection", () => {
   it.each([

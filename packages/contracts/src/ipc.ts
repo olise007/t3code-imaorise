@@ -547,6 +547,14 @@ export const DesktopWslPairingStateSchema = Schema.Struct({
   endpointUrl: Schema.NullOr(Schema.String),
   protocol: Schema.optionalKey(Schema.Literals(["https", "http"])),
   error: Schema.NullOr(Schema.String),
+  ipRoute: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.Boolean,
+      port: Schema.Number,
+      endpointUrl: Schema.NullOr(Schema.String),
+      error: Schema.NullOr(Schema.String),
+    }),
+  ),
 });
 export type DesktopWslPairingState = typeof DesktopWslPairingStateSchema.Type;
 export const DesktopWslPairingInputSchema = Schema.Struct({

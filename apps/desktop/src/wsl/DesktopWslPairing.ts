@@ -268,83 +268,71 @@ export const make = (io: WslPairingIO) =>
       const descriptor = yield* attempt(() => io.descriptor(url));
       return { url, descriptor };
     });
-    const read = Effect.gen(function* () {
-      const s = yield* settings.get;
-      const t = yield* target;
-      let endpointUrl: string | null = null;
-      if (t && s.wslPairingRoute.enabled) {
-        if (Number(new URL(t.url).port) === s.wslPairingRoute.port)
+    const inspectRoute = (route: Route, t: Effect.Success<typeof target>) =>
+      Effect.gen(function* () {
+        if (!t || !route.enabled)
+          return { enabled: route.enabled, port: route.port, endpointUrl: null, error: null };
+        if (Number(new URL(t.url).port) === route.port)
           return yield* Effect.fail(
-            new WslPairingError({
-              message: `HTTPS port ${s.wslPairingRoute.port} conflicts with the WSL backend. Choose another port, such as ${s.wslPairingRoute.port === 4776 ? 4777 : 4776}.`,
-            }),
+            new WslPairingError({ message: "Pairing port conflicts with the WSL backend." }),
           );
-        const status = yield* decodeStatus(
-          yield* attempt(() => io.command(["status", "--json"])),
-        ).pipe(
-          Effect.mapError(
-            () =>
-              new WslPairingError({
-                message: "Tailscale status could not be read. Reconnect and retry.",
-              }),
-          ),
-        );
-        endpointUrl = yield* attempt(async () => pairingEndpoint(status, s.wslPairingRoute));
-        const verifiedUrl = endpointUrl;
+        const status = yield* decodeStatus(yield* attempt(() => io.command(["status", "--json"])));
+        const endpointUrl = yield* attempt(async () => pairingEndpoint(status, route));
         if (
-          (yield* attempt(() => io.descriptor(verifiedUrl))).environmentId !==
+          (yield* attempt(() => io.descriptor(endpointUrl))).environmentId !==
           t.descriptor.environmentId
-        ) {
+        )
           return yield* Effect.fail(
             new WslPairingError({
-              message: "The WSL HTTPS endpoint belongs to a different environment. Retry setup.",
+              message: "The pairing endpoint belongs to a different environment.",
             }),
           );
-        }
-      }
+        return { enabled: route.enabled, port: route.port, endpointUrl, error: null };
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.succeed({
+            enabled: route.enabled,
+            port: route.port,
+            endpointUrl: null,
+            error:
+              error instanceof WslPairingError
+                ? error.message
+                : "Could not inspect the Tailscale route.",
+          }),
+        ),
+      );
+    const getState = Effect.gen(function* () {
+      const s = yield* settings.get;
+      const t = yield* target.pipe(Effect.orElseSucceed(() => null));
+      const dns = yield* inspectRoute(s.wslPairingRoute, t);
+      const ipRoute = yield* inspectRoute(s.wslIpPairingRoute, t);
       return {
         environmentId: t?.descriptor.environmentId ?? null,
         distro: s.wslDistro,
         running: t !== null,
-        enabled: s.wslPairingRoute.enabled,
-        port: s.wslPairingRoute.port,
-        endpointUrl,
-        protocol: s.wslPairingRoute.protocol ?? "https",
-        error: null,
+        ...dns,
+        protocol: "https" as const,
+        ipRoute,
       } satisfies DesktopWslPairingState;
     });
-    const getState = read.pipe(
-      Effect.catch((error) =>
-        Effect.gen(function* () {
-          const s = yield* settings.get;
-          const t = yield* target.pipe(Effect.orElseSucceed(() => null));
-          return {
-            environmentId: t?.descriptor.environmentId ?? null,
-            distro: s.wslDistro,
-            running: t !== null,
-            enabled: s.wslPairingRoute.enabled,
-            port: s.wslPairingRoute.port,
-            endpointUrl: null,
-            protocol: s.wslPairingRoute.protocol ?? "https",
-            error: error.message,
-          };
-        }),
-      ),
-    );
     const reconcileBody = Effect.gen(function* () {
       const s = yield* settings.get;
-      if (!s.wslPairingRoute.enabled && !s.wslPairingRoute.target) return;
       const t = yield* target;
-      const result = yield* attempt(() =>
-        reconcileRoute({
-          io,
-          route: s.wslPairingRoute,
-          target: t?.url ?? null,
-          environmentId: t?.descriptor.environmentId ?? null,
-        }),
-      );
-      if (result.target !== s.wslPairingRoute.target)
-        yield* settings.setWslPairingRoute({ ...s.wslPairingRoute, target: result.target });
+      for (const route of [s.wslPairingRoute, s.wslIpPairingRoute]) {
+        if (!route.enabled && !route.target) continue;
+        yield* Effect.gen(function* () {
+          const result = yield* attempt(() =>
+            reconcileRoute({
+              io,
+              route,
+              target: t?.url ?? null,
+              environmentId: t?.descriptor.environmentId ?? null,
+            }),
+          );
+          if (result.target !== route.target)
+            yield* settings.setWslPairingRoute({ ...route, target: result.target });
+        }).pipe(Effect.ignore);
+      }
     });
     const configure = (input: Input) =>
       mutex
@@ -374,20 +362,13 @@ export const make = (io: WslPairingIO) =>
               }
             }
             const s = yield* settings.get;
-            const previous = s.wslPairingRoute;
+            const protocol = input.protocol ?? "https";
+            const previous = protocol === "http" ? s.wslIpPairingRoute : s.wslPairingRoute;
+            const other = protocol === "http" ? s.wslPairingRoute : s.wslIpPairingRoute;
             const selectedPort = input.enabled ? input.port : previous.port;
-            const protocol = input.enabled
-              ? (input.protocol ?? "https")
-              : (previous.protocol ?? "https");
-            if (
-              previous.enabled &&
-              previous.port === selectedPort &&
-              (previous.protocol ?? "https") !== protocol
-            )
+            if (input.enabled && other.enabled && other.port === selectedPort)
               return yield* Effect.fail(
-                new WslPairingError({
-                  message: "Choose a different port when switching between HTTPS and IP access.",
-                }),
+                new WslPairingError({ message: "DNS and IP routes must use different ports." }),
               );
             const route = {
               enabled: input.enabled,

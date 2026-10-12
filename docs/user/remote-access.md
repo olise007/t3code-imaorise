@@ -45,9 +45,9 @@ phone to the same tailnet and add that link in **Settings → Environments**.
 This adds access to the WSL chats alongside the Windows connection.
 
 The WSL route uses a separate port, starting at 4776 for HTTPS or 4777 for IP
-access. Switching modes replaces the previous WSL route. Choose another port
+access. DNS and IP routes can stay active together. Each pairing card offers both configured addresses with copy controls and a QR choice. Choose another port
 if it is already used. The desktop restores the route when WSL restarts;
-**Disable WSL route** removes it. WSL-only mode uses the primary environment’s
+Disable either route independently in Connections. WSL-only mode uses the primary environment’s
 existing pairing controls.
 
 Use direct pairing when the other device can reach the host's network address.

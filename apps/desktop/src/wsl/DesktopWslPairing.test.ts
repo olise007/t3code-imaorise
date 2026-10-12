@@ -312,7 +312,55 @@ function service(
   );
 }
 describe("managed WSL pairing", () => {
-  it.effect("switches from DNS to IP, persists the choice and disables only its owned route", () =>
+  it.effect("preserves IP availability when DNS verification fails", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const original = f.io.descriptor;
+      const s = yield* service(f);
+      yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: true,
+        port: 4776,
+      });
+      f.io.descriptor = (url) =>
+        url.startsWith("https:") ? Promise.reject(new Error("DNS unavailable")) : original(url);
+      const state = yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: true,
+        port: 4777,
+        protocol: "http",
+      });
+      expect(state.ipRoute?.endpointUrl).toBe("http://100.90.1.2:4777/");
+      expect(state.endpointUrl).toBeNull();
+      expect(state.error).toContain("Could not inspect");
+    }),
+  );
+  it.effect("rejects a shared port before modifying the existing DNS route", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const s = yield* service(f);
+      yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: true,
+        port: 4776,
+      });
+      const error = yield* s
+        .configure({
+          environmentId: descriptor.environmentId,
+          bearerToken: "private",
+          enabled: true,
+          port: 4776,
+          protocol: "http",
+        })
+        .pipe(Effect.flip);
+      expect(error.message).toContain("different ports");
+      expect(f.mappings.get("4776")).toBe(target);
+    }),
+  );
+  it.effect("keeps DNS and IP active together and disables each independently", () =>
     Effect.gen(function* () {
       const f = fixture({ "443": "http://127.0.0.1:8080" });
       const s = yield* service(f);
@@ -329,16 +377,25 @@ describe("managed WSL pairing", () => {
         port: 4777,
         protocol: "http",
       });
-      expect(state.protocol).toBe("http");
-      expect(state.endpointUrl).toBe("http://100.90.1.2:4777/");
-      expect(f.mappings.has("4776")).toBe(false);
+      expect(state.ipRoute?.enabled).toBe(true);
+      expect(state.ipRoute?.endpointUrl).toBe("http://100.90.1.2:4777/");
+      expect(f.mappings.has("4776")).toBe(true);
       yield* s.reconcile;
-      expect((yield* s.getState).endpointUrl).toBe(state.endpointUrl);
+      expect((yield* s.getState).ipRoute?.endpointUrl).toBe(state.ipRoute?.endpointUrl);
       yield* s.configure({
         environmentId: descriptor.environmentId,
         bearerToken: "private",
         enabled: false,
         port: 4999,
+        protocol: "http",
+      });
+      expect(f.mappings.has("4777")).toBe(false);
+      expect(f.mappings.get("4776")).toBe(target);
+      yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: false,
+        port: 4776,
       });
       expect(Object.fromEntries(f.mappings)).toEqual({ "443": "http://127.0.0.1:8080" });
     }),

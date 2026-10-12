@@ -39,6 +39,7 @@ export interface DesktopSettings {
     readonly target: string | null;
     readonly protocol?: "https" | "http";
   };
+  readonly wslIpPairingRoute: DesktopSettings["wslPairingRoute"];
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
   // Was a "local" | "wsl" swap mode in an earlier iteration of the WSL
@@ -90,6 +91,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   mainWindowMaximized: false,
   serverExposureMode: "local-only",
   wslPairingRoute: { enabled: false, port: 4776, target: null },
+  wslIpPairingRoute: { enabled: false, port: 4777, target: null, protocol: "http" },
   tailscaleServeEnabled: false,
   tailscaleServePort: DEFAULT_TAILSCALE_SERVE_PORT,
   updateChannel: "latest",
@@ -124,6 +126,14 @@ const DesktopSettingsDocument = Schema.Struct({
     }),
   ),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
+  wslIpPairingRoute: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.Boolean,
+      port: Schema.Number,
+      target: Schema.NullOr(Schema.String),
+      protocol: Schema.optionalKey(Schema.Literals(["https", "http"])),
+    }),
+  ),
   tailscaleServePort: Schema.optionalKey(Schema.Number),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
@@ -274,20 +284,30 @@ function normalizeDesktopSettingsDocument(
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
     serverExposureMode:
       parsed.serverExposureMode === "network-accessible" ? "network-accessible" : "local-only",
-    wslPairingRoute: parsed.wslPairingRoute
+    wslIpPairingRoute: parsed.wslIpPairingRoute
       ? {
-          ...parsed.wslPairingRoute,
-          port:
-            !parsed.wslPairingRoute.enabled &&
-            parsed.wslPairingRoute.target === null &&
-            parsed.wslPairingRoute.port === 4775
-              ? defaultSettings.wslPairingRoute.port
-              : normalizeTailscaleServePort(
-                  parsed.wslPairingRoute.port,
-                  defaultSettings.wslPairingRoute.port,
-                ),
+          ...parsed.wslIpPairingRoute,
+          port: normalizeTailscaleServePort(parsed.wslIpPairingRoute.port, 4777),
+          protocol: "http",
         }
-      : defaultSettings.wslPairingRoute,
+      : parsed.wslPairingRoute?.protocol === "http"
+        ? { ...parsed.wslPairingRoute, protocol: "http" }
+        : defaultSettings.wslIpPairingRoute,
+    wslPairingRoute:
+      parsed.wslPairingRoute && parsed.wslPairingRoute.protocol !== "http"
+        ? {
+            ...parsed.wslPairingRoute,
+            port:
+              !parsed.wslPairingRoute.enabled &&
+              parsed.wslPairingRoute.target === null &&
+              parsed.wslPairingRoute.port === 4775
+                ? defaultSettings.wslPairingRoute.port
+                : normalizeTailscaleServePort(
+                    parsed.wslPairingRoute.port,
+                    defaultSettings.wslPairingRoute.port,
+                  ),
+          }
+        : defaultSettings.wslPairingRoute,
     tailscaleServeEnabled: parsed.tailscaleServeEnabled === true,
     tailscaleServePort: normalizeTailscaleServePort(parsed.tailscaleServePort),
     updateChannel: updateChannelConfiguredByUser
@@ -332,6 +352,12 @@ function toDesktopSettingsDocument(
     settings.wslPairingRoute.protocol === "http"
   )
     document.wslPairingRoute = settings.wslPairingRoute;
+  if (
+    settings.wslIpPairingRoute.enabled ||
+    settings.wslIpPairingRoute.port !== 4777 ||
+    settings.wslIpPairingRoute.target !== null
+  )
+    document.wslIpPairingRoute = settings.wslIpPairingRoute;
   if (settings.tailscaleServeEnabled !== defaults.tailscaleServeEnabled) {
     document.tailscaleServeEnabled = settings.tailscaleServeEnabled;
   }
@@ -615,7 +641,11 @@ export const make = Effect.gen(function* () {
         Effect.withSpan("desktop.settings.setServerExposureMode", { attributes: { mode } }),
       ),
     setWslPairingRoute: (wslPairingRoute) =>
-      persist((settings) => ({ ...settings, wslPairingRoute })),
+      persist((settings) => ({
+        ...settings,
+        [wslPairingRoute.protocol === "http" ? "wslIpPairingRoute" : "wslPairingRoute"]:
+          wslPairingRoute,
+      })),
     setTailscaleServe: (input) =>
       persist((settings) => setTailscaleServe(settings, input)).pipe(
         Effect.withSpan("desktop.settings.setTailscaleServe", { attributes: input }),
@@ -688,7 +718,11 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setServerExposureMode: (mode) =>
           update((settings) => setServerExposureMode(settings, mode)),
         setWslPairingRoute: (wslPairingRoute) =>
-          update((settings) => ({ ...settings, wslPairingRoute })),
+          update((settings) => ({
+            ...settings,
+            [wslPairingRoute.protocol === "http" ? "wslIpPairingRoute" : "wslPairingRoute"]:
+              wslPairingRoute,
+          })),
         setTailscaleServe: (input) => update((settings) => setTailscaleServe(settings, input)),
         setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),
         setWslBackendEnabled: (enabled) =>

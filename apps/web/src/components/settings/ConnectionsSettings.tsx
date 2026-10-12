@@ -7,7 +7,6 @@ import {
 } from "~/rpc/environmentAccess";
 import { SessionPermissions } from "./SessionPermissions";
 import { BackendStartupSettings } from "./BackendStartupSettings";
-import { createAdvertisedEndpoint } from "@t3tools/shared/advertisedEndpoint";
 import { useEnvironmentSessionState } from "~/state/session";
 import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
 import {
@@ -82,6 +81,7 @@ import {
   isQrShareableEndpoint,
   isWslSettingsRowVisible,
   selectQrEndpointOption,
+  wslPairingEndpoints,
   togglePairingScopeSelection,
 } from "./ConnectionsSettings.logic";
 import {
@@ -905,26 +905,36 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                 })}
               </div>
             ) : null}
-            <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1.5">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <code className="min-w-0 flex-1 truncate font-mono text-2xs text-muted-foreground">
-                      {qrPairingUrl}
-                    </code>
-                  }
-                />
-                <TooltipPopup side="top">{qrPairingUrl}</TooltipPopup>
-              </Tooltip>
-              <Button
-                size="xs"
-                variant="ghost"
-                className="shrink-0"
-                onClick={() => copyPairingValue(qrPairingUrl, copyKindForUrl(qrPairingUrl))}
+            {(endpointCopyOptions.length > 1
+              ? endpointCopyOptions
+              : [{ id: "selected", url: qrPairingUrl, label: "Pairing link" }]
+            ).map((option) => (
+              <div
+                key={option.id}
+                className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1.5"
               >
-                Copy link
-              </Button>
-            </div>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <code className="min-w-0 flex-1 truncate font-mono text-2xs text-muted-foreground">
+                        {option.url}
+                      </code>
+                    }
+                  />
+                  <TooltipPopup side="top">
+                    {option.label}: {option.url}
+                  </TooltipPopup>
+                </Tooltip>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  className="shrink-0"
+                  onClick={() => copyPairingValue(option.url, copyKindForUrl(option.url))}
+                >
+                  Copy link
+                </Button>
+              </div>
+            ))}
             <Button size="xs" variant="ghost" onClick={handleCopyCode}>
               Copy code only
             </Button>
@@ -2120,17 +2130,69 @@ function WslPairingSettings() {
         }
       />
       {state?.environmentId ? (
-        <WslPairingAccess
-          key={`${state.environmentId}:${state.endpointUrl ?? "unreachable"}`}
-          state={state}
-          onState={setState}
-        />
+        <WslPairingAccess key={state.environmentId} state={state} onState={setState} />
       ) : (
         <p className="px-4 text-xs text-muted-foreground">
           Start the selected WSL backend to create a pairing link.
         </p>
       )}
     </>
+  );
+}
+
+function WslPairingRouteControls({
+  protocol,
+  route,
+  disabled,
+  configure,
+}: {
+  protocol: "https" | "http";
+  route: { enabled: boolean; port: number; endpointUrl: string | null; error: string | null };
+  disabled: boolean;
+  configure: (enabled: boolean, protocol: "https" | "http", port: number) => Promise<void>;
+}) {
+  const [port, setPort] = useState(String(route.port));
+  const label = protocol === "http" ? "Tailscale IP (HTTP)" : "Tailscale DNS (HTTPS)";
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="flex items-center gap-2 text-xs">
+          {label} port
+          <Input
+            aria-label={`${label} port`}
+            type="number"
+            min={1}
+            max={65535}
+            value={port}
+            onChange={(e) => setPort(e.target.value)}
+            disabled={disabled}
+          />
+        </label>
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={disabled || !/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535}
+          onClick={() => void configure(true, protocol, Number(port))}
+        >
+          {route.enabled ? "Update route" : "Set up route"}
+        </Button>
+        {route.enabled ? (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={disabled}
+            onClick={() => void configure(false, protocol, route.port)}
+          >
+            Disable route
+          </Button>
+        ) : null}
+      </div>
+      <p className="break-all text-xs text-muted-foreground">
+        {route.error ??
+          route.endpointUrl ??
+          (route.enabled ? "Route unavailable. Refresh or retry setup." : "Not set up.")}
+      </p>
+    </div>
   );
 }
 
@@ -2150,8 +2212,6 @@ function WslPairingAccess({
   const access = useEnvironmentQuery(
     canRead ? authEnvironment.accessChanges({ environmentId: id, input: null }) : null,
   );
-  const [port, setPort] = useState(String(state.port));
-  const [protocol, setProtocol] = useState<"https" | "http">(state.protocol ?? "https");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<ReadonlyMap<string, string>>(new Map());
@@ -2163,19 +2223,7 @@ function WslPairingAccess({
   const snapshot = access.data?.type === "snapshot" ? access.data.payload : null;
   const links = snapshot?.pairingLinks.map(toDesktopPairingLinkRecord) ?? [];
   const clients = snapshot?.clientSessions.map(toDesktopClientSessionRecord) ?? [];
-  const endpoints = state.endpointUrl
-    ? [
-        createAdvertisedEndpoint({
-          provider: { id: "tailscale", label: "Tailscale", kind: "private-network", isAddon: true },
-          source: "desktop-addon",
-          id: `wsl-tailscale:${state.endpointUrl}`,
-          label: state.protocol === "http" ? "WSL Tailscale IP" : "WSL Tailscale HTTPS",
-          httpBaseUrl: state.endpointUrl,
-          reachability: "private-network",
-          status: "available",
-        }),
-      ]
-    : [];
+  const endpoints = wslPairingEndpoints(state);
   const allowed =
     state.running && canWrite && canMaintain && prepared?.httpAuthorization?._tag === "Bearer";
   const perform = async (action: () => Promise<unknown>) => {
@@ -2192,7 +2240,7 @@ function WslPairingAccess({
       setRevokingClient(null);
     }
   };
-  const configure = (enabled: boolean) =>
+  const configure = (enabled: boolean, protocol: "https" | "http", port: number) =>
     perform(async () => {
       if (!allowed || prepared?.httpAuthorization?._tag !== "Bearer")
         throw new Error("Reconnect with Manage access and Maintain environment permissions.");
@@ -2200,10 +2248,9 @@ function WslPairingAccess({
         environmentId: id,
         bearerToken: prepared.httpAuthorization.token,
         enabled,
-        port: Number(port),
+        port,
         protocol,
       });
-      setCreated(new Map());
       onState(route);
     });
   const createCredential = async (input: {
@@ -2214,8 +2261,7 @@ function WslPairingAccess({
     if (
       !current.running ||
       current.environmentId !== id ||
-      !current.endpointUrl ||
-      current.endpointUrl !== state.endpointUrl
+      wslPairingEndpoints(current).length === 0
     ) {
       onState(current);
       throw new Error("The WSL route changed or is unreachable. Refresh and retry setup.");
@@ -2224,72 +2270,21 @@ function WslPairingAccess({
   };
   return (
     <div className="space-y-2 px-3 pb-3 sm:px-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="flex items-center gap-2 text-xs">
-          {protocol === "http" ? "IP port" : "HTTPS port"}
-          <Input
-            aria-label="WSL pairing port"
-            type="number"
-            min={1}
-            max={65535}
-            value={port}
-            onChange={(e) => setPort(e.target.value)}
-            disabled={busy || !allowed}
-          />
-        </label>
-        <Button
-          size="xs"
-          variant={protocol === "https" ? "default" : "outline"}
-          disabled={busy}
-          onClick={() => {
-            setProtocol("https");
-            setPort(String((state.protocol ?? "https") === "https" ? state.port : 4776));
-          }}
-        >
-          DNS (HTTPS)
-        </Button>
-        <Button
-          size="xs"
-          variant={protocol === "http" ? "default" : "outline"}
-          disabled={busy}
-          onClick={() => {
-            setProtocol("http");
-            setPort(String(state.protocol === "http" ? state.port : 4777));
-          }}
-        >
-          IP (HTTP)
-        </Button>
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={
-            busy || !allowed || !/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535
-          }
-          onClick={() => void configure(true)}
-        >
-          {busy
-            ? "Working…"
-            : protocol === "http"
-              ? "Set up Tailscale IP"
-              : "Set up Tailscale HTTPS"}
-        </Button>
-        {state.enabled ? (
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={busy || !allowed}
-            onClick={() => void configure(false)}
-          >
-            Disable WSL route
-          </Button>
-        ) : null}
-      </div>
+      <WslPairingRouteControls
+        protocol="https"
+        route={state}
+        disabled={busy || !allowed}
+        configure={configure}
+      />
+      <WslPairingRouteControls
+        protocol="http"
+        route={state.ipRoute ?? { enabled: false, port: 4777, endpointUrl: null, error: null }}
+        disabled={busy || !allowed}
+        configure={configure}
+      />
       <p className="text-xs text-muted-foreground">
         Your other device must be connected to the same tailnet. This route exposes only the WSL
-        environment.
-        {protocol === "http"
-          ? " IP access bypasses DNS; Tailscale encrypts the connection between devices."
-          : ""}
+        environment. IP access bypasses DNS; Tailscale encrypts the connection between devices.
       </p>
       {!allowed ? (
         <p className="text-xs text-muted-foreground">
@@ -2309,7 +2304,7 @@ function WslPairingAccess({
         environmentId={id}
         delegatableScopes={scopes}
         clientSessions={clients}
-        disabled={!allowed || !state.endpointUrl || busy}
+        disabled={!allowed || endpoints.length === 0 || busy}
         isRevokingOtherClients={busy}
         onRevokeOtherClients={() => void perform(() => revokeOtherEnvironmentClients(id))}
         createCredential={createCredential}
@@ -2318,7 +2313,7 @@ function WslPairingAccess({
         }
       />
       <PairingClientsList
-        endpointUrl={state.endpointUrl}
+        endpointUrl={state.endpointUrl ?? state.ipRoute?.endpointUrl ?? null}
         endpoints={endpoints}
         defaultEndpointKey={null}
         isLoading={access.isPending}

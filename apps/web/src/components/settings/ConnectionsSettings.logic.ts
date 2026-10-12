@@ -5,7 +5,35 @@ import {
   AuthTerminalReadScope,
   type DesktopBridge,
   type DesktopWslState,
+  type DesktopWslPairingState,
 } from "@t3tools/contracts";
+import { createAdvertisedEndpoint } from "@t3tools/shared/advertisedEndpoint";
+
+export function wslPairingEndpoints(state: DesktopWslPairingState) {
+  return [
+    { url: state.endpointUrl, label: "Tailscale DNS (HTTPS)", mode: "dns" },
+    { url: state.ipRoute?.endpointUrl, label: "Tailscale IP (HTTP)", mode: "ip" },
+  ].flatMap(({ url, label, mode }) =>
+    url
+      ? [
+          createAdvertisedEndpoint({
+            provider: {
+              id: "tailscale",
+              label: "Tailscale",
+              kind: "private-network",
+              isAddon: true,
+            },
+            source: "desktop-addon",
+            id: `wsl-tailscale-${mode}:${url}`,
+            label,
+            httpBaseUrl: url,
+            reachability: "private-network",
+            status: "available",
+          }),
+        ]
+      : [],
+  );
+}
 
 /**
  * Operating terminals without being able to list them leaves a client
