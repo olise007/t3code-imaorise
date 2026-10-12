@@ -55,6 +55,10 @@ does not change security policy. Linux runtime and Android builds can run separa
 
 ## Manual builds and updates
 
+Agents should follow [the hosted change and build workflow](imaorise-agent-workflow.md).
+The local commands below are an operator-invoked fallback, not the default for
+agent validation or releases on this memory-constrained machine.
+
 From Windows PowerShell:
 
 ```powershell
