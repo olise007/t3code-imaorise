@@ -55,9 +55,9 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - name: Commit preview and runtime regressions
-        run: vp test run --maxWorkers 1 apps/server/src/git/GitManager.test.ts apps/server/src/desktopRuntime.test.ts apps/server/src/desktopRuntime.integration.test.ts apps/server/src/desktopUpdate/DesktopRuntimeManagement.test.ts apps/server/src/orchestration-v2/runtimeLayer.test.ts apps/web/src/components/GitActionsControl.test.ts
+        run: vp test run --maxWorkers 1 apps/server/src/git/GitManager.test.ts apps/server/src/mcp/toolkits/environment/handlers.test.ts apps/server/src/mcp/toolkits/worktree/registration.test.ts apps/server/src/desktopRuntime.test.ts apps/server/src/desktopRuntime.integration.test.ts apps/server/src/desktopUpdate/DesktopRuntimeManagement.test.ts apps/server/src/orchestration-v2/runtimeLayer.test.ts apps/web/src/components/GitActionsControl.test.ts
       - name: Scoped server lint
-        run: vp lint apps/server/src/git/GitManager.ts apps/server/src/git/GitManager.test.ts
+        run: vp lint apps/server/src/mcp/toolkits/environment/handlers.test.ts apps/server/src/mcp/toolkits/worktree/registration.test.ts apps/server/src/git/GitManager.ts apps/server/src/git/GitManager.test.ts
       - name: Server types
         run: timeout 900 vp run --filter t3 typecheck
   recovery:

@@ -15,6 +15,7 @@ import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/ai";
 
 import * as Environment from "../../../environment/ServerEnvironment.ts";
+import * as DesktopRuntimeManagement from "../../../desktopUpdate/DesktopRuntimeManagement.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Settings from "../../../serverSettings.ts";
@@ -87,6 +88,7 @@ it.effect("updates preferences for a thread caller through the /mcp registration
           }),
         ),
         Layer.provide(layerEnvironment),
+        Layer.provide(Layer.mock(DesktopRuntimeManagement.DesktopRuntimeManagement)({})),
         Layer.provide(Settings.layerTest()),
       ),
     ),
@@ -100,6 +102,7 @@ it.effect("refuses a preferences update when the caller's turn ends while it wai
     // Completes once the declaration's own check has read the caller.
     const checked = yield* Deferred.make<void>();
     const layerDependencies = Layer.mergeAll(
+      Layer.mock(DesktopRuntimeManagement.DesktopRuntimeManagement)({}),
       ThreadCommandExecutor.layer,
       Layer.succeed(McpInvocationContext.McpInvocationContext, {
         environmentId,
