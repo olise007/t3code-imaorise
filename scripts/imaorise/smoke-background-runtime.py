@@ -21,8 +21,11 @@ with tempfile.TemporaryDirectory(prefix="t3-packaged-runtime-") as temporary:
         [executable, "desktop-runtime", "attach", "acceptance", "--bootstrap-fd", "0"],
         env=env, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
     )
-    bootstrap = {"port": port, "host": "127.0.0.1", "t3Home": str(root / "profile"),
-                 "desktopBootstrapSecret": secrets.token_hex(32)}
+    bootstrap = {"mode": "desktop", "noBrowser": True, "port": port,
+                 "host": "127.0.0.1", "t3Home": str(root / "profile"),
+                 "desktopBootstrapToken": secrets.token_hex(32),
+                 "desktopBootstrapSecret": secrets.token_hex(32),
+                 "tailscaleServeEnabled": False, "tailscaleServePort": 443}
     child.stdin.write((json.dumps(bootstrap) + "\n").encode())
     child.stdin.close()
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -30,7 +33,9 @@ with tempfile.TemporaryDirectory(prefix="t3-packaged-runtime-") as temporary:
         deadline = time.monotonic() + 120
         while True:
             if child.poll() is not None:
-                raise RuntimeError("Packaged launcher exited: " + child.stderr.read().decode())
+                log = root / "runtimes/acceptance/server.log"
+                raise RuntimeError("Packaged launcher exited: " + child.stderr.read().decode()
+                                   + (log.read_text()[-2000:] if log.exists() else "no server log"))
             try:
                 with opener.open(f"http://127.0.0.1:{port}/.well-known/t3/environment", timeout=1) as response:
                     descriptor = json.load(response)
