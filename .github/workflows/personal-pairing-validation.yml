@@ -1,0 +1,30 @@
+name: Personal WSL pairing validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Pairing request regressions
+        run: timeout 600 vp test run apps/web/src/rpc/environmentAccess.test.ts apps/web/src/authBootstrap.test.ts
+      - name: Scoped lint
+        run: vp lint apps/web/src/rpc/environmentAccess.ts apps/web/src/rpc/environmentAccess.test.ts
+      - name: Web types
+        run: timeout 600 vp run --filter @t3tools/web typecheck

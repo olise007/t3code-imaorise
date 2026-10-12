@@ -55,10 +55,18 @@ function requestAccess<A, E>(
 export const createEnvironmentPairingCredential = (
   environmentId: EnvironmentId,
   input: { label?: string; scopes?: readonly AuthGrantScope[] },
-) =>
-  requestAccess(environmentId, "/api/auth/pairing-token", (client, headers) =>
-    client.pairingCredential({ headers, payload: input }),
+) => {
+  const trimmedLabel = input.label?.trim();
+  return requestAccess(environmentId, "/api/auth/pairing-token", (client, headers) =>
+    client.pairingCredential({
+      headers,
+      payload: {
+        ...(trimmedLabel ? { label: trimmedLabel } : {}),
+        ...(input.scopes ? { scopes: input.scopes } : {}),
+      },
+    }),
   );
+};
 export const revokeEnvironmentPairingLink = (environmentId: EnvironmentId, id: string) =>
   requestAccess(environmentId, "/api/auth/pairing-links/revoke", (client, headers) =>
     client.revokePairingLink({ headers, payload: { id } }),

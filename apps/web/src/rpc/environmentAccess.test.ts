@@ -44,6 +44,38 @@ function response(value: unknown) {
   return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
 }
 describe("environment access targeting", () => {
+  it.each([undefined, "", "   ", " Phone "])(
+    "creates a WSL pairing credential with optional label %j",
+    async (label) => {
+      const calls: Request[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(input, init);
+          calls.push(request);
+          return request.url.includes(".well-known")
+            ? response(descriptor)
+            : response({
+                id: "pair-1",
+                credential: "private-one-time",
+                expiresAt: "2026-10-10T22:30:00.000Z",
+              });
+        }),
+      );
+      const result = await createEnvironmentPairingCredential(id, {
+        ...(label === undefined ? {} : { label }),
+        scopes: ["orchestration:read"],
+      });
+      expect(result.id).toBe("pair-1");
+      expect(calls).toHaveLength(2);
+      expect(calls[1]!.url).toBe("http://127.0.0.1:4775/api/auth/pairing-token");
+      expect(calls[1]!.headers.get("Authorization")).toBe("Bearer private-test-bearer");
+      expect(await calls[1]!.json()).toEqual({
+        ...(label?.trim() ? { label: label.trim() } : {}),
+        scopes: ["orchestration:read"],
+      });
+    },
+  );
   it("creates a link on the selected WSL server with its session and selected scopes", async () => {
     const calls: Request[] = [];
     vi.stubGlobal(
