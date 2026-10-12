@@ -1,10 +1,66 @@
-name: Personal mobile message validation
+name: Personal upstream integration validation
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   validate:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Message disclosure and submission regressions
+        run: vp test run packages/shared/src/questionReview.test.ts packages/shared/src/userMessageCollapse.test.ts apps/web/src/components/chat/MessagesTimeline.logic.test.ts apps/mobile/src/features/threads/plan-action-state.test.ts apps/mobile/src/state/legacy-plan-mode.test.ts apps/mobile/src/features/threads/plan-action-availability.test.ts apps/mobile/src/lib/enrichedLinkPresentation.test.ts apps/mobile/src/lib/markdownHtml.test.ts apps/mobile/src/features/threads/thread-feed-live-follow.test.ts packages/client-runtime/src/state/commandPermissions.test.ts
+      - name: Scoped lint
+        run: vp lint packages/shared/src/questionReview.test.ts packages/shared/src/userMessageCollapse.ts packages/shared/src/userMessageCollapse.test.ts apps/mobile/src/features/threads/CollapsibleUserMessageBody.tsx apps/mobile/src/features/threads/ThreadFeed.tsx apps/web/src/components/chat/MessagesTimeline.logic.ts apps/mobile/src/features/threads/ProposedPlanCard.tsx
+      - name: Mobile types
+        run: timeout 600 vp run --filter @t3tools/mobile typecheck
+      - name: Web types
+        run: timeout 600 vp run --filter @t3tools/web typecheck
+      - name: Shared types
+        run: timeout 300 vp run --filter @t3tools/shared typecheck
+      - name: Contracts types
+        run: timeout 600 vp run --filter @t3tools/contracts typecheck
+      - name: Client runtime types
+        run: timeout 600 vp run --filter @t3tools/client-runtime typecheck
+  backend:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Commit preview and runtime regressions
+        run: vp test run --maxWorkers 1 apps/server/src/git/GitManager.test.ts apps/server/src/desktopRuntime.test.ts apps/server/src/desktopRuntime.integration.test.ts apps/server/src/desktopUpdate/DesktopRuntimeManagement.test.ts apps/server/src/orchestration-v2/runtimeLayer.test.ts apps/web/src/components/GitActionsControl.test.ts
+      - name: Scoped server lint
+        run: vp lint apps/server/src/git/GitManager.ts apps/server/src/git/GitManager.test.ts
+      - name: Server types
+        run: timeout 900 vp run --filter t3 typecheck
+  recovery:
     if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -22,13 +78,31 @@ jobs:
           cache: false
           run-install: false
       - run: vp install --frozen-lockfile
-      - name: Message disclosure and submission regressions
-        run: vp test run packages/shared/src/questionReview.test.ts packages/shared/src/userMessageCollapse.test.ts apps/web/src/components/chat/MessagesTimeline.logic.test.ts apps/mobile/src/features/threads/plan-action-state.test.ts apps/mobile/src/state/legacy-plan-mode.test.ts
-      - name: Scoped lint
-        run: vp lint packages/shared/src/questionReview.test.ts packages/shared/src/userMessageCollapse.ts packages/shared/src/userMessageCollapse.test.ts apps/mobile/src/features/threads/CollapsibleUserMessageBody.tsx apps/mobile/src/features/threads/ThreadFeed.tsx apps/web/src/components/chat/MessagesTimeline.logic.ts
-      - name: Mobile types
-        run: timeout 600 vp run --filter @t3tools/mobile typecheck
-      - name: Web types
-        run: timeout 600 vp run --filter @t3tools/web typecheck
-      - name: Shared types
-        run: timeout 300 vp run --filter @t3tools/shared typecheck
+      - name: Codex recovery and provider transport regressions
+        run: vp test run --maxWorkers 1 packages/effect-codex-app-server/src/client.test.ts packages/effect-codex-app-server/src/protocol.test.ts packages/effect-codex-app-server/src/_internal/stdio.test.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts apps/server/src/orchestration-v2/RunExecutionService.test.ts
+      - name: Codex transport types
+        run: timeout 600 vp run --filter effect-codex-app-server typecheck
+  desktop:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Desktop startup, tray and WSL lifecycle regressions
+        run: vp test run --maxWorkers 1 apps/desktop/src/backend/DesktopBackendManager.test.ts apps/desktop/src/backend/DesktopBackendConfiguration.test.ts apps/desktop/src/backend/DesktopBackendPool.test.ts apps/desktop/src/backend/startupRecovery.test.ts apps/desktop/src/wsl/DesktopWslBackend.test.ts apps/desktop/src/wsl/DesktopWslEnvironment.test.ts apps/desktop/src/wsl/DesktopWslServerTree.test.ts apps/desktop/src/window/DesktopWindow.test.ts apps/desktop/src/window/trayWindowPolicy.test.ts apps/desktop/src/wsl/backgroundRuntimePolicy.test.ts apps/desktop/src/settings/DesktopAppSettings.test.ts
+      - name: Scoped desktop lint
+        run: vp lint apps/desktop/src/window/DesktopWindow.test.ts
+      - name: Desktop types
+        run: timeout 600 vp run --filter @t3tools/desktop typecheck

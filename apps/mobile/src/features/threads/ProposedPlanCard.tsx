@@ -2,7 +2,11 @@ import { useState, type ComponentProps } from "react";
 import { Alert, Pressable, Share, View, TextInput } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import * as Clipboard from "expo-clipboard";
-import { Markdown } from "react-native-nitro-markdown";
+import {
+  SelectableMarkdownText,
+  type NativeMarkdownTextStyle,
+  type MarkdownImageRenderer,
+} from "../../native/SelectableMarkdownText";
 import {
   AuthFilesystemWriteScope,
   type EnvironmentId,
@@ -31,7 +35,17 @@ export function ProposedPlanCard(props: {
   threadId: ThreadId;
   workspaceRoot: string | null | undefined;
   projectedItem: OrchestrationV2ProjectedTurnItem;
-  markdownStyles: Pick<ComponentProps<typeof Markdown>, "theme" | "styles" | "renderers">;
+  textStyle: NativeMarkdownTextStyle;
+  linkHandlers: Pick<
+    ComponentProps<typeof SelectableMarkdownText>,
+    | "onLinkPress"
+    | "fileContextMenu"
+    | "onFileContextMenuAction"
+    | "onImagePress"
+    | "resolveImageSource"
+    | "linkCustomization"
+  >;
+  renderImage: MarkdownImageRenderer;
 }) {
   const actions = usePlanActions(props);
   const writeFile = useAtomCommand(projectEnvironment.writeFile);
@@ -107,9 +121,12 @@ export function ProposedPlanCard(props: {
       ) : null}
       <View style={expanded ? undefined : { maxHeight: 240, overflow: "hidden" }}>
         <View style={{ width: "100%", flexShrink: 0 }}>
-          <Markdown options={{ gfm: true }} {...props.markdownStyles}>
-            {stripDisplayedPlanMarkdown(item.markdown)}
-          </Markdown>
+          <SelectableMarkdownText
+            markdown={stripDisplayedPlanMarkdown(item.markdown)}
+            textStyle={props.textStyle}
+            {...props.linkHandlers}
+            renderImage={props.renderImage}
+          />
         </View>
         {!expanded ? (
           <View

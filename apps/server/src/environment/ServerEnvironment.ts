@@ -232,10 +232,12 @@ export const make = Effect.gen(function* () {
         serverConfig.desktopTelemetryControlFd !== undefined ||
         Boolean((yield* HostProcess.Environment).T3CODE_MANAGED_RUNTIME_ID),
       storageCleanupRun: true,
+      otlpEndpointCheck: true,
       projectWorktreeCleanup: true,
       worktreesDirectory: true,
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
+      projectProviderInstanceOverrides: true,
       threadSnooze: true,
       environmentThemes: true,
       usageLimitSources: true,
