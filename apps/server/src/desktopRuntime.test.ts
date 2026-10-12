@@ -10,9 +10,19 @@ import {
   startRuntime,
   stopRuntime,
   waitForManagedReadiness,
+  runtimeServerArguments,
 } from "./desktopRuntime.ts";
 
 const directories: string[] = [];
+it("launches an embedded runtime without treating its executable as the home directory", () => {
+  const args = ["serve", "--port", "5779"];
+  expect(
+    runtimeServerArguments(["/runtime/t3", "/runtime/t3", "desktop-runtime"], args, true),
+  ).toEqual(args);
+  expect(
+    runtimeServerArguments(["/usr/bin/node", "/runtime/bin.mjs", "desktop-runtime"], args, false),
+  ).toEqual(["/runtime/bin.mjs", ...args]);
+});
 afterEach(async () => {
   for (const directory of directories.splice(0)) {
     await stopRuntime(directory);

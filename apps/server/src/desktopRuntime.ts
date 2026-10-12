@@ -8,6 +8,7 @@ import * as NodeOS from "node:os";
 import * as NodeCrypto from "node:crypto";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeReadline from "node:readline";
+import * as NodeSea from "node:sea";
 import { isAssignedPortConflict } from "@t3tools/shared/listenPortConflict";
 import {
   ORCHESTRATION_PROTOCOL_VERSION,
@@ -16,6 +17,16 @@ import {
 } from "@t3tools/contracts";
 
 export const MANAGED_RUNTIME_PROTOCOL = 2;
+
+export function runtimeServerArguments(
+  argv: string[],
+  serverArgs: string[],
+  packaged = NodeSea.isSea(),
+) {
+  // SEA executes its embedded entry; passing argv[1] again makes it a CLI
+  // positional directory rather than a JavaScript entry point.
+  return packaged ? [...serverArgs] : [...argv.slice(1, 2), ...serverArgs];
+}
 
 export interface RuntimeRecord {
   protocol: number;
@@ -525,7 +536,7 @@ export async function runDesktopRuntime(args: string[]) {
   const record = await startRuntime({
     directory,
     executable: process.execPath,
-    args: [...process.argv.slice(1, 2), ...serverArgs],
+    args: runtimeServerArguments(process.argv, serverArgs),
     bootstrap,
   });
   // Re-resolve against the authoritative owned record. A desktop-lifetime

@@ -106,6 +106,9 @@ jobs:
           cp native/resource-monitor/target/release/t3-resource-monitor apps/server/dist/resource-monitor/linux-x64/
           node scripts/build-cli-archive.ts --platform linux --arch x64 --version "$RELEASE_VERSION" --output-dir release-cli
           node scripts/smoke-cli-archive.ts --archive release-cli/*.tar.gz --expect-version "$RELEASE_VERSION"
+          mkdir -p /tmp/personal-runtime-smoke
+          tar -xzf release-cli/*.tar.gz -C /tmp/personal-runtime-smoke
+          python3 scripts/imaorise/smoke-background-runtime.py "/tmp/personal-runtime-smoke/t3-$RELEASE_VERSION-linux-x64/t3"
       - uses: actions/upload-artifact@v4
         with:
           name: personal-wsl-runtime
