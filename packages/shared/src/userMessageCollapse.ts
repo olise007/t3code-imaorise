@@ -1,4 +1,4 @@
-import { assistantCitationLabel, collectAssistantCitations } from "./assistantCitations";
+import { assistantCitationLabel, collectAssistantCitations } from "./assistantCitations.ts";
 
 const MARKDOWN_LINK = /!?\[([^\]\n]*)\]\((?:<[^>\n]*>|[^\s)]*)\)/g;
 

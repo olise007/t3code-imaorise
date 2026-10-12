@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { questionAnswerSummary, questionReviewStep } from "./questionReview";
+import { questionAnswerSummary, questionReviewStep } from "./questionReview.ts";
 describe("question review progression", () => {
   it("reaches review after the last question and returns to it after editing", () => {
     let index = 0;

@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
-import { serializeAssistantCitation } from "./assistantCitations";
-import { buildPlanImplementationPrompt } from "./proposedPlan";
-import { shouldCollapseUserMessage, toggleExpandedUserMessage } from "./userMessageCollapse";
+import { serializeAssistantCitation } from "./assistantCitations.ts";
+import { buildPlanImplementationPrompt } from "./proposedPlan.ts";
+import { shouldCollapseUserMessage, toggleExpandedUserMessage } from "./userMessageCollapse.ts";
 
 describe("user message collapse", () => {
   it("keeps short messages and boundary values open", () => {
