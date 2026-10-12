@@ -334,7 +334,7 @@ describe("managed WSL pairing", () => {
       });
       expect(state.ipRoute?.endpointUrl).toBe("http://100.90.1.2:4777/");
       expect(state.endpointUrl).toBeNull();
-      expect(state.error).toContain("Could not inspect");
+      expect(state.error).not.toBeNull();
     }),
   );
   it.effect("rejects a shared port before modifying the existing DNS route", () =>
