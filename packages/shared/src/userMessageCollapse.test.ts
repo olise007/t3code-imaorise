@@ -17,7 +17,7 @@ describe("user message collapse", () => {
     const plan = "## Implementation\n\n" + "Preserve the complete plan. ".repeat(40);
     const submission = buildPlanImplementationPrompt(plan);
     expect(shouldCollapseUserMessage(submission)).toBe(true);
-    expect(submission).toBe(`PLEASE IMPLEMENT THIS PLAN:\n${plan}`);
+    expect(submission).toBe(`PLEASE IMPLEMENT THIS PLAN:\n${plan.trim()}`);
   });
 
   it("counts file links and context chips by their visible labels", () => {
