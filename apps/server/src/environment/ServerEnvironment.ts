@@ -228,6 +228,9 @@ export const make = Effect.gen(function* () {
       threadSettlement: true,
       threadAutoSettlement: true,
       storageCleanup: true,
+      desktopBackgroundRuntime:
+        serverConfig.desktopTelemetryControlFd !== undefined ||
+        Boolean((yield* HostProcess.Environment).T3CODE_MANAGED_RUNTIME_ID),
       storageCleanupRun: true,
       projectWorktreeCleanup: true,
       worktreesDirectory: true,

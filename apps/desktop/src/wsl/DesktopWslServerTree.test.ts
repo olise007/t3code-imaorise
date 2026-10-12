@@ -232,7 +232,7 @@ describe("DesktopWslServerTree", () => {
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("sweeps stale version directories and leftover partials after extraction", () =>
+  it.effect("retains older runtime trees for background servers", () =>
     withTempDir((tempDir) =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -254,8 +254,8 @@ describe("DesktopWslServerTree", () => {
           resourcesPath: path.join(tempDir, "resources"),
         });
         assert.isTrue(result.ok);
-        assert.isFalse(yield* fileSystem.exists(path.join(treeRoot, "1.0.0")));
-        assert.isFalse(yield* fileSystem.exists(path.join(treeRoot, "1.2.3.partial")));
+        assert.isTrue(yield* fileSystem.exists(path.join(treeRoot, "1.0.0")));
+        assert.isTrue(yield* fileSystem.exists(path.join(treeRoot, "1.2.3.partial")));
         assert.isTrue(yield* fileSystem.exists(path.join(treeRoot, "1.2.3")));
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
@@ -290,9 +290,9 @@ describe("DesktopWslServerTree", () => {
         assert.include(root, "1.2.4");
         const entry = yield* fileSystem.readFileString(path.join(root, "apps/server/dist/bin.mjs"));
         assert.equal(entry, "new");
-        // The previous version's tree is gone.
+        // A detached server can still require modules from its pinned tree.
         const treeRoot = path.dirname(root);
-        assert.isFalse(yield* fileSystem.exists(path.join(treeRoot, "1.2.3")));
+        assert.isTrue(yield* fileSystem.exists(path.join(treeRoot, "1.2.3")));
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   );

@@ -1,3 +1,4 @@
+import { RemoteBackgroundSettings } from "./RemoteBackgroundSettings";
 import {
   createEnvironmentPairingCredential,
   revokeEnvironmentPairingLink,
@@ -90,6 +91,7 @@ import {
   useRelativeTimeTick,
 } from "./settingsLayout";
 import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
+import { DesktopBackgroundSettings } from "./DesktopBackgroundSettings";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { EnvironmentRoutesList } from "./EnvironmentRoutesList";
@@ -1721,6 +1723,9 @@ function SavedBackendListRow({
       }
       detail={
         <>
+          {environment.serverConfig?.environment.capabilities.desktopBackgroundRuntime === true ? (
+            <RemoteBackgroundSettings environmentId={environmentId} />
+          ) : null}
           {routesOpen && (
             <EnvironmentRoutesList
               environment={environment}
@@ -3988,6 +3993,10 @@ export function ConnectionsSettings() {
                 {desktopBridge && canManageLocalBackend && (
                   <BackendStartupSettings bridge={desktopBridge} />
                 )}
+                <DesktopBackgroundSettings
+                  key={desktopWslState?.distro ?? "default"}
+                  wslEnabled={desktopWslState?.enabled ?? false}
+                />
                 {desktopWslState?.enabled && !desktopWslState.wslOnly ? (
                   <WslPairingSettings key={desktopWslState.distro ?? "default"} />
                 ) : null}
@@ -4002,6 +4011,11 @@ export function ConnectionsSettings() {
                   <CloudLinkRow canReadRelay={canReadRelay} canManageRelay={canManageRelay} />
                 ) : null}
               </>
+            ) : null}
+            {!desktopBridge &&
+            primaryEnvironmentId !== null &&
+            primaryServerConfig?.environment.capabilities.desktopBackgroundRuntime === true ? (
+              <RemoteBackgroundSettings environmentId={primaryEnvironmentId} />
             ) : null}
             {primaryEnvironment ? (
               <details className="group px-3 sm:px-4">

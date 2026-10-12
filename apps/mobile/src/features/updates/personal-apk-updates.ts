@@ -4,6 +4,7 @@ import Constants from "expo-constants";
 import * as FileSystem from "expo-file-system/legacy";
 import { requireNativeModule } from "expo";
 import { validatePersonalApkManifest, type PersonalApkManifest } from "./personal-apk-manifest";
+import { hasPersonalSurfaceAssets } from "@t3tools/shared/personalReleaseAssets";
 import { flushComposerDrafts } from "../../state/use-composer-drafts";
 import { flushThreadOutbox } from "../../state/thread-outbox";
 
@@ -146,30 +147,40 @@ export async function checkPersonalApkUpdate(manual = false) {
     );
     if (!Array.isArray(releases)) throw new Error("Invalid releases response.");
     const assetName = `android-${state.channel}.json`;
-    const release = releases.find(
-      (r: {
-        draft?: boolean;
-        prerelease?: boolean;
-        assets?: { name: string; browser_download_url: string }[];
-      }) =>
-        !r.draft &&
-        Boolean(r.prerelease) === (state.channel === "beta") &&
-        r.assets?.some((asset) => asset.name === assetName),
-    );
-    const asset = release?.assets?.find((a: { name: string }) => a.name === assetName);
-    if (
-      !asset ||
-      !asset.browser_download_url.startsWith(
-        "https://github.com/olise007/t3code-imaorise/releases/download/",
+    let manifest: PersonalApkManifest | null = null;
+    for (const release of releases) {
+      if (
+        release.draft ||
+        Boolean(release.prerelease) !== (state.channel === "beta") ||
+        !hasPersonalSurfaceAssets(release, "android", state.channel)
       )
-    ) {
+        continue;
+      const asset = release.assets.find(
+        (candidate: { name: string }) => candidate.name === assetName,
+      );
+      if (
+        !asset ||
+        !asset.browser_download_url.startsWith(
+          "https://github.com/olise007/t3code-imaorise/releases/download/",
+        )
+      )
+        continue;
+      const candidate = validatePersonalApkManifest(
+        await fetchJson(asset.browser_download_url),
+        state.channel,
+      );
+      const apk = release.assets.find(
+        (entry: { name: string; browser_download_url?: string; size?: number }) =>
+          entry.browser_download_url === candidate.apkUrl && entry.name.endsWith(".apk"),
+      );
+      if (!apk || (apk.size !== undefined && apk.size !== candidate.size)) continue;
+      manifest = candidate;
+      break;
+    }
+    if (!manifest) {
       update({ status: "current", manifest: null });
       return;
     }
-    const manifest = validatePersonalApkManifest(
-      await fetchJson(asset.browser_download_url),
-      state.channel,
-    );
     if (manifest.versionCode <= installedCode()) {
       update({ status: "current", manifest: null });
       return;

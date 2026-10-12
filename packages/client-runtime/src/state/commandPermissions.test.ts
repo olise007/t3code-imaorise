@@ -8,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
   AuthOrchestrationOperateScope,
+  AuthEnvironmentMaintainScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   ThreadId,
@@ -59,6 +60,56 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("requires the destination source-control grant for commit previews", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const preview = createCommandPermissions(runtime, WS_METHODS.gitGenerateCommitMessage);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(preview.permissionAtom(env))).toBe(false);
+        expect((yield* preview.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(true),
+            scopes: [AuthSourceControlWriteScope],
+            permissions: [AuthSourceControlWriteScope],
+          }),
+        );
+        yield* preview.authorize(registry, env);
+        expect(registry.get(preview.permissionAtom(env))).toBe(true);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(preview.permissionAtom(other))).toBe(false);
+      }),
+    ),
+  );
+  it.effect("requires the destination maintenance grant to manage desktop servers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const management = createCommandPermissions(runtime, WS_METHODS.serverManageDesktopRuntime);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(management.permissionAtom(env))).toBe(false);
+        expect((yield* management.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(true),
+            scopes: [AuthEnvironmentMaintainScope],
+            permissions: [AuthEnvironmentMaintainScope],
+          }),
+        );
+        yield* management.authorize(registry, env);
+        expect(registry.get(management.permissionAtom(env))).toBe(true);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(management.permissionAtom(other))).toBe(false);
+      }),
+    ),
+  );
   it.effect("requires the destination settings grant to run storage cleanup", () =>
     Effect.scoped(
       Effect.gen(function* () {

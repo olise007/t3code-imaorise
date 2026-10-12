@@ -1,5 +1,12 @@
+import { useAtomValue } from "@effect/atom-react";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { gitEnvironment } from "../../../state/git";
+import { useAtomCommand } from "../../../state/use-atom-command";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
-import { useCallback, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -48,36 +55,89 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   const [dialogCommitMessage, setDialogCommitMessage] = useState("");
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
   const [isEditingFiles, setIsEditingFiles] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const canGenerateCommitMessage = useAtomValue(
+    gitEnvironment.generateCommitMessage.permissionAtom(selectedThread?.environmentId ?? null),
+  );
+  const generateMessage = useAtomCommand(gitEnvironment.generateCommitMessage, {
+    reportFailure: false,
+  });
+  const previewRequest = useRef(0);
+  const previewPending = useRef(false);
+  const preview = useRef({ key: "", message: "", mounted: true });
+  useEffect(
+    () => () => {
+      preview.current.mounted = false;
+    },
+    [],
+  );
 
   const selectedFiles = allFiles.filter((file) => !excludedFiles.has(file.path));
   const allSelected = excludedFiles.size === 0;
   const noneSelected = selectedFiles.length === 0;
+  const previewKey = JSON.stringify([selectedThread, selectedThreadCwd, selectedFiles]);
+  useEffect(() => {
+    if (preview.current.key !== previewKey) previewRequest.current++;
+    preview.current = { key: previewKey, message: dialogCommitMessage, mounted: true };
+  }, [previewKey, dialogCommitMessage]);
+  const generate = async () => {
+    if (
+      !selectedThread ||
+      !selectedThreadCwd ||
+      previewPending.current ||
+      busy ||
+      noneSelected ||
+      !canGenerateCommitMessage
+    )
+      return;
+    previewPending.current = true;
+    const snapshot = preview.current;
+    const request = ++previewRequest.current;
+    setGenerating(true);
+    setGenerationError(null);
+    try {
+      const result = await generateMessage({
+        environmentId: selectedThread.environmentId,
+        input: {
+          cwd: selectedThreadCwd,
+          threadId: selectedThread.id,
+          filePaths: selectedFiles.map((file) => file.path),
+        },
+      });
+      const current = preview.current;
+      if (
+        request !== previewRequest.current ||
+        !current.mounted ||
+        current.key !== snapshot.key ||
+        current.message !== snapshot.message
+      )
+        return;
+      if (result._tag === "Success") setDialogCommitMessage(result.value.message);
+      else if (!isAtomCommandInterrupted(result))
+        setGenerationError(String(squashAtomCommandFailure(result)));
+    } finally {
+      previewPending.current = false;
+      if (preview.current.mounted) setGenerating(false);
+    }
+  };
+
   const selectedInsertions = selectedFiles.reduce((sum, file) => sum + file.insertions, 0);
   const selectedDeletions = selectedFiles.reduce((sum, file) => sum + file.deletions, 0);
   const selectedFilePreview = selectedFiles.slice(0, 3);
 
-  const runCommitAction = useCallback(
-    async (featureBranch: boolean) => {
-      if (!canWriteSourceControl || (featureBranch && !canChangeThreadBranch)) return;
-      const commitMessage = dialogCommitMessage.trim();
-      navigation.goBack();
-      await gitActions.onRunSelectedThreadGitAction({
-        action: "commit",
-        featureBranch,
-        ...(commitMessage ? { commitMessage } : {}),
-        ...(!allSelected ? { filePaths: selectedFiles.map((file) => file.path) } : {}),
-      });
-    },
-    [
-      allSelected,
-      canWriteSourceControl,
-      canChangeThreadBranch,
-      dialogCommitMessage,
-      gitActions,
-      navigation,
-      selectedFiles,
-    ],
-  );
+  const runCommitAction = async (featureBranch: boolean) => {
+    if (!canWriteSourceControl || (featureBranch && !canChangeThreadBranch)) return;
+    const commitMessage = dialogCommitMessage.trim();
+    if (!commitMessage || generating || busy || noneSelected) return;
+    navigation.goBack();
+    await gitActions.onRunSelectedThreadGitAction({
+      action: "commit",
+      featureBranch,
+      ...(commitMessage ? { commitMessage } : {}),
+      ...(!allSelected ? { filePaths: selectedFiles.map((file) => file.path) } : {}),
+    });
+  };
 
   return (
     <View
@@ -268,12 +328,26 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
             <Text className="text-foreground android:text-base android:font-t3-medium ios:text-sm ios:font-t3-bold">
               Commit message
             </Text>
+            <SheetActionButton
+              icon="pencil"
+              label={generating ? "Generating…" : "Generate commit message"}
+              disabled={!canGenerateCommitMessage || noneSelected || busy || generating}
+              onPress={() => void generate()}
+            />
+            {generationError && (
+              <Text accessibilityRole="alert" className="text-destructive">
+                {generationError}
+              </Text>
+            )}
             <TextInput
               multiline
               accessibilityLabel="Commit message"
               value={dialogCommitMessage}
-              onChangeText={setDialogCommitMessage}
-              placeholder="Leave empty to auto-generate"
+              onChangeText={(message) => {
+                previewRequest.current++;
+                setDialogCommitMessage(message);
+              }}
+              placeholder="Write a message or generate one to review"
               textAlignVertical="top"
               className="min-h-[128px] px-4 py-3.5 android:rounded-xl android:bg-sheet-solid ios:rounded-[20px]"
             />
@@ -284,7 +358,13 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
               <SheetActionButton
                 icon="arrow.branch"
                 label="Commit on new branch"
-                disabled={!canChangeThreadBranch || noneSelected || busy}
+                disabled={
+                  !canChangeThreadBranch ||
+                  noneSelected ||
+                  busy ||
+                  generating ||
+                  !dialogCommitMessage.trim()
+                }
                 onPress={() => void runCommitAction(true)}
               />
             </View>
@@ -293,7 +373,13 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
                 icon="checkmark.circle"
                 label="Commit"
                 tone="primary"
-                disabled={!canWriteSourceControl || noneSelected || busy}
+                disabled={
+                  !canWriteSourceControl ||
+                  noneSelected ||
+                  busy ||
+                  generating ||
+                  !dialogCommitMessage.trim()
+                }
                 onPress={() => void runCommitAction(false)}
               />
             </View>

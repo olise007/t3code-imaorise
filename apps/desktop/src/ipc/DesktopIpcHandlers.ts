@@ -79,6 +79,11 @@ import {
 } from "./methods/legacyLocalStorage.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
 import {
+  getBackgroundSettings,
+  setBackgroundSettings,
+  setBackgroundServerRunning,
+} from "./methods/background.ts";
+import {
   getCliCommandState,
   installCliCommand,
   uninstallCliCommand,
@@ -144,6 +149,9 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setWslBackendEnabled);
   yield* ipc.handle(setWslDistro);
   yield* ipc.handle(setWslOnly);
+  yield* ipc.handle(getBackgroundSettings);
+  yield* ipc.handle(setBackgroundSettings);
+  yield* ipc.handle(setBackgroundServerRunning);
 
   yield* ipc.handle(pickFolder);
   yield* ipc.handle(pickProjectFavicon);

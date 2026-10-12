@@ -16,6 +16,8 @@ if (
   !/^v2\.\d+\.\d+(?:-beta\.\d+)?$/.test(tag) ||
   tag !== `v${version}` ||
   !/^[a-f0-9]{40}$/.test(revision) ||
+  !Number.isInteger(code) ||
+  !["beta", "stable"].includes(channel) ||
   code <= 5215
 )
   throw new Error("Invalid release reservation.");
@@ -27,23 +29,33 @@ const exactly = (predicate, label) => {
   return matches[0];
 };
 const includeAndroid = process.env.INCLUDE_ANDROID !== "false";
+const includeDesktop = process.env.INCLUDE_DESKTOP !== "false";
 const apk = includeAndroid ? exactly((f) => f.endsWith(".apk"), "APK") : undefined;
 if (!includeAndroid && files.some((f) => f.endsWith(".apk") || /^android-.*\.json$/.test(f)))
   throw new Error("Unexpected Android assets in a desktop-only release.");
-const exe = exactly((f) => f.endsWith(".exe"), "NSIS installer");
-const runtime = exactly((f) => f.endsWith("-linux-x64.tar.gz"), "matching Linux runtime");
-if ((apk && !apk.includes(version)) || !runtime.includes(version))
-  throw new Error("Artifacts do not match the release version.");
-const metadata = `${channel === "beta" ? "beta" : "latest"}.yml`;
-if (!files.includes(metadata)) throw new Error("Updater metadata is missing.");
-const yml = NodeFS.readFileSync(NodePath.join(dir, metadata), "utf8");
-if (!new RegExp(`^version: ['"]?${version.replaceAll(".", "\\.")}['"]?$`, "m").test(yml))
-  throw new Error("Windows metadata version mismatch.");
-const installerBytes = NodeFS.readFileSync(NodePath.join(dir, exe));
-const sha512 = NodeCrypto.createHash("sha512").update(installerBytes).digest("base64");
-if (!yml.includes(sha512) || !yml.includes(exe))
-  throw new Error("Windows updater metadata does not match the installer.");
-const distribution = [exe, runtime, metadata, ...files.filter((f) => f.endsWith(".blockmap"))];
+const distribution = [];
+if (
+  !includeDesktop &&
+  files.some((f) => /\.(exe|yml|blockmap)$/.test(f) || f.endsWith("-linux-x64.tar.gz"))
+)
+  throw new Error("Unexpected desktop assets in an Android-only release.");
+if (includeDesktop) {
+  const exe = exactly((f) => f.endsWith(".exe"), "NSIS installer");
+  const runtime = exactly((f) => f.endsWith("-linux-x64.tar.gz"), "matching Linux runtime");
+  if (!runtime.includes(version)) throw new Error("Artifacts do not match the release version.");
+  const metadata = `${channel === "beta" ? "beta" : "latest"}.yml`;
+  if (!files.includes(metadata)) throw new Error("Updater metadata is missing.");
+  const yml = NodeFS.readFileSync(NodePath.join(dir, metadata), "utf8");
+  if (!new RegExp(`^version: ['"]?${version.replaceAll(".", "\\.")}['"]?$`, "m").test(yml))
+    throw new Error("Windows metadata version mismatch.");
+  const installerBytes = NodeFS.readFileSync(NodePath.join(dir, exe));
+  const sha512 = NodeCrypto.createHash("sha512").update(installerBytes).digest("base64");
+  if (!yml.includes(sha512) || !yml.includes(exe))
+    throw new Error("Windows updater metadata does not match the installer.");
+  distribution.push(exe, runtime, metadata, ...files.filter((f) => f.endsWith(".blockmap")));
+}
+if (apk && !apk.includes(version)) throw new Error("APK version mismatch.");
+if (!includeAndroid && !includeDesktop) throw new Error("No release targets selected.");
 if (includeAndroid) {
   const signature = NodeFS.readFileSync(NodePath.join(dir, "signature.txt"), "utf8");
   const certificate = signature
@@ -60,6 +72,15 @@ if (includeAndroid) {
     throw new Error("APK evidence failed verification.");
   const minimum = Number(badging.match(/sdkVersion:'(\d+)'/)?.[1]);
   if (!minimum) throw new Error("APK minimum Android version is missing.");
+  const build = JSON.parse(
+    NodeFS.readFileSync(NodePath.join(dir, "android-manifest.json"), "utf8"),
+  );
+  if (
+    build.revision !== revision ||
+    build.versionCode !== code ||
+    build.applicationId !== "com.imaorise.t3code"
+  )
+    throw new Error("Android build evidence does not match the reservation.");
   const bytes = NodeFS.readFileSync(NodePath.join(dir, apk));
   const manifest = {
     schemaVersion: 1,
@@ -74,17 +95,25 @@ if (includeAndroid) {
     sha256: NodeCrypto.createHash("sha256").update(bytes).digest("hex"),
     certificateFingerprint: certificate,
     sourceRevision: revision,
-    releaseNotes: `Personal ${channel} ${version}. Plan workflow and in-app updates. Windows installer is unsigned.`,
+    releaseNotes: `Personal Android ${channel} ${version}.`,
   };
   const manifestName = `android-${channel}.json`;
   NodeFS.writeFileSync(NodePath.join(dir, manifestName), JSON.stringify(manifest, null, 2) + "\n");
-  distribution.push(apk, manifestName);
+  distribution.push(
+    apk,
+    manifestName,
+    "android-manifest.json",
+    "signature.txt",
+    "package.txt",
+    "native-manifest.txt",
+  );
 }
 const evidence = {
   sourceRevision: revision,
   version,
   versionCode: code,
   channel,
+  targets: { android: includeAndroid, desktop: includeDesktop },
   assets: distribution.map((name) => {
     const data = NodeFS.readFileSync(NodePath.join(dir, name));
     return {
@@ -108,8 +137,14 @@ const gh = (...args) =>
     stdio: ["pipe", "pipe", "inherit"],
   });
 const release = JSON.parse(gh("release", "view", tag, "--repo", repo, "--json", "isDraft,body"));
-if (!release.isDraft || JSON.parse(release.body.split("\n")[0]).sourceRevision !== revision)
+const reservation = JSON.parse(release.body.split("\n")[0]);
+if (!release.isDraft || reservation.sourceRevision !== revision || reservation.versionCode !== code)
   throw new Error("Release is not the reserved draft.");
+if (
+  reservation.targets &&
+  (reservation.targets.android !== includeAndroid || reservation.targets.desktop !== includeDesktop)
+)
+  throw new Error("Publication surfaces do not match the reserved release targets.");
 gh(
   "release",
   "upload",
@@ -138,5 +173,5 @@ if (process.env.PUBLISH_RELEASE === "true")
     repo,
     "--draft=false",
     `--prerelease=${channel === "beta"}`,
-    `--latest=${channel === "stable"}`,
+    `--latest=${channel === "stable" && includeDesktop}`,
   );

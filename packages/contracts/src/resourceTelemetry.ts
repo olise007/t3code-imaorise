@@ -2,7 +2,11 @@ import * as Schema from "effect/Schema";
 
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HostPowerSnapshot } from "./background.ts";
-import { DesktopUpdateStateSchema } from "./ipc.ts";
+import {
+  DesktopBackgroundSettingsSchema,
+  DesktopBackgroundSettingsPatchSchema,
+  DesktopUpdateStateSchema,
+} from "./ipc.ts";
 
 export const RESOURCE_MONITOR_PROTOCOL_VERSION = 3 as const;
 
@@ -306,7 +310,33 @@ export const DesktopUpdateStatusReport = Schema.Struct({
 });
 export type DesktopUpdateStatusReport = typeof DesktopUpdateStatusReport.Type;
 
+export const DesktopRuntimeRequestInput = Schema.Struct({
+  action: Schema.Literals(["get", "set", "start", "stop"]),
+  settings: Schema.optionalKey(DesktopBackgroundSettingsPatchSchema),
+});
+export type DesktopRuntimeRequestInput = typeof DesktopRuntimeRequestInput.Type;
+export const DesktopRuntimeRequest = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("desktopRuntimeRequest"),
+  requestId: TrimmedNonEmptyString,
+  input: DesktopRuntimeRequestInput,
+});
+export type DesktopRuntimeRequest = typeof DesktopRuntimeRequest.Type;
+export const DesktopRuntimeReport = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("desktopRuntimeReport"),
+  requestId: TrimmedNonEmptyString,
+  settings: Schema.optionalKey(DesktopBackgroundSettingsSchema),
+  error: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type DesktopRuntimeReport = typeof DesktopRuntimeReport.Type;
+export class DesktopRuntimeError extends Schema.TaggedError<DesktopRuntimeError>()(
+  "DesktopRuntimeError",
+  { reason: Schema.String },
+) {}
+
 export const DesktopHostTelemetryMessage = Schema.Union([
+  DesktopRuntimeReport,
   DesktopHostTelemetryHello,
   DesktopHostTelemetrySnapshot,
   DesktopUpdateStatusReport,
@@ -356,6 +386,7 @@ export const DesktopTelemetryCancelDesktopUpdate = Schema.Struct({
 export type DesktopTelemetryCancelDesktopUpdate = typeof DesktopTelemetryCancelDesktopUpdate.Type;
 
 export const DesktopTelemetryControlMessage = Schema.Union([
+  DesktopRuntimeRequest,
   DesktopTelemetrySetDiagnosticsDemand,
   DesktopTelemetrySetHostPowerIntervals,
   DesktopTelemetryRequestDesktopUpdate,

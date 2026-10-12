@@ -487,7 +487,12 @@
       "types": "./src/questionReview.ts",
       "import": "./src/questionReview.ts"
     },
-    "./proposedPlan": "./src/proposedPlan.ts"
+    "./proposedPlan": "./src/proposedPlan.ts",
+    "./personalReleaseAssets": "./src/personalReleaseAssets.ts",
+    "./listenPortConflict": {
+      "types": "./src/listenPortConflict.ts",
+      "import": "./src/listenPortConflict.ts"
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

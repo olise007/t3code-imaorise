@@ -1,4 +1,6 @@
 import {
+  DesktopRuntimeRequestInput,
+  DesktopBackgroundSettingsSchema,
   BackgroundActivityProfile,
   BackgroundActivityProfileSelection,
   ExecutionEnvironmentDescriptor,
@@ -7,6 +9,7 @@ import {
   ServerSettingsPatch,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import * as DesktopRuntimeManagement from "../../../desktopUpdate/DesktopRuntimeManagement.ts";
 import { Tool, Toolkit } from "effect/ai";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
@@ -30,6 +33,7 @@ const shared = {
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
   dependencies: [
+    DesktopRuntimeManagement.DesktopRuntimeManagement,
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     ServerEnvironment.ServerEnvironment,
@@ -64,4 +68,15 @@ const EnvironmentPreferencesTool = Tool.make("t3_environment_preferences_update"
   }),
   success: Schema.Struct(PreferenceFields),
 }).annotate(Tool.Destructive, true);
-export const EnvironmentToolkit = Toolkit.make(EnvironmentReadTool, EnvironmentPreferencesTool);
+const EnvironmentRuntimeTool = Tool.make("t3_environment_background_server", {
+  ...shared,
+  description:
+    "Manage this desktop host's WSL background server and persistence preferences. Desktop must be running; connect to its native host environment. Stop interrupts that WSL environment's agents/tools. Requires environment write authorization.",
+  parameters: DesktopRuntimeRequestInput,
+  success: DesktopBackgroundSettingsSchema,
+}).annotate(Tool.Destructive, true);
+export const EnvironmentToolkit = Toolkit.make(
+  EnvironmentReadTool,
+  EnvironmentPreferencesTool,
+  EnvironmentRuntimeTool,
+);

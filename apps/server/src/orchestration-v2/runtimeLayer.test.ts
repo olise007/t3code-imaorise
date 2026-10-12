@@ -3333,7 +3333,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       }),
   );
 
-  it.effect("rejects settling a thread while a run is active", () =>
+  it.effect("rejects settling or closing a thread while a run is active", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const threadId = ThreadId.make("runtime-layer-active-settle-thread");
@@ -3391,11 +3391,66 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
 
       assert.equal(error._tag, "OrchestratorDispatchError");
       assert.equal(error.cause, `Thread ${threadId} is still running. Stop it before settling.`);
+      const archived = yield* orchestrator
+        .dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make("runtime-layer-active-archive"),
+          threadId,
+        })
+        .pipe(Effect.flip);
+      assert.equal(archived._tag, "OrchestratorDispatchError");
+      assert.equal(archived.cause, `Thread ${threadId} is still running. Stop it before closing.`);
       const projection = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(projection.runs[0]?.status, "starting");
       assert.isNull(projection.thread.settledOverride);
       assert.isNull(projection.thread.settledAt);
       assert.isNotNull(projection.thread.unsettledAt);
+      const events = yield* EventSink.EventSinkV2;
+      const run = projection.runs[0]!;
+      const now = yield* DateTime.now;
+      yield* events.write({
+        commandId: CommandId.make("background-work-seed"),
+        events: [
+          {
+            id: EventId.make("background-root-completed"),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...run, status: "completed", completedAt: now },
+          },
+          {
+            id: EventId.make("background-command-running"),
+            type: "turn-item.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make("owned-background-command"),
+              type: "command_execution",
+              threadId,
+              runId: run.id,
+              nodeId: run.rootNodeId,
+              providerThreadId: run.providerThreadId,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 10,
+              status: "running",
+              title: "Background build",
+              input: "owned-test-build",
+              startedAt: now,
+              completedAt: null,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+      for (const type of ["thread.archive", "thread.settle"] as const) {
+        const blocked = yield* orchestrator
+          .dispatch({ type, commandId: CommandId.make(`background:${type}`), threadId })
+          .pipe(Effect.flip);
+        assert.match(String(blocked.cause), /background work running/);
+      }
+      assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.archivedAt);
     }),
   );
 
@@ -3646,6 +3701,21 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.isDefined(activeRun);
       assert.isDefined(queuedRun);
 
+      const blocked = yield* orchestrator
+        .dispatch({
+          type: "thread.archive",
+          commandId: CommandId.make("runtime-layer-archive-queued-blocked"),
+          threadId,
+        })
+        .pipe(Effect.flip);
+      assert.match(String(blocked.cause), /still running/);
+      yield* orchestrator.dispatch({
+        type: "run.interrupt",
+        commandId: CommandId.make("runtime-layer-archive-queued-stop"),
+        threadId,
+        runId: activeRun.id,
+        holdQueue: true,
+      });
       yield* orchestrator.dispatch({
         type: "thread.archive",
         commandId: CommandId.make("runtime-layer-archive-queued-archive"),

@@ -130,6 +130,14 @@ packages live in GitHub Releases. All jobs build the reservation's source revisi
 only generated package version metadata is aligned during packaging. The Windows
 installer embeds the Linux runtime built by the same run. Windows remains unsigned.
 
+The release target defaults to `auto`, comparing each surface against its last
+published revision in the selected channel. Mobile changes select Android;
+desktop, server, and web changes select desktop; shared inputs select both.
+Documentation changes select neither. Use `android`, `desktop`, or `all` to
+override this decision. Android-only releases retain the APK, update manifest,
+checksums, and build evidence; desktop releases require the Windows installer
+and matching Linux runtime. Each updater skips releases without its assets.
+
 Repository secrets are `IMAORISE_ANDROID_KEYSTORE_BASE64` and
 `IMAORISE_ANDROID_KEYSTORE_PASSWORD`, copied from the existing private signing key.
 The `personal-release` and `personal-stable` environments accept only `imaorise`.
@@ -161,6 +169,34 @@ published beta tag in `tested_beta` and rebuilds its pinned source revision afte
 approval. Personal versions start at `2.0.1-beta.<sequence>` / `2.0.1`, advancing
 the beta patch after Stable. Draft reservations hold Android version codes; never
 replace them on reruns or overwrite a published release.
+
+## Background work and tray
+
+Settings → Connections contains **Keep agents running when T3 closes** for the
+selected WSL distro, enabled by default. Start/Stop background server manages
+only the personal owned runtime. Stop ends its agents and tools. Changing the
+preference takes effect on the next actual exit; it does not restart current work.
+Remote clients with Maintain environment permission can change this preference.
+
+On Windows, Close to system tray defaults on; Minimize to system tray defaults
+off. Tray click restores the window. **Exit** respects the WSL preference;
+**Exit and stop servers** stops owned environments. Native Windows agents stop
+when Electron exits. WSL work survives Desktop exit/restart while WSL is running,
+but cannot survive PC shutdown, WSL shutdown, or server failure.
+
+A live owned WSL runtime retains its version and port. Compatible Desktop updates
+reconnect to it without starting duplicate work. An incompatible runtime requires
+an explicit Stop and Start. Runtime metadata and the bootstrap credential stay
+private in the personal profile; do not copy them into release evidence.
+
+## Commit message review
+
+In Commit changes, use **Generate commit message** to fill the editable field
+from the selected files. Generation uses a temporary Git index and does not
+commit, stage into the real index, create a branch, or push. Review or edit the
+message, then choose Commit or Commit on new branch. Both require a message.
+Typing your own message remains supported. A generation error preserves it;
+changing files or editing while generation runs discards the obsolete result.
 
 ## Isolation and acceptance
 

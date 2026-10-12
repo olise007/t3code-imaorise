@@ -15,13 +15,7 @@ export interface StartupStatus {
 
 export const MAX_PORT_ATTEMPTS = 5;
 
-// A connection error or arbitrary mention of EADDRINUSE is insufficient.
-// Match the listen failure and the exact port assigned to this child.
-export function isAssignedPortConflict(output: string, port: number): boolean {
-  return new RegExp(
-    `listen EADDRINUSE:[^\\r\\n]*address already in use[^\\r\\n]*:${port}(?:\\s|$)`,
-  ).test(output);
-}
+export { isAssignedPortConflict } from "@t3tools/shared/listenPortConflict";
 
 export function appendStartupOutput(tail: string, chunk: string): string {
   return (tail + chunk).slice(-4096);

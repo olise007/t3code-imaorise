@@ -2588,11 +2588,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
-    if (command.type === "thread.settle") {
+    if (command.type === "thread.settle" || command.type === "thread.archive") {
       const projection = yield* loadProjectionForCommand(
         command,
-        ["runs", "runtimeRequests", "messages"],
-        { turnItemTypes: [], messageRoles: ["user"] },
+        ["runs", "runtimeRequests", "messages", "providerThreads", "turnItems"],
+        {
+          turnItemTypes: ["command_execution", "dynamic_tool", "subagent"],
+          messageRoles: ["user"],
+        },
       );
       // Queued notification and delegated-completion runs only wake the agent.
       // They are not user messages and are hidden from the queue UI, so they
@@ -2622,13 +2625,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         (request) => request.kind !== "user_input" || request.responseCapability.type !== "message",
       );
       // The reason is shown to the user, so it names what to clear first.
+      const backgroundWork = derivePendingBackgroundWork({
+        latestRun: [...projection.runs].sort((a, b) => b.ordinal - a.ordinal)[0],
+        providerThreads: projection.providerThreads,
+        // Preparation is already covered by the active-run guard, not an external tool.
+        turnItems: projection.turnItems.filter(
+          (item) =>
+            !(
+              item.type === "command_execution" &&
+              item.input === WORKSPACE_PREPARATION_INPUT &&
+              item.providerTurnId === null &&
+              item.nativeItemRef === null
+            ),
+        ),
+        activeProviderThreadId: projection.thread.activeProviderThreadId,
+        runs: projection.runs,
+      });
+      const action = command.type === "thread.archive" ? "closing" : "settling";
       const blocker = blockingRequestExists
-        ? "is waiting on an approval or question. Answer it before settling."
+        ? `is waiting on an approval or question. Answer it before ${action}.`
         : runningRunExists
-          ? "is still running. Stop it before settling."
-          : queuedMessageExists
-            ? "has a queued message. Send it or remove it from the queue before settling."
-            : null;
+          ? `is still running. Stop it before ${action}.`
+          : backgroundWork.length > 0
+            ? `has background work running. Stop it before ${action}.`
+            : queuedMessageExists && command.type === "thread.settle"
+              ? "has a queued message. Send it or remove it from the queue before settling."
+              : null;
       if (blocker !== null) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -2637,35 +2659,36 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
 
-      // Message-capable async questions do not keep provider callbacks alive.
-      // Resolve them in the settle transaction so a settled thread never has
-      // an actionable question attached to it.
-      for (const request of pendingRequests) {
-        yield* dispatchRuntimeRequestRespond(
-          {
-            type: "runtime-request.respond",
-            commandId: command.commandId,
-            threadId: command.threadId,
-            requestId: request.id,
-            decision: "cancel",
-          },
-          events,
-          effects,
-        );
-      }
-      for (const run of automaticQueuedRuns) {
-        yield* dispatchQueuedRunCancel(
-          {
-            type: "queued-run.cancel",
-            commandId: command.commandId,
-            threadId: command.threadId,
-            runId: run.id,
-          },
-          events,
-        );
+      if (command.type === "thread.settle") {
+        // Message-capable async questions do not keep provider callbacks alive.
+        // Resolve them in the settle transaction so a settled thread never has
+        // an actionable question attached to it.
+        for (const request of pendingRequests) {
+          yield* dispatchRuntimeRequestRespond(
+            {
+              type: "runtime-request.respond",
+              commandId: command.commandId,
+              threadId: command.threadId,
+              requestId: request.id,
+              decision: "cancel",
+            },
+            events,
+            effects,
+          );
+        }
+        for (const run of automaticQueuedRuns) {
+          yield* dispatchQueuedRunCancel(
+            {
+              type: "queued-run.cancel",
+              commandId: command.commandId,
+              threadId: command.threadId,
+              runId: run.id,
+            },
+            events,
+          );
+        }
       }
     }
-
     const needsProviderState =
       command.type === "thread.runtime-mode.set" ||
       command.type === "thread.model-selection.set" ||

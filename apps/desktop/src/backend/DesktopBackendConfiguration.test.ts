@@ -476,12 +476,15 @@ describe("DesktopBackendConfiguration", () => {
             "env",
             `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${resolvedPath}`,
             `${linuxAppRoot}/t3`,
+            "desktop-runtime",
+            "attach",
+            "production",
             "--bootstrap-fd",
             "0",
           ]);
           assert.notInclude(config.args, "/usr/bin/node");
           assert.equal(config.wslRuntimeId, `sha256-${archiveHash}`);
-          assert.equal(legacyCleanupCount, 1);
+          assert.equal(legacyCleanupCount, 0);
           assert.isTrue(Option.isNone(config.preflightFailure));
         }),
     );
@@ -727,6 +730,9 @@ describe("DesktopBackendConfiguration", () => {
           "PATH=/home/test user's/.nvm/versions/node/v22.0.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/test user/bin:/opt/test's tools/bin:/usr/bin:/bin",
           nodePath,
           linuxEntryPath,
+          "desktop-runtime",
+          "attach",
+          `dev_${Buffer.from(new URL(devServerUrl).origin).toString("hex")}`,
           "--bootstrap-fd",
           "0",
           "--dev-url",
@@ -913,7 +919,10 @@ describe("DesktopBackendConfiguration", () => {
       const layerFailingFileSystem = Layer.succeed(
         FileSystem.FileSystem,
         FileSystem.makeNoop({
-          readFileString: () => Effect.fail(cause),
+          readFileString: (filePath) =>
+            filePath === settingsPath ? Effect.fail(cause) : fileSystem.readFileString(filePath),
+          makeDirectory: fileSystem.makeDirectory,
+          writeFileString: fileSystem.writeFileString,
         }),
       );
 

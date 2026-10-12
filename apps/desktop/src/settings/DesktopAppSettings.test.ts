@@ -173,6 +173,9 @@ describe("DesktopSettings", () => {
         updateChannelConfiguredByUser: false,
         wslBackendEnabled: false,
         wslOnly: false,
+        closeToTray: true,
+        minimizeToTray: false,
+        wslBackgroundAgents: {},
         wslDistro: null,
       } satisfies DesktopAppSettings.DesktopSettings,
     );
@@ -205,6 +208,9 @@ describe("DesktopSettings", () => {
           updateChannelConfiguredByUser: true,
           wslBackendEnabled: false,
           wslOnly: false,
+          closeToTray: true,
+          minimizeToTray: false,
+          wslBackgroundAgents: {},
           wslDistro: null,
         } satisfies DesktopAppSettings.DesktopSettings);
 
@@ -314,6 +320,9 @@ describe("DesktopSettings", () => {
           updateChannelConfiguredByUser: false,
           wslBackendEnabled: false,
           wslOnly: false,
+          closeToTray: true,
+          minimizeToTray: false,
+          wslBackgroundAgents: {},
           wslDistro: null,
         } satisfies DesktopAppSettings.DesktopSettings);
       }),
@@ -372,6 +381,9 @@ describe("DesktopSettings", () => {
             updateChannelConfiguredByUser: true,
             wslBackendEnabled: false,
             wslOnly: false,
+            closeToTray: true,
+            minimizeToTray: false,
+            wslBackgroundAgents: {},
             wslDistro: null,
           } satisfies DesktopAppSettings.DesktopSettings);
         }),
@@ -450,6 +462,9 @@ describe("DesktopSettings", () => {
           updateChannelConfiguredByUser: false,
           wslBackendEnabled: false,
           wslOnly: false,
+          closeToTray: true,
+          minimizeToTray: false,
+          wslBackgroundAgents: {},
           wslDistro: null,
         } satisfies DesktopAppSettings.DesktopSettings);
       }),
@@ -480,6 +495,9 @@ describe("DesktopSettings", () => {
           updateChannelConfiguredByUser: true,
           wslBackendEnabled: false,
           wslOnly: false,
+          closeToTray: true,
+          minimizeToTray: false,
+          wslBackgroundAgents: {},
           wslDistro: null,
         } satisfies DesktopAppSettings.DesktopSettings);
       }),
@@ -510,6 +528,9 @@ describe("DesktopSettings", () => {
           updateChannelConfiguredByUser: false,
           wslBackendEnabled: false,
           wslOnly: false,
+          closeToTray: true,
+          minimizeToTray: false,
+          wslBackgroundAgents: {},
           wslDistro: null,
         } satisfies DesktopAppSettings.DesktopSettings);
       }),

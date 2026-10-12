@@ -49,6 +49,8 @@ import * as DesktopLocalEnvironmentAuth from "./backend/DesktopLocalEnvironmentA
 import * as DesktopNetworkInterfaces from "./backend/DesktopNetworkInterfaces.ts";
 import * as DesktopEnvironment from "./app/DesktopEnvironment.ts";
 import * as DesktopLifecycle from "./app/DesktopLifecycle.ts";
+import * as DesktopTray from "./window/DesktopTray.ts";
+import * as DesktopBackgroundRuntime from "./wsl/DesktopBackgroundRuntime.ts";
 import * as DesktopLinuxUrlHandler from "./app/DesktopLinuxUrlHandler.ts";
 import * as DesktopShutdown from "./app/DesktopShutdown.ts";
 import * as DesktopObservability from "./app/DesktopObservability.ts";
@@ -208,6 +210,9 @@ const layerDesktopBackend = DesktopBackendPool.layer.pipe(
 const layerDesktopWslBackend = DesktopWslBackend.layer.pipe(
   Layer.provideMerge(DesktopWslPairing.layer.pipe(Layer.provideMerge(layerDesktopBackend))),
 );
+const layerDesktopBackground = DesktopBackgroundRuntime.layer.pipe(
+  Layer.provideMerge(layerDesktopWslBackend),
+);
 
 const layerDesktopLocalEnvironmentAuth = DesktopLocalEnvironmentAuth.layer.pipe(
   Layer.provideMerge(layerDesktopBackend),
@@ -215,6 +220,7 @@ const layerDesktopLocalEnvironmentAuth = DesktopLocalEnvironmentAuth.layer.pipe(
 
 const layerDesktopApplication = Layer.mergeAll(
   DesktopLifecycle.layer,
+  DesktopTray.layer,
   layerDesktopAppActivation,
   DesktopWebLinks.layer,
   DesktopApplicationMenu.layer,
@@ -225,7 +231,7 @@ const layerDesktopApplication = Layer.mergeAll(
 ).pipe(
   Layer.provideMerge(layerDesktopSnapShot),
   Layer.provideMerge(DesktopUpdates.layer),
-  Layer.provideMerge(layerDesktopWslBackend),
+  Layer.provideMerge(layerDesktopBackground),
   Layer.provideMerge(layerDesktopLocalEnvironmentAuth),
 );
 

@@ -12,10 +12,11 @@ on:
         description: Publish after reviewing acceptance evidence; false keeps a draft
         type: boolean
         default: false
-      build_android:
-        description: Build Android too; disable for desktop-only releases
-        type: boolean
-        default: true
+      target:
+        description: Select affected release surfaces automatically or override
+        type: choice
+        options: [auto, android, desktop, all]
+        default: auto
       tested_beta:
         description: Published tested beta tag required for Stable
         type: string
@@ -37,8 +38,13 @@ jobs:
       version_code: ${{ steps.reserve.outputs.version_code }}
       tag: ${{ steps.reserve.outputs.tag }}
       channel: ${{ steps.reserve.outputs.channel }}
+      android: ${{ steps.reserve.outputs.android }}
+      desktop: ${{ steps.reserve.outputs.desktop }}
+      has_targets: ${{ steps.reserve.outputs.has_targets }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
@@ -47,8 +53,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_CHANNEL: ${{ inputs.channel || 'beta' }}
           TESTED_BETA: ${{ inputs.tested_beta }}
+          RELEASE_TARGET: ${{ inputs.target || 'auto' }}
         run: node scripts/imaorise/release-reservation.mjs
   linux:
+    if: needs.reserve.outputs.desktop == 'true'
     needs: reserve
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -66,6 +74,9 @@ jobs:
       - run: vp install --frozen-lockfile
       - name: Focused release checks
         run: vp test run apps/mobile/src/features/threads/plan-action-state.test.ts apps/mobile/src/state/legacy-plan-mode.test.ts apps/web/src/connection/platformPairing.test.ts apps/desktop/src/wsl/DesktopWslPairing.test.ts apps/web/src/rpc/environmentAccess.test.ts apps/web/src/proposedPlan.test.ts apps/web/src/pendingUserInput.test.ts apps/web/src/components/chat/ComposerPendingUserInputPanel.test.tsx apps/web/src/components/chat/ComposerPendingUserInputPanel.permissions.test.tsx apps/web/src/components/chat/ComposerPrimaryActions.test.tsx packages/shared/src/questionReview.test.ts apps/mobile/src/features/updates/personal-apk-manifest.test.ts apps/mobile/src/features/updates/personal-apk-updates.test.ts apps/desktop/src/settings/DesktopAppSettings.test.ts
+      - name: Background runtime and commit preview checks
+        run: |
+          vp test run apps/server/src/desktopRuntime.test.ts apps/server/src/desktopRuntime.integration.test.ts apps/server/src/desktopUpdate/DesktopRuntimeManagement.test.ts apps/desktop/src/window/trayWindowPolicy.test.ts apps/desktop/src/wsl/backgroundRuntimePolicy.test.ts apps/desktop/src/updates/personalDesktopRelease.test.ts scripts/imaorise/release-targets.test.ts scripts/imaorise/release-reservation.test.ts scripts/imaorise/publish-release.test.ts packages/shared/src/personalReleaseAssets.test.ts apps/web/src/components/GitActionsControl.test.ts apps/server/src/git/GitManager.test.ts apps/server/src/orchestration-v2/runtimeLayer.test.ts
       - name: Backend startup recovery checks
         run: |
           vp test run apps/desktop/src/backend/DesktopBackendManager.test.ts apps/desktop/src/backend/startupRecovery.test.ts apps/desktop/src/backend/DesktopBackendConfiguration.test.ts apps/desktop/src/backend/DesktopBackendPool.test.ts apps/desktop/src/wsl/DesktopWslBackend.test.ts apps/desktop/src/wsl/DesktopWslEnvironment.test.ts apps/desktop/src/ipc/methods/window.test.ts
@@ -102,6 +113,7 @@ jobs:
           retention-days: 1
           if-no-files-found: error
   windows:
+    if: needs.reserve.outputs.desktop == 'true'
     needs: [reserve, linux]
     runs-on: windows-latest
     timeout-minutes: 90
@@ -142,7 +154,7 @@ jobs:
           retention-days: 1
           if-no-files-found: error
   android:
-    if: github.event_name != 'workflow_dispatch' || inputs.build_android
+    if: needs.reserve.outputs.android == 'true'
     needs: reserve
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -197,7 +209,7 @@ jobs:
           retention-days: 1
           if-no-files-found: error
   publish:
-    if: always() && needs.reserve.result == 'success' && needs.linux.result == 'success' && needs.windows.result == 'success' && (needs.android.result == 'success' || needs.android.result == 'skipped')
+    if: always() && needs.reserve.result == 'success' && needs.reserve.outputs.has_targets == 'true' && (needs.reserve.outputs.desktop != 'true' || (needs.linux.result == 'success' && needs.windows.result == 'success')) && (needs.reserve.outputs.android != 'true' || needs.android.result == 'success')
     needs: [reserve, linux, windows, android]
     runs-on: ubuntu-latest
     environment: personal-release
@@ -220,6 +232,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.reserve.outputs.version }}
           RELEASE_CHANNEL: ${{ needs.reserve.outputs.channel }}
           INCLUDE_ANDROID: ${{ needs.android.result == 'success' }}
+          INCLUDE_DESKTOP: ${{ needs.windows.result == 'success' }}
           PUBLISH_RELEASE: ${{ github.event_name == 'push' || inputs.publish }}
           VERSION_CODE: ${{ needs.reserve.outputs.version_code }}
           SOURCE_REVISION: ${{ needs.reserve.outputs.revision }}

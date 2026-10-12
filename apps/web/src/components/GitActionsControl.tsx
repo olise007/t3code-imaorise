@@ -111,6 +111,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
 import { threadEnvironment } from "~/state/threads";
+import { gitEnvironment } from "~/state/git";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsActionManager, vcsEnvironment } from "~/state/vcs";
 import { randomUUID } from "~/lib/utils";
@@ -296,7 +297,7 @@ function getMenuActionDisabledReason({
 
 const COMMIT_DIALOG_TITLE = "Commit changes";
 const COMMIT_DIALOG_DESCRIPTION =
-  "Review and confirm your commit. Leave the message blank to auto-generate one.";
+  "Generate or write a message, review it, then confirm your commit.";
 
 function GitActionItemIcon({
   icon,
@@ -1049,6 +1050,18 @@ export default function GitActionsControl({
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const [isCommitDialogOpen, setIsCommitDialogOpen] = useState(false);
   const [dialogCommitMessage, setDialogCommitMessage] = useState("");
+  const [isGeneratingCommitMessage, setIsGeneratingCommitMessage] = useState(false);
+  const [commitMessageError, setCommitMessageError] = useState<string | null>(null);
+  const canGenerateCommitMessage = useAtomValue(
+    gitEnvironment.generateCommitMessage.permissionAtom(activeEnvironmentId),
+  );
+  const generateCommitMessage = useAtomCommand(gitEnvironment.generateCommitMessage, {
+    reportFailure: false,
+  });
+  const previewRequest = useRef(0);
+  const previewPending = useRef(false);
+  const commitPreviewState = useRef({ key: "", message: "", open: false });
+
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
   const [isEditingFiles, setIsEditingFiles] = useState(false);
   const [isPublishDialogOpen, setIsPublishDialogOpen] = useState(false);
@@ -1160,6 +1173,63 @@ export default function GitActionsControl({
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
   const allSelected = excludedFiles.size === 0;
   const noneSelected = selectedFiles.length === 0;
+  const commitPreviewKey = JSON.stringify([
+    activeEnvironmentId,
+    gitCwd,
+    selectedFiles,
+    gitStatusQuery.dataUpdatedAt,
+  ]);
+  useEffect(() => {
+    if (
+      commitPreviewState.current.key !== commitPreviewKey ||
+      commitPreviewState.current.open !== isCommitDialogOpen
+    )
+      previewRequest.current++;
+    commitPreviewState.current = {
+      key: commitPreviewKey,
+      message: dialogCommitMessage,
+      open: isCommitDialogOpen,
+    };
+  }, [commitPreviewKey, dialogCommitMessage, isCommitDialogOpen, commitPreviewState]);
+  const generateDialogCommitMessage = async () => {
+    if (
+      !activeEnvironmentId ||
+      !gitCwd ||
+      noneSelected ||
+      previewPending.current ||
+      !canGenerateCommitMessage
+    )
+      return;
+    previewPending.current = true;
+    const snapshot = commitPreviewState.current;
+    const request = ++previewRequest.current;
+    setIsGeneratingCommitMessage(true);
+    setCommitMessageError(null);
+    try {
+      const result = await generateCommitMessage({
+        environmentId: activeEnvironmentId,
+        input: {
+          cwd: gitCwd,
+          filePaths: selectedFiles.map((file) => file.path),
+          ...(activeServerThread ? { threadId: activeServerThread.id } : {}),
+        },
+      });
+      const current = commitPreviewState.current;
+      if (
+        request !== previewRequest.current ||
+        !current.open ||
+        current.key !== snapshot.key ||
+        current.message !== snapshot.message
+      )
+        return;
+      if (result._tag === "Success") setDialogCommitMessage(result.value.message);
+      else if (!isAtomCommandInterrupted(result))
+        setCommitMessageError(String(squashAtomCommandFailure(result)));
+    } finally {
+      previewPending.current = false;
+      setIsGeneratingCommitMessage(false);
+    }
+  };
 
   const initAction = useVcsInitAction(sourceControlScope);
   const runImmediateGitAction = useGitStackedAction(sourceControlScope);
@@ -1446,7 +1516,9 @@ export default function GitActionsControl({
   const runDialogActionOnNewBranch = () => {
     if (!canChangeThreadBranch || !isCommitDialogOpen) return;
     const commitMessage = dialogCommitMessage.trim();
+    if (!commitMessage || isGeneratingCommitMessage || noneSelected) return;
 
+    previewRequest.current++;
     setIsCommitDialogOpen(false);
     setDialogCommitMessage("");
     setExcludedFiles(new Set());
@@ -1540,12 +1612,15 @@ export default function GitActionsControl({
     }
     setExcludedFiles(new Set());
     setIsEditingFiles(false);
+    setCommitMessageError(null);
     setIsCommitDialogOpen(true);
   };
 
   const runDialogAction = () => {
     if (!isCommitDialogOpen) return;
     const commitMessage = dialogCommitMessage.trim();
+    if (!commitMessage || isGeneratingCommitMessage || noneSelected) return;
+    previewRequest.current++;
     setIsCommitDialogOpen(false);
     setDialogCommitMessage("");
     setExcludedFiles(new Set());
@@ -1920,6 +1995,7 @@ export default function GitActionsControl({
         open={isCommitDialogOpen}
         onOpenChange={(open) => {
           if (!open) {
+            previewRequest.current++;
             setIsCommitDialogOpen(false);
             setDialogCommitMessage("");
             setExcludedFiles(new Set());
@@ -2051,13 +2127,32 @@ export default function GitActionsControl({
               </div>
             </div>
             <div className="space-y-1">
-              <p className="text-sm font-medium">Commit message (optional)</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium">Commit message</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!canGenerateCommitMessage || noneSelected || isGeneratingCommitMessage}
+                  onClick={() => void generateDialogCommitMessage()}
+                >
+                  {isGeneratingCommitMessage ? "Generating…" : "Generate commit message"}
+                </Button>
+              </div>
               <Textarea
                 value={dialogCommitMessage}
-                onChange={(event) => setDialogCommitMessage(event.target.value)}
-                placeholder="Leave empty to auto-generate"
+                onChange={(event) => {
+                  previewRequest.current++;
+                  setDialogCommitMessage(event.target.value);
+                }}
+                placeholder="Write a message or generate one to review"
+                aria-label="Commit message"
                 size="sm"
               />
+              {commitMessageError && (
+                <p role="alert" className="text-sm text-destructive">
+                  {commitMessageError}
+                </p>
+              )}
             </div>
           </DialogPanel>
           <DialogFooter variant="bare">
@@ -2065,6 +2160,7 @@ export default function GitActionsControl({
               variant="outline"
               size="sm"
               onClick={() => {
+                previewRequest.current++;
                 setIsCommitDialogOpen(false);
                 setDialogCommitMessage("");
                 setExcludedFiles(new Set());
@@ -2076,14 +2172,24 @@ export default function GitActionsControl({
             <Button
               variant="outline"
               size="sm"
-              disabled={!canChangeThreadBranch || noneSelected}
+              disabled={
+                !canChangeThreadBranch ||
+                noneSelected ||
+                isGeneratingCommitMessage ||
+                !dialogCommitMessage.trim()
+              }
               onClick={runDialogActionOnNewBranch}
             >
               Commit on new branch
             </Button>
             <Button
               size="sm"
-              disabled={!canWriteSourceControl || noneSelected}
+              disabled={
+                !canWriteSourceControl ||
+                noneSelected ||
+                isGeneratingCommitMessage ||
+                !dialogCommitMessage.trim()
+              }
               onClick={runDialogAction}
             >
               Commit

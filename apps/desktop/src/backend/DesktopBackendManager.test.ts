@@ -169,6 +169,8 @@ function makeTestInstance(input: MakeInstanceInput) {
       forInstance: () => Effect.succeed(stubLog),
     } satisfies DesktopObservability.DesktopBackendOutputLogFactory["Service"]),
     Layer.succeed(DesktopTelemetryPublisher.DesktopTelemetryPublisher, {
+      runtimeRequests: Stream.empty,
+      publishRuntimeReport: () => Effect.void,
       latest: Effect.succeedNone,
       changes: Stream.empty,
       encoded: input.desktopTelemetryStream ?? Stream.empty,
@@ -202,38 +204,70 @@ function makeTestInstance(input: MakeInstanceInput) {
 }
 
 describe("DesktopBackendManager", () => {
-  it.effect("blocks a mismatched environment without reallocating its port", () => Effect.scoped(Effect.gen(function* () {
-    const blocked = yield* Deferred.make<void>();
-    let recoveryCalls = 0;
-    const instance = yield* makeTestInstance({
-      spawnerLayer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, ChildProcessSpawner.make(() => Effect.succeed(makeProcess({ exitCode: Effect.never })))),
-      verifyEnvironment: () => Effect.succeed("identity-mismatch" as const),
-      recoverPort: () => Effect.sync(() => { recoveryCalls++; return Option.none(); }),
-      onStartupStatus: (status) => status.category === "identity-mismatch" ? Deferred.succeed(blocked, undefined).pipe(Effect.asVoid) : Effect.void,
-    });
-    yield* instance.start;
-    yield* Deferred.await(blocked);
-    assert.isFalse((yield* instance.snapshot).ready);
-    assert.equal(recoveryCalls, 0);
-    assert.equal((yield* instance.snapshot).startupStatus?.port, 3773);
-  })));
-  it.effect("a quiet living child becomes slow after sixty seconds without changing ports", () => Effect.scoped(Effect.gen(function* () {
-    const launched = yield* Deferred.make<void>();
-    const slow = yield* Deferred.make<void>();
-    let recoveryCalls = 0;
-    const instance = yield* makeTestInstance({
-      httpClientLayer: layerHttpClient(() => Effect.never),
-      spawnerLayer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, ChildProcessSpawner.make(() => Deferred.succeed(launched, undefined).pipe(Effect.as(makeProcess({ exitCode: Effect.never }))))),
-      recoverPort: () => Effect.sync(() => { recoveryCalls++; return Option.none(); }),
-      onStartupStatus: (status) => status.phase === "slow" ? Deferred.succeed(slow, undefined).pipe(Effect.asVoid) : Effect.void,
-    });
-    yield* instance.start;
-    yield* Deferred.await(launched);
-    yield* TestClock.adjust(Duration.seconds(60));
-    yield* Deferred.await(slow);
-    assert.equal(recoveryCalls, 0);
-    assert.isTrue((yield* instance.snapshot).desiredRunning);
-  })).pipe(Effect.provide(TestClock.layer())));
+  it.effect("blocks a mismatched environment without reallocating its port", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const blocked = yield* Deferred.make<void>();
+        let recoveryCalls = 0;
+        const instance = yield* makeTestInstance({
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => Effect.succeed(makeProcess({ exitCode: Effect.never }))),
+          ),
+          verifyEnvironment: () => Effect.succeed("identity-mismatch" as const),
+          recoverPort: () =>
+            Effect.sync(() => {
+              recoveryCalls++;
+              return Option.none();
+            }),
+          onStartupStatus: (status) =>
+            status.category === "identity-mismatch"
+              ? Deferred.succeed(blocked, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        });
+        yield* instance.start;
+        yield* Deferred.await(blocked);
+        assert.isFalse((yield* instance.snapshot).ready);
+        assert.equal(recoveryCalls, 0);
+        assert.equal((yield* instance.snapshot).startupStatus?.port, 3773);
+      }),
+    ),
+  );
+  it.effect("a quiet living child becomes slow after sixty seconds without changing ports", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const launched = yield* Deferred.make<void>();
+        const slow = yield* Deferred.make<void>();
+        let recoveryCalls = 0;
+        const instance = yield* makeTestInstance({
+          httpClientLayer: layerHttpClient(() => Effect.never),
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Deferred.succeed(launched, undefined).pipe(
+                Effect.as(makeProcess({ exitCode: Effect.never })),
+              ),
+            ),
+          ),
+          recoverPort: () =>
+            Effect.sync(() => {
+              recoveryCalls++;
+              return Option.none();
+            }),
+          onStartupStatus: (status) =>
+            status.phase === "slow"
+              ? Deferred.succeed(slow, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        });
+        yield* instance.start;
+        yield* Deferred.await(launched);
+        yield* TestClock.adjust(Duration.seconds(60));
+        yield* Deferred.await(slow);
+        assert.equal(recoveryCalls, 0);
+        assert.isTrue((yield* instance.snapshot).desiredRunning);
+      }),
+    ).pipe(Effect.provide(TestClock.layer())),
+  );
   it.live("recovers a real child bind failure without touching the occupied listener", () =>
     Effect.gen(function* () {
       const occupied = NodeNet.createServer((socket) => socket.destroy());

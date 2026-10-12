@@ -1,3 +1,4 @@
+import * as DesktopRuntimeManagement from "../../../desktopUpdate/DesktopRuntimeManagement.ts";
 import { OrchestratorMcpFailure, type ServerSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
@@ -41,6 +42,14 @@ const access = Effect.gen(function* () {
   return { ...context, descriptor, settings: yield* Settings.ServerSettingsService };
 });
 export const layer = McpToolAccess.toLayer(EnvironmentToolkit, {
+  t3_environment_background_server: McpToolAccess.writesEnvironment((input, check) =>
+    Effect.gen(function* () {
+      yield* check;
+      yield* access;
+      const runtime = yield* DesktopRuntimeManagement.DesktopRuntimeManagement;
+      return yield* runtime.run(input).pipe(Effect.mapError(unavailable));
+    }),
+  ),
   t3_environment_read: McpToolAccess.reads(() =>
     Effect.gen(function* () {
       const { descriptor, settings } = yield* access;

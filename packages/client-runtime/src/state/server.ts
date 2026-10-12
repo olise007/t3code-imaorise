@@ -983,6 +983,11 @@ export function createServerEnvironmentAtoms<R, E>(
 
   return {
     configValueAtom,
+    manageDesktopRuntime: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:manage-desktop-runtime",
+      tag: WS_METHODS.serverManageDesktopRuntime,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",
       tag: WS_METHODS.serverRunStorageCleanup,

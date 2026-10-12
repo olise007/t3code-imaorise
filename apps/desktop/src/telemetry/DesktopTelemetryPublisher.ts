@@ -1,5 +1,7 @@
 import {
   DesktopHostTelemetryMessage,
+  type DesktopRuntimeRequest,
+  type DesktopRuntimeReport,
   type DesktopHostTelemetrySnapshot,
   type DesktopTelemetryControlMessage,
   type DesktopTelemetryCancelDesktopUpdate,
@@ -61,6 +63,8 @@ interface HostPowerIntervals {
 export class DesktopTelemetryPublisher extends Context.Service<
   DesktopTelemetryPublisher,
   {
+    readonly runtimeRequests: Stream.Stream<DesktopRuntimeRequest>;
+    readonly publishRuntimeReport: (report: DesktopRuntimeReport) => Effect.Effect<void>;
     readonly latest: Effect.Effect<Option.Option<DesktopHostTelemetrySnapshot>>;
     readonly changes: Stream.Stream<DesktopHostTelemetrySnapshot>;
     readonly encoded: Stream.Stream<Uint8Array>;
@@ -176,6 +180,8 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const sequence = yield* Ref.make(0);
   const latestUpdateReport = yield* Ref.make(Option.none<DesktopUpdateStatusReport>());
   const updateReportChanges = yield* PubSub.sliding<DesktopUpdateStatusReport>(16);
+  const runtimeRequests = yield* Queue.unbounded<DesktopRuntimeRequest>();
+  const runtimeReports = yield* PubSub.sliding<DesktopRuntimeReport>(32);
   const updateRequestQueue = yield* Queue.unbounded<DesktopTelemetryRequestDesktopUpdate>();
   const updateCommitQueue = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
   const updateCancellationQueue = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
@@ -325,6 +331,8 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     message,
   ) => {
     switch (message.type) {
+      case "desktopRuntimeRequest":
+        return Queue.offer(runtimeRequests, message).pipe(Effect.asVoid);
       case "setDiagnosticsDemand":
         return Ref.modify(diagnosticsDemandSources, (sources) => {
           const previous = sources.size > 0;
@@ -403,7 +411,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
       type: "desktopTelemetryHello",
       electronPid: process.pid,
     } as const),
-    Stream.merge(snapshots, updateReports),
+    Stream.merge(Stream.merge(snapshots, updateReports), Stream.fromPubSub(runtimeReports)),
   ).pipe(Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)));
 
   const publishUpdateReport: DesktopTelemetryPublisher["Service"]["publishUpdateReport"] = (
@@ -415,6 +423,8 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     );
 
   return DesktopTelemetryPublisher.of({
+    runtimeRequests: Stream.fromQueue(runtimeRequests),
+    publishRuntimeReport: (report) => PubSub.publish(runtimeReports, report).pipe(Effect.asVoid),
     latest: Ref.get(latest),
     changes: Stream.fromPubSub(changes),
     encoded,

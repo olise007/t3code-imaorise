@@ -1,7 +1,7 @@
 import * as NodeOS from "node:os";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { HttpClient } from "effect/http";
-import { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import { ExecutionEnvironmentDescriptor, ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
 
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
@@ -16,6 +16,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import serverPackageJson from "../../../server/package.json" with { type: "json" };
@@ -28,6 +30,18 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
 const decodeEnvironmentDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
+
+const decodeManagedRuntimeInspection = Schema.decodeOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      port: Schema.Int,
+      protocol: Schema.Int,
+      serverProtocol: Schema.optionalKey(Schema.Int),
+      stateDirectory: Schema.optionalKey(Schema.String),
+      healthy: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+);
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedError<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
@@ -457,7 +471,8 @@ const runWslPreflight = Effect.fn("desktop.backendConfiguration.wslPreflight")(f
       // discovery must not require either dependency for runtime readiness.
       const stagedProbe = yield* wslEnv.probeRuntime(runningDistro, runtime.linuxAppRoot);
       if (stagedProbe.ok) {
-        yield* wslServerTree.cleanupLegacy;
+        // Older fallback trees may belong to a detached, version-pinned server.
+        // Installing the archive must not remove that running server's modules.
         return {
           _tag: "Ready",
           runningDistro,
@@ -633,6 +648,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   input: SharedBootstrapInput & {
     readonly port: number;
     readonly distro: string | null;
+    readonly backgroundPreferences?: Readonly<Record<string, boolean>>;
   },
 ): Effect.fn.Return<
   DesktopBackendManager.DesktopBackendStartConfig,
@@ -748,7 +764,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const rendererHost = usesSharedNetworkStack
     ? "127.0.0.1"
     : Option.getOrElse(distroIp, () => "127.0.0.1");
-  const httpBaseUrl = new URL(`http://${rendererHost}:${input.port}`);
+  let port = input.port;
+  const httpBaseUrl = new URL(`http://${rendererHost}:${port}`);
 
   const distroArgs = distroForConfig ? ["-d", distroForConfig] : [];
   const forwardedEnv: Record<string, string> = {};
@@ -835,20 +852,95 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     runtime.kind === "executable"
       ? [runtime.entryPath]
       : [runtime.nodePath, runtime.linuxEntryPath];
+  const runtimeKey = Option.match(environment.devServerUrl, {
+    onNone: () => "production",
+    onSome: (url) => `dev_${Buffer.from(url.origin).toString("hex")}`,
+  });
+  const launcherPrefix = [...distroArgs, "--exec", "env", `PATH=${launchPath}`, ...command];
+  const userHome = Option.isSome(environment.devServerUrl)
+    ? yield* wslEnvironment.getUserHome(distroForConfig)
+    : Option.none<string>();
+  const devHome = Option.map(userHome, (home) => `${home}/.t3-imaorise/desktop-dev/${runtimeKey}`);
+  const spawner = yield* Effect.serviceOption(ChildProcessSpawner.ChildProcessSpawner);
+  if (Option.isSome(spawner)) {
+    const previous = yield* Effect.scoped(
+      Effect.gen(function* () {
+        const handle = yield* spawner.value.spawn(
+          ChildProcess.make(
+            "wsl.exe",
+            [...launcherPrefix, "desktop-runtime", "inspect", runtimeKey],
+            {
+              env: baseConfig.env,
+              extendEnv: false,
+              cwd: baseConfig.cwd,
+            },
+          ),
+        );
+        const output = yield* Stream.runFold(
+          Stream.decodeText(handle.stdout),
+          () => "",
+          (text, chunk) => text + chunk,
+        );
+        yield* handle.exitCode;
+        return decodeManagedRuntimeInspection(output.trim());
+      }),
+    ).pipe(
+      Effect.timeout("10 seconds"),
+      Effect.orElseSucceed(() => Option.none()),
+    );
+    if (Option.isSome(previous)) {
+      if (
+        previous.value.protocol !== 2 ||
+        previous.value.serverProtocol !== ORCHESTRATION_PROTOCOL_VERSION ||
+        previous.value.healthy === false
+      )
+        return {
+          ...baseConfig,
+          managedStopArgs: [...launcherPrefix, "desktop-runtime", "stop", runtimeKey],
+          managedPolicyArgs: [...launcherPrefix, "desktop-runtime", "policy", runtimeKey],
+          managedInspectArgs: [...launcherPrefix, "desktop-runtime", "inspect", runtimeKey],
+          httpBaseUrl: new URL(`http://${rendererHost}:${port}`),
+          args: [],
+          preflightFailure: Option.some({
+            reason:
+              previous.value.healthy === false
+                ? "Running WSL server is unavailable. Stop it explicitly before restarting."
+                : "Running WSL server is incompatible. Stop it explicitly before restarting.",
+            fatal: false,
+            retryLimit: 0,
+          }),
+        };
+      port = previous.value.port;
+    }
+  }
 
   return {
     ...baseConfig,
+    bootstrap: {
+      ...bootstrap,
+      port,
+      ...(Option.isSome(devHome) ? { t3Home: devHome.value } : {}),
+      desktopRuntimeKeepRunning:
+        input.backgroundPreferences?.[distroForConfig ?? "default"] ?? true,
+    },
+    httpBaseUrl: new URL(`http://${rendererHost}:${port}`),
     args: [
       ...distroArgs,
       "--exec",
       "env",
       `PATH=${launchPath}`,
       ...command,
+      "desktop-runtime",
+      "attach",
+      runtimeKey,
       "--bootstrap-fd",
       "0",
       ...devUrlArgs,
     ],
     preflightFailure: Option.none(),
+    managedStopArgs: [...launcherPrefix, "desktop-runtime", "stop", runtimeKey],
+    managedPolicyArgs: [...launcherPrefix, "desktop-runtime", "policy", runtimeKey],
+    managedInspectArgs: [...launcherPrefix, "desktop-runtime", "inspect", runtimeKey],
     ...(preflight.runtimeId === undefined ? {} : { wslRuntimeId: preflight.runtimeId }),
   } satisfies DesktopBackendManager.DesktopBackendStartConfig;
 });
@@ -876,12 +968,29 @@ export const make = Effect.gen(function* () {
     Option.match(current, {
       onSome: (secret) => Effect.succeed([secret, current] as const),
       onNone: () =>
-        crypto.randomBytes(32).pipe(
-          Effect.map((bytes) => {
-            const secret = Hex.encode(bytes);
+        Effect.gen(function* () {
+          const secretPath = environment.path.join(environment.baseDir, "desktop-bootstrap-secret");
+          const previous = yield* fileSystem.readFileString(secretPath).pipe(
+            Effect.map(Option.some),
+            Effect.catch((cause) =>
+              cause.reason._tag === "NotFound"
+                ? Effect.succeed(Option.none<string>())
+                : Effect.fail(cause),
+            ),
+          );
+          if (Option.isSome(previous)) {
+            if (!/^[a-f0-9]{64}$/.test(previous.value.trim()))
+              return yield* Effect.die(
+                "Invalid persisted desktop runtime identity. Restore it before reconnecting.",
+              );
+            const secret = previous.value.trim();
             return [secret, Option.some(secret)] as const;
-          }),
-        ),
+          }
+          const secret = Hex.encode(yield* crypto.randomBytes(32));
+          yield* fileSystem.makeDirectory(environment.baseDir, { recursive: true });
+          yield* fileSystem.writeFileString(secretPath, secret, { mode: 0o600 });
+          return [secret, Option.some(secret)] as const;
+        }),
     }),
   );
 
@@ -922,7 +1031,13 @@ export const make = Effect.gen(function* () {
       ...shared,
       port: backendExposure.port,
       distro: persistedSettings.wslDistro,
+      backgroundPreferences: persistedSettings.wslBackgroundAgents,
     }).pipe(
+      Effect.tap((config) =>
+        config.bootstrap.port !== backendExposure.port && Option.isNone(config.preflightFailure)
+          ? serverExposure.configureFromSettings({ port: config.bootstrap.port })
+          : Effect.void,
+      ),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
       Effect.provideService(DesktopWslServerTree.DesktopWslServerTree, wslServerTree),
@@ -992,7 +1107,10 @@ export const make = Effect.gen(function* () {
           const stored =
             config.runningDistro !== undefined
               ? yield* (
-                  wslEnvironment.readEnvironmentId?.(config.runningDistro) ?? Effect.succeedNone
+                  wslEnvironment.readEnvironmentId?.(
+                    config.runningDistro,
+                    config.bootstrap.t3Home,
+                  ) ?? Effect.succeedNone
                 )
               : yield* fileSystem
                   .readFileString(
@@ -1059,7 +1177,12 @@ export const make = Effect.gen(function* () {
           const shared = yield* sharedInputs;
           wslPorts.set(distro ?? "default", port);
           return Option.some(
-            yield* resolveWslStartConfig({ ...shared, port, distro: distro ?? null }).pipe(
+            yield* resolveWslStartConfig({
+              ...shared,
+              port,
+              distro: distro ?? null,
+              backgroundPreferences: persisted.wslBackgroundAgents,
+            }).pipe(
               Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
               Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
               Effect.provideService(DesktopWslServerTree.DesktopWslServerTree, wslServerTree),
@@ -1096,7 +1219,11 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const shared = yield* sharedInputs;
         wslPorts.set(input.distro ?? "default", input.port);
-        return yield* resolveWslStartConfig({ ...shared, ...input }).pipe(
+        return yield* resolveWslStartConfig({
+          ...shared,
+          ...input,
+          backgroundPreferences: (yield* settings.get).wslBackgroundAgents,
+        }).pipe(
           Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
           Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
           Effect.provideService(DesktopWslServerTree.DesktopWslServerTree, wslServerTree),

@@ -3068,6 +3068,36 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  it.effect("previews a selected commit message without changing HEAD, branch, or real index", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-commit-preview-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "review this change\n");
+      NodeFS.writeFileSync(NodePath.join(repoDir, "excluded.txt"), "excluded content\n");
+      const before = yield* runGit(repoDir, ["status", "--porcelain"]);
+      const head = yield* runGit(repoDir, ["rev-parse", "HEAD"]);
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: (input) => {
+            expect(input.stagedPatch).toContain("review this change");
+            expect(input.stagedPatch).not.toContain("excluded content");
+            return Effect.succeed({
+              subject: "Improve README",
+              body: "Describe the reviewed change.",
+            });
+          },
+        },
+      });
+      const preview = yield* manager.generateCommitMessage({
+        cwd: repoDir,
+        filePaths: ["README.md"],
+      });
+      expect(preview.message).toBe("Improve README\n\nDescribe the reviewed change.");
+      expect(yield* runGit(repoDir, ["rev-parse", "HEAD"])).toEqual(head);
+      expect(yield* runGit(repoDir, ["status", "--porcelain"])).toEqual(before);
+    }),
+  );
+
   it.effect("creates a commit when working tree is dirty", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

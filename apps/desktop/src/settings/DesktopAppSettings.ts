@@ -55,6 +55,9 @@ export interface DesktopSettings {
   // this requires a desktop restart because the pool's primary spec is
   // chosen once at layer init.
   readonly wslOnly: boolean;
+  readonly closeToTray: boolean;
+  readonly minimizeToTray: boolean;
+  readonly wslBackgroundAgents: Readonly<Record<string, boolean>>;
 }
 
 export interface DesktopSettingsChange {
@@ -93,6 +96,9 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   wslBackendEnabled: false,
   wslDistro: null,
   wslOnly: false,
+  closeToTray: true,
+  minimizeToTray: false,
+  wslBackgroundAgents: {},
 };
 
 const DesktopWindowBoundsDocument = Schema.Struct({
@@ -126,6 +132,9 @@ const DesktopSettingsDocument = Schema.Struct({
   wslMode: Schema.optionalKey(Schema.Literals(["local", "wsl"])),
   wslDistro: Schema.optionalKey(Schema.NullOr(Schema.String)),
   wslOnly: Schema.optionalKey(Schema.Boolean),
+  closeToTray: Schema.optionalKey(Schema.Boolean),
+  minimizeToTray: Schema.optionalKey(Schema.Boolean),
+  wslBackgroundAgents: Schema.optionalKey(Schema.Record(Schema.String, Schema.Boolean)),
 });
 
 type DesktopSettingsDocument = typeof DesktopSettingsDocument.Type;
@@ -199,6 +208,12 @@ export class DesktopAppSettings extends Context.Service<
     readonly setWslOnly: (
       enabled: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setBackgroundSettings: (input: {
+      readonly closeToTray: boolean;
+      readonly minimizeToTray: boolean;
+      readonly distro: string;
+      readonly keepAgentsRunning: boolean;
+    }) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly applyWslWindowsFallback: Effect.Effect<
       DesktopSettingsChange,
       DesktopSettingsWriteError
@@ -280,6 +295,9 @@ function normalizeDesktopSettingsDocument(
     wslBackendEnabled,
     wslDistro: normalizeWslDistro(parsed.wslDistro),
     wslOnly: parsed.wslOnly === true,
+    closeToTray: parsed.closeToTray ?? true,
+    minimizeToTray: parsed.minimizeToTray ?? false,
+    wslBackgroundAgents: parsed.wslBackgroundAgents ?? {},
   };
 }
 
@@ -617,6 +635,16 @@ export const make = Effect.gen(function* () {
       persist((settings) => setWslOnly(settings, enabled)).pipe(
         Effect.withSpan("desktop.settings.setWslOnly", { attributes: { enabled } }),
       ),
+    setBackgroundSettings: (input) =>
+      persist((settings) => ({
+        ...settings,
+        closeToTray: input.closeToTray,
+        minimizeToTray: input.minimizeToTray,
+        wslBackgroundAgents: {
+          ...settings.wslBackgroundAgents,
+          [input.distro]: input.keepAgentsRunning,
+        },
+      })),
     setLocalEnvironmentEnabled: (enabled) =>
       persist((settings) => setLocalEnvironmentEnabled(settings, enabled)).pipe(
         Effect.withSpan("desktop.settings.setLocalEnvironmentEnabled", { attributes: { enabled } }),
@@ -664,6 +692,16 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
           update((settings) => setWslBackendEnabled(settings, enabled)),
         setWslDistro: (distro) => update((settings) => setWslDistro(settings, distro)),
         setWslOnly: (enabled) => update((settings) => setWslOnly(settings, enabled)),
+        setBackgroundSettings: (input) =>
+          update((settings) => ({
+            ...settings,
+            closeToTray: input.closeToTray,
+            minimizeToTray: input.minimizeToTray,
+            wslBackgroundAgents: {
+              ...settings.wslBackgroundAgents,
+              [input.distro]: input.keepAgentsRunning,
+            },
+          })),
         setLocalEnvironmentEnabled: (enabled) =>
           update((settings) => setLocalEnvironmentEnabled(settings, enabled)),
         applyWslWindowsFallback: update(applyWslWindowsFallback),

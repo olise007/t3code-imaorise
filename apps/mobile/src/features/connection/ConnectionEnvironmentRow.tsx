@@ -1,3 +1,4 @@
+import { BackgroundServerControls } from "./BackgroundServerControls";
 import { ConnectionTraceId } from "./ConnectionTraceId";
 import { SymbolView } from "../../components/AppSymbol";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
@@ -154,6 +155,9 @@ export function ConnectionEnvironmentRow(props: {
           exiting={FadeOut.duration(150)}
           className="gap-3 px-4 pb-4"
         >
+          {serverConfig?.environment.capabilities.desktopBackgroundRuntime === true ? (
+            <BackgroundServerControls environmentId={props.environment.environmentId} />
+          ) : null}
           {props.environment.isRelayManaged ? (
             <Text className="text-sm text-foreground-muted">
               Managed by T3 Connect. Tunnel details update automatically.

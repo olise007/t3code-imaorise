@@ -114,7 +114,10 @@ export class DesktopWslEnvironment extends Context.Service<
     // (the backend can be listening for 30+ seconds before wslhost starts
     // forwarding 127.0.0.1:port to WSL-side localhost).
     readonly getDistroIp: (distro: string | null) => Effect.Effect<Option.Option<string>>;
-    readonly readEnvironmentId?: (distro: string | null) => Effect.Effect<Option.Option<string>>;
+    readonly readEnvironmentId?: (
+      distro: string | null,
+      t3Home?: string,
+    ) => Effect.Effect<Option.Option<string>>;
     readonly isPortAvailable?: (
       distro: string | null,
       port: number,
@@ -1291,11 +1294,18 @@ export const layer = Layer.effect(
     );
 
     return DesktopWslEnvironment.of({
-      readEnvironmentId: (distro) =>
+      readEnvironmentId: (distro, t3Home) =>
         provideSpawner(
-          runWslShell(distro, 'cat "$HOME/.t3-imaorise/userdata/environment-id"', PROBE_TIMEOUT, {
-            resolveNode: false,
-          }),
+          runWslShell(
+            distro,
+            t3Home
+              ? `cat ${shellQuote(`${t3Home}/userdata/environment-id`)}`
+              : 'cat "$HOME/.t3-imaorise/userdata/environment-id"',
+            PROBE_TIMEOUT,
+            {
+              resolveNode: false,
+            },
+          ),
         ).pipe(
           Effect.map((result) =>
             result.exitCode === 0 &&

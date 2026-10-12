@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   commits: 0,
   metadataRequests: [] as { environmentId: string; branch: string }[],
   afterGitAction: undefined as (() => void) | undefined,
+  previewRequests: 0,
   run: null as ((input: { action: "commit"; featureBranch?: boolean }) => Promise<void>) | null,
 }));
 
@@ -34,7 +35,12 @@ vi.mock("react", async (importOriginal) => ({
   },
 }));
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: (atom: unknown) => (atom === "vcs-state" ? { isRunning: false } : null),
+  useAtomValue: (atom: unknown) =>
+    atom === "preview-permission"
+      ? state.scopes.has(AuthSourceControlWriteScope)
+      : atom === "vcs-state"
+        ? { isRunning: false }
+        : null,
 }));
 vi.mock("~/state/entities", () => ({
   useThreadProjection: (ref: unknown) =>
@@ -49,6 +55,17 @@ vi.mock("~/state/session", () => ({
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
 vi.mock("~/state/server", () => ({ serverEnvironment: { configValueAtom: () => null } }));
+vi.mock("~/state/git", () => ({
+  gitEnvironment: {
+    generateCommitMessage: Object.assign(
+      async () => {
+        state.previewRequests++;
+        return AsyncResult.success({ message: "Reviewed message" });
+      },
+      { permissionAtom: () => "preview-permission" },
+    ),
+  },
+}));
 vi.mock("~/state/sourceControl", () => ({ sourceControlEnvironment: {} }));
 vi.mock("~/state/vcs", () => ({
   vcsEnvironment: { status: () => null },
@@ -194,6 +211,43 @@ describe("Git actions while thread details load", () => {
     state.metadataRequests = [];
     state.afterGitAction = undefined;
     state.run = null;
+    state.previewRequests = 0;
+  });
+
+  it("offers a separate preview button and prevents committing a blank message", async () => {
+    const tree = GitActionsControl({
+      gitCwd: "/repo",
+      activeThreadRef: {
+        environmentId: EnvironmentId.make("environment"),
+        threadId: ThreadId.make("thread"),
+      },
+    });
+    type Node = {
+      type?: unknown;
+      props?: { children?: unknown; disabled?: boolean; onClick?: () => unknown };
+    };
+    const nodes: Node[] = [];
+    const visit = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      if (value && typeof value === "object" && "props" in value) {
+        const node = value as Node;
+        nodes.push(node);
+        visit(node.props?.children);
+      }
+    };
+    visit(tree);
+    const button = (label: string) =>
+      nodes.find((node) => node.type === "Button" && node.props?.children === label)?.props;
+    expect(button("Generate commit message")?.disabled).toBe(false);
+    expect(button("Commit")?.disabled).toBe(true);
+    expect(button("Commit on new branch")?.disabled).toBe(true);
+    await button("Generate commit message")?.onClick?.();
+    expect(state.previewRequests).toBe(1);
+    expect(state.commits).toBe(0);
+    expect(state.branch).toBe("main");
   });
 
   it("does not create a feature branch for a server thread without task permission", async () => {

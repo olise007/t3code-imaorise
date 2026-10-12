@@ -5,6 +5,8 @@ import * as NodeNet from "node:net";
 import * as NodeStream from "@effect/platform-node/NodeStream";
 import {
   DesktopHostTelemetryMessage,
+  type DesktopRuntimeRequest,
+  type DesktopRuntimeReport,
   type DesktopHostTelemetryMessage as DesktopHostTelemetryMessageValue,
   type DesktopHostTelemetrySnapshot,
   DesktopTelemetryControlMessage,
@@ -151,6 +153,10 @@ export interface DesktopTelemetryReceiverHealth {
 export class DesktopTelemetryReceiver extends Context.Service<
   DesktopTelemetryReceiver,
   {
+    readonly requestRuntime: (
+      request: DesktopRuntimeRequest,
+    ) => Effect.Effect<void, DesktopTelemetryControlError>;
+    readonly runtimeReports: Effect.Effect<Stream.Stream<DesktopRuntimeReport>, never, Scope.Scope>;
     readonly latest: Effect.Effect<Option.Option<DesktopHostTelemetrySnapshot>>;
     readonly changes: Stream.Stream<DesktopHostTelemetrySnapshot>;
     readonly subscribe: Effect.Effect<
@@ -349,6 +355,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   const changes = yield* PubSub.sliding<DesktopHostTelemetrySnapshot>(8);
   const healthChanges = yield* PubSub.sliding<DesktopTelemetryReceiverHealth>(4);
   const latestUpdateReport = yield* Ref.make(Option.none<DesktopUpdateStatusReport>());
+  const runtimeReports = yield* PubSub.sliding<DesktopRuntimeReport>(32);
   const updateReportChanges = yield* PubSub.sliding<DesktopUpdateStatusReport>(16);
   const controlMutex = yield* Semaphore.make(1);
   const snapshotMutex = yield* Semaphore.make(1);
@@ -528,6 +535,8 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
         }
 
         // Not a resource sample: do not touch `latest` or sample health.
+        if (message.type === "desktopRuntimeReport")
+          return PubSub.publish(runtimeReports, message).pipe(Effect.asVoid);
         if (message.type === "desktopUpdateStatus") {
           return recordContact.pipe(
             Effect.andThen(Ref.set(latestUpdateReport, Option.some(message))),
@@ -630,6 +639,8 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   }
 
   return DesktopTelemetryReceiver.of({
+    requestRuntime: sendControlMessage,
+    runtimeReports: Effect.map(PubSub.subscribe(runtimeReports), Stream.fromSubscription),
     latest: Ref.get(latest),
     changes: Stream.fromPubSub(changes),
     subscribe: snapshotMutex.withPermits(1)(
@@ -702,6 +713,8 @@ export const layerTest = (
             changes: Stream.empty,
           })),
         ),
+      requestRuntime: () => Effect.void,
+      runtimeReports: Effect.succeed(Stream.empty),
       setDiagnosticsDemand: () => Effect.void,
       requestDesktopUpdate: () => Effect.void,
       commitDesktopUpdate: () => Effect.void,

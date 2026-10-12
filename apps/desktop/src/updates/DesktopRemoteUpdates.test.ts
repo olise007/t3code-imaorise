@@ -42,6 +42,7 @@ function runRemoteUpdatesTest(
   harness: ReturnType<typeof makeHarness>,
   body: (context: {
     readonly reports: DesktopUpdateStatusReport[];
+    readonly terminal: Effect.Effect<DesktopUpdateStatusReport>;
     readonly requests: Queue.Queue<DesktopTelemetryRequestDesktopUpdate>;
     readonly commits: Queue.Queue<DesktopTelemetryCommitDesktopUpdate>;
     readonly cancellations: Queue.Queue<DesktopTelemetryCancelDesktopUpdate>;
@@ -53,7 +54,10 @@ function runRemoteUpdatesTest(
       const commits = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
       const cancellations = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
       const reports: DesktopUpdateStatusReport[] = [];
+      const terminals = yield* Queue.unbounded<DesktopUpdateStatusReport>();
       const publisher = DesktopTelemetryPublisher.DesktopTelemetryPublisher.of({
+        runtimeRequests: Stream.empty,
+        publishRuntimeReport: () => Effect.void,
         latest: Effect.succeedNone,
         changes: Stream.empty,
         encoded: Stream.empty,
@@ -62,7 +66,11 @@ function runRemoteUpdatesTest(
         publishUpdateReport: (report) =>
           Effect.sync(() => {
             reports.push(report);
-          }),
+          }).pipe(
+            Effect.andThen(
+              report.outcome ? Queue.offer(terminals, report).pipe(Effect.asVoid) : Effect.void,
+            ),
+          ),
         updateRequests: Stream.fromQueue(requests),
         updateCommits: Stream.fromQueue(commits),
         updateCancellations: Stream.fromQueue(cancellations),
@@ -74,7 +82,7 @@ function runRemoteUpdatesTest(
         Effect.provideService(DesktopTelemetryPublisher.DesktopTelemetryPublisher, publisher),
       );
       yield* settle;
-      yield* body({ reports, requests, commits, cancellations });
+      yield* body({ reports, requests, commits, cancellations, terminal: Queue.take(terminals) });
     }),
   ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
 }
@@ -820,19 +828,19 @@ describe("DesktopRemoteUpdates", () => {
   });
 
   it.effect("fails fast with the disabled reason when updates are off", () => {
-    const harness = makeHarness({ env: { T3CODE_DISABLE_AUTO_UPDATE: "true" } });
+    const harness = makeHarness({ env: { T3CODE_DESKTOP_DISABLE_AUTO_UPDATE: "true" } });
 
-    return runRemoteUpdatesTest(harness, ({ reports, requests }) =>
+    return runRemoteUpdatesTest(harness, ({ reports, requests, terminal }) =>
       Effect.gen(function* () {
         yield* Queue.offer(requests, request("req-3"));
-        yield* settle;
+        yield* terminal;
 
         const terminals = terminalReports(reports);
         assert.equal(terminals.length, 1);
         assert.equal(terminals[0]?.outcome, "failed");
         assert.equal(
           terminals[0]?.reason,
-          "Automatic updates are disabled by the T3CODE_DISABLE_AUTO_UPDATE setting.",
+          "Automatic updates are disabled by the T3CODE_DESKTOP_DISABLE_AUTO_UPDATE setting.",
         );
         assert.equal(harness.quitAndInstalls(), 0);
       }),

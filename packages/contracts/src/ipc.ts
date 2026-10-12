@@ -629,6 +629,22 @@ export const DesktopWslStateSchema = Schema.Struct({
   preflightError: Schema.NullOr(Schema.String),
 });
 
+export const DesktopBackgroundSettingsSchema = Schema.Struct({
+  closeToTray: Schema.Boolean,
+  minimizeToTray: Schema.Boolean,
+  distro: Schema.String,
+  keepAgentsRunning: Schema.Boolean,
+  serverRunning: Schema.Boolean,
+});
+export type DesktopBackgroundSettings = typeof DesktopBackgroundSettingsSchema.Type;
+export const DesktopBackgroundSettingsPatchSchema = Schema.Struct({
+  closeToTray: Schema.optionalKey(Schema.Boolean),
+  minimizeToTray: Schema.optionalKey(Schema.Boolean),
+  distro: Schema.optionalKey(Schema.String),
+  keepAgentsRunning: Schema.optionalKey(Schema.Boolean),
+});
+export type DesktopBackgroundSettingsPatch = typeof DesktopBackgroundSettingsPatchSchema.Type;
+
 /**
  * Renderer-facing snapshot of a desktop preview tab. Mirrors the main-process
  * PreviewTabState shape but uses serialisable primitives only.
@@ -1240,6 +1256,11 @@ export interface DesktopBridge {
   setWslBackendEnabled: (enabled: boolean) => Promise<DesktopWslState>;
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;
   setWslOnly: (enabled: boolean) => Promise<DesktopWslState>;
+  getBackgroundSettings?: () => Promise<DesktopBackgroundSettings>;
+  setBackgroundSettings?: (
+    settings: DesktopBackgroundSettingsPatch,
+  ) => Promise<DesktopBackgroundSettings>;
+  setBackgroundServerRunning?: (running: boolean) => Promise<DesktopBackgroundSettings>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
   /** Optional while older desktop shells can host a newer web client. */
   pickProjectFavicon?: (initialPath?: string) => Promise<string | null>;

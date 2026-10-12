@@ -76,6 +76,9 @@ beforeEach(() => {
               draft: false,
               prerelease: true,
               assets: [
+                { name: "personal.apk", browser_download_url: manifest.apkUrl },
+                { name: "BUILD-MANIFEST.json", browser_download_url: "evidence" },
+                { name: "SHA256SUMS", browser_download_url: "checksums" },
                 {
                   name: "android-beta.json",
                   browser_download_url:
@@ -202,6 +205,9 @@ describe("personal APK updates", () => {
                 draft: false,
                 prerelease: false,
                 assets: [
+                  { name: "personal.apk", browser_download_url: manifest.apkUrl },
+                  { name: "BUILD-MANIFEST.json", browser_download_url: "evidence" },
+                  { name: "SHA256SUMS", browser_download_url: "checksums" },
                   {
                     name: "android-stable.json",
                     browser_download_url:

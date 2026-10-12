@@ -60,6 +60,7 @@ import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
+import { shouldStopBackgroundServer } from "../wsl/backgroundRuntimePolicy.ts";
 
 const INITIAL_RESTART_DELAY = Duration.millis(500);
 const MAX_RESTART_DELAY = Duration.seconds(10);
@@ -93,6 +94,9 @@ export interface BackendProcessContext {
 export type DesktopBackendBootstrapDelivery = "fd3" | "stdin";
 
 export interface DesktopBackendStartConfig extends BackendProcessContext {
+  readonly managedStopArgs?: ReadonlyArray<string>;
+  readonly managedPolicyArgs?: ReadonlyArray<string>;
+  readonly managedInspectArgs?: ReadonlyArray<string>;
   readonly args: ReadonlyArray<string>;
   readonly env: Record<string, string | undefined>;
   // When true the spawner merges the desktop process.env on top of `env`;
@@ -279,7 +283,10 @@ export interface DesktopBackendInstance {
   readonly id: BackendInstanceId;
   readonly label: Effect.Effect<string>;
   readonly start: Effect.Effect<void>;
-  readonly stop: (options?: { readonly timeout?: Duration.Duration }) => Effect.Effect<void>;
+  readonly stop: (options?: {
+    readonly timeout?: Duration.Duration;
+    readonly appExit?: boolean;
+  }) => Effect.Effect<void>;
   readonly currentConfig: Effect.Effect<Option.Option<DesktopBackendStartConfig>>;
   readonly snapshot: Effect.Effect<DesktopBackendSnapshot>;
   // Polls desiredRunning + the instance's own ready flag until the
@@ -1225,7 +1232,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
 
   const stop = Effect.fn("desktop.backendInstance.stop")(function* (options?: {
     readonly timeout?: Duration.Duration;
+    readonly appExit?: boolean;
   }) {
+    const currentConfig = Option.getOrUndefined((yield* Ref.get(state)).config);
     const { active, restartFiber, notifyShutdown } = yield* mutex.withPermits(1)(
       Effect.gen(function* () {
         yield* Ref.set(startupStatus, undefined);
@@ -1259,6 +1268,36 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       onNone: () => Effect.void,
       onSome: (fiber) => Fiber.interrupt(fiber).pipe(Effect.asVoid),
     });
+    if (currentConfig?.managedStopArgs) {
+      const policyExit = options?.appExit === true && !shouldStopBackgroundServer(true, true);
+      const stopArgs = policyExit
+        ? [
+            ...currentConfig.managedStopArgs.slice(0, -2),
+            "stop-on-exit",
+            currentConfig.managedStopArgs.at(-1)!,
+          ]
+        : currentConfig.managedStopArgs;
+      {
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const command = ChildProcess.make(currentConfig.executablePath, stopArgs, {
+              cwd: currentConfig.cwd,
+              env: currentConfig.env,
+              extendEnv: currentConfig.extendEnv,
+            });
+            const handle = yield* spawner.spawn(command);
+            const code = yield* handle.exitCode;
+            if (Number(code) !== 0)
+              yield* logInstanceError("background server shutdown failed", { code });
+          }),
+        ).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.catchCause((cause) =>
+            logInstanceError("background server shutdown failed", { cause: Cause.pretty(cause) }),
+          ),
+        );
+      }
+    }
     yield* Option.match(active, {
       onNone: () => Effect.void,
       onSome: (run) =>
@@ -1333,7 +1372,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       Effect.map(Option.getOrElse(() => false)),
     );
 
-  yield* Effect.addFinalizer(() => stop());
+  yield* Effect.addFinalizer(() => stop({ appExit: true }));
 
   return {
     retryStartup: Effect.gen(function* () {

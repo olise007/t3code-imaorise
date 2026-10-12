@@ -22,6 +22,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { HttpClient } from "effect/http";
 
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -34,6 +35,7 @@ import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
+import { desktopReleaseFeed } from "./personalDesktopRelease.ts";
 import {
   createInitialDesktopUpdateState,
   reduceDesktopUpdateStateOnCheckFailure,
@@ -116,7 +118,12 @@ export class DesktopUpdatePollerError extends Schema.TaggedError<DesktopUpdatePo
 export class DesktopUpdateEventHandlingError extends Schema.TaggedError<DesktopUpdateEventHandlingError>()(
   "DesktopUpdateEventHandlingError",
   {
-    event: Schema.Literals(["update-available", "download-progress", "update-downloaded"]),
+    event: Schema.Literals([
+      "update-available",
+      "download-progress",
+      "update-downloaded",
+      "desktop-release-discovery",
+    ]),
     cause: Schema.Defect(),
   },
 ) {
@@ -261,7 +268,7 @@ function getAutoUpdateDisabledReason(args: {
     return "Automatic updates are only available in packaged production builds.";
   }
   if (args.disabledByEnv) {
-    return "Automatic updates are disabled by the T3CODE_DISABLE_AUTO_UPDATE setting.";
+    return "Automatic updates are disabled by the T3CODE_DESKTOP_DISABLE_AUTO_UPDATE setting.";
   }
   if (args.platform === "linux" && !args.appImage && !args.isDebPackage) {
     return "Automatic updates on Linux require the AppImage or the .deb package.";
@@ -429,6 +436,55 @@ export const make = Effect.gen(function* () {
       const checkedAt = yield* currentIsoTimestamp;
       yield* setState(reduceDesktopUpdateStateOnCheckStart(state, checkedAt));
       yield* logUpdaterInfo("checking for updates", { reason });
+      const releaseHttp = yield* Effect.serviceOption(HttpClient.HttpClient);
+      if (!config.mockUpdates && Option.isSome(releaseHttp)) {
+        const feed = yield* Effect.gen(function* () {
+          for (let page = 1; page <= 5; page++) {
+            const response = yield* releaseHttp.value.get(
+              `https://api.github.com/repos/olise007/t3code-imaorise/releases?per_page=100&page=${page}`,
+            );
+            if (response.status !== 200)
+              return yield* new DesktopUpdateEventHandlingError({
+                event: "desktop-release-discovery",
+                cause: `HTTP ${response.status}`,
+              });
+            const releases = yield* response.json;
+            const feed = yield* Effect.try(() =>
+              desktopReleaseFeed(releases, state.channel === "nightly" ? "beta" : "latest"),
+            );
+            if (feed) return feed;
+            if (Array.isArray(releases) && releases.length < 100) return null;
+          }
+          return yield* new DesktopUpdateEventHandlingError({
+            event: "desktop-release-discovery",
+            cause: "Release history exceeded the discovery limit.",
+          });
+        }).pipe(
+          Effect.timeout("20 seconds"),
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              yield* updateState((current) =>
+                reduceDesktopUpdateStateOnCheckFailure(
+                  current,
+                  "Could not discover desktop updates. Retry.",
+                  checkedAt,
+                ),
+              );
+              yield* logUpdaterWarning(error.message, { cause: error.message });
+              return undefined;
+            }),
+          ),
+        );
+        if (feed === undefined) return false;
+        if (feed === null) {
+          yield* updateState((current) => reduceDesktopUpdateStateOnNoUpdate(current, checkedAt));
+          return true;
+        }
+        yield* electronUpdater.setFeedURL({
+          provider: "generic",
+          url: feed,
+        } as ElectronUpdater.ElectronUpdaterFeedUrl);
+      }
 
       return yield* electronUpdater.checkForUpdates.pipe(
         Effect.as(true),
@@ -640,7 +696,7 @@ export const make = Effect.gen(function* () {
           const instances = yield* pool.list;
           yield* Effect.forEach(
             instances,
-            (instance) => instance.stop({ timeout: Duration.seconds(5) }),
+            (instance) => instance.stop({ timeout: Duration.seconds(5), appExit: true }),
             { concurrency: "unbounded" },
           );
           yield* electronUpdater.quitAndInstall({

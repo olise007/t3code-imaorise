@@ -29,6 +29,7 @@ import { PASSKEY_BRIDGE_ARGUMENT } from "../preview/GuestProtocol.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import { handleTrayClose, shouldHideToTray } from "./trayWindowPolicy.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
@@ -698,8 +699,37 @@ export const make = Effect.gen(function* () {
     window.on("move", scheduleBoundsPersist);
     window.on("maximize", scheduleBoundsPersist);
     window.on("unmaximize", scheduleBoundsPersist);
-    window.on("close", () => {
+    let bypassTrayClose = false;
+    window.on("query-session-end", () => {
+      bypassTrayClose = true;
+    });
+    window.on("close", (event) => {
       runFork(flushBoundsPersist);
+      if (environment.platform === "win32")
+        handleTrayClose({
+          event,
+          canUseTray: shouldHideToTray(true),
+          getEnabled: () =>
+            runPromise(desktopSettings.get).then((settings) => settings.closeToTray),
+          hide: () => {
+            if (!window.isDestroyed()) window.hide();
+          },
+          close: () => {
+            if (!window.isDestroyed()) window.close();
+          },
+          bypass: bypassTrayClose,
+          setBypass: () => {
+            bypassTrayClose = true;
+          },
+        });
+    });
+    window.on("minimize", () => {
+      if (environment.platform !== "win32") return;
+      void runPromise(desktopSettings.get)
+        .then((settings) => {
+          if (!window.isDestroyed() && shouldHideToTray(settings.minimizeToTray)) window.hide();
+        })
+        .catch(() => {});
     });
 
     if (environment.platform === "darwin") {

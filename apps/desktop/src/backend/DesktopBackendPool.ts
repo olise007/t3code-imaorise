@@ -452,6 +452,7 @@ export const layer = Layer.effect(
             next as ReadonlyMap<BackendInstanceId, RegisteredInstance>,
           ] as const);
         }).pipe(Effect.andThen(Deferred.succeed(done, undefined)), Effect.asVoid);
+        yield* action.entry.instance.stop();
         yield* Option.match(action.entry.scope, {
           onNone: () => Effect.void,
           onSome: (scope) => Scope.close(scope, Exit.void).pipe(Effect.ignore),

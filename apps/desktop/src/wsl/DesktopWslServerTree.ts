@@ -128,12 +128,12 @@ export const make = Effect.gen(function* () {
   const version = environment.appVersion;
   const versionDir = join(treeRoot, version);
 
-  // Remove sibling trees left behind by previous app versions (and aborted
-  // extractions). Best-effort: a locked file must not block the backend.
+  // A detached WSL server may still load modules from an older tree. Keep
+  // completed versions until that environment has explicitly stopped.
   const sweepStale = Effect.gen(function* () {
     const entries = yield* fs.readDirectory(treeRoot).pipe(Effect.orElseSucceed(() => []));
     yield* Effect.forEach(
-      entries.filter((entry) => entry !== version),
+      entries.filter((entry) => entry.startsWith(".") && entry.includes(".extract-")),
       (entry) => fs.remove(join(treeRoot, entry), { recursive: true }).pipe(Effect.ignore),
       { discard: true },
     );
