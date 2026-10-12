@@ -14,7 +14,7 @@ import {
   type DesktopWslPairingState,
   type DesktopWslPairingInputSchema,
 } from "@t3tools/contracts";
-import { buildTailscaleHttpsBaseUrl } from "@t3tools/tailscale";
+import { buildTailscaleHttpsBaseUrl, isTailscaleIpv4Address } from "@t3tools/tailscale";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -40,7 +40,13 @@ const decodeSession = Schema.decodeUnknownSync(Schema.toCodecJson(AuthSessionSta
 const decodeStatus = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
     Schema.Struct({
-      Self: Schema.optionalKey(Schema.Struct({ DNSName: Schema.optionalKey(Schema.String) })),
+      Self: Schema.optionalKey(
+        Schema.Struct({
+          DNSName: Schema.optionalKey(Schema.String),
+          TailscaleIPs: Schema.optionalKey(Schema.Array(Schema.String)),
+        }),
+      ),
+      BackendState: Schema.optionalKey(Schema.String),
     }),
   ),
 );
@@ -125,9 +131,49 @@ interface ServeConfig {
   Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }>;
 }
 
+const routeFlag = (route: Route) =>
+  `--${route.protocol === "http" ? "tcp" : "https"}=${route.port}`;
+
+const routeTarget = (route: Route, target: string) =>
+  route.protocol === "http" ? `tcp://${new URL(target).host}` : target;
+
+export function pairingEndpoint(
+  status: {
+    BackendState?: string;
+    Self?: { DNSName?: string; TailscaleIPs?: readonly string[] };
+  },
+  route: Route,
+) {
+  if (status.BackendState && status.BackendState !== "Running")
+    throw new WslPairingError({ message: "Connect Tailscale before pairing WSL." });
+  if (route.protocol === "http") {
+    const ip = status.Self?.TailscaleIPs?.find(
+      (address) => /^\d+\.\d+\.\d+\.\d+$/.test(address) && isTailscaleIpv4Address(address),
+    );
+    if (!ip)
+      throw new WslPairingError({
+        message: "Tailscale has no assigned IPv4 address. Connect it and retry.",
+      });
+    return `http://${ip}:${route.port}/`;
+  }
+  const dnsName = status.Self?.DNSName?.replace(/\.$/, "");
+  if (!dnsName) throw new WslPairingError({ message: "Sign in to Tailscale to pair WSL." });
+  return buildTailscaleHttpsBaseUrl({ magicDnsName: dnsName, servePort: route.port });
+}
+
 /** Read the whole port, not just '/', so unrelated paths cannot be overwritten. */
-export function routeMapping(config: ServeConfig, port: number) {
+export function routeMapping(
+  config: ServeConfig,
+  port: number,
+  protocol: "https" | "http" = "https",
+) {
   const entries = Object.entries(config.Web ?? {}).filter(([host]) => host.endsWith(`:${port}`));
+  if (protocol === "http" && entries.length > 0) return "occupied";
+  if (protocol === "http" && entries.length === 0) {
+    const tcp = config.TCP?.[String(port)];
+    if (tcp && typeof tcp === "object" && "TCPForward" in tcp && typeof tcp.TCPForward === "string")
+      return `http://${tcp.TCPForward}`;
+  }
   if (entries.length === 0 && !config.TCP?.[String(port)]) return null;
   if (entries.length !== 1) return "occupied";
   const handlers = entries[0]![1].Handlers ?? {};
@@ -151,10 +197,11 @@ export async function reconcileRoute(input: {
   const mapping = routeMapping(
     JSON.parse(await io.command(["serve", "status", "--json"])),
     route.port,
+    route.protocol,
   );
   if (!target || !route.enabled) {
     if (route.target && mapping === route.target)
-      await io.command(["serve", `--https=${route.port}`, "off"]);
+      await io.command(["serve", routeFlag(route), "off"]);
     return { endpointUrl: null, target: route.target, previousTarget: mapping };
   }
   if (mapping && mapping !== target && mapping !== route.target) {
@@ -163,14 +210,9 @@ export async function reconcileRoute(input: {
     });
   }
   const status = JSON.parse(await io.command(["status", "--json"]));
-  const dnsName = status.Self?.DNSName?.replace(/\.$/, "");
-  if (!dnsName || (status.BackendState && status.BackendState !== "Running")) {
-    throw new WslPairingError({
-      message: "Sign in to Tailscale and connect it before pairing WSL.",
-    });
-  }
-  const endpointUrl = buildTailscaleHttpsBaseUrl({ magicDnsName: dnsName, servePort: route.port });
-  if (mapping !== target) await io.command(["serve", "--bg", `--https=${route.port}`, target]);
+  const endpointUrl = pairingEndpoint(status, route);
+  if (mapping !== target)
+    await io.command(["serve", "--bg", routeFlag(route), routeTarget(route, target)]);
   try {
     if ((await io.descriptor(endpointUrl)).environmentId !== environmentId) {
       throw new WslPairingError({
@@ -180,8 +222,8 @@ export async function reconcileRoute(input: {
   } catch (error) {
     if (mapping !== target) {
       if (mapping && mapping !== "occupied")
-        await io.command(["serve", "--bg", `--https=${route.port}`, mapping]);
-      else await io.command(["serve", `--https=${route.port}`, "off"]);
+        await io.command(["serve", "--bg", routeFlag(route), routeTarget(route, mapping)]);
+      else await io.command(["serve", routeFlag(route), "off"]);
     }
     throw new WslPairingError({
       message:
@@ -247,14 +289,7 @@ export const make = (io: WslPairingIO) =>
               }),
           ),
         );
-        if (!status.Self?.DNSName)
-          return yield* Effect.fail(
-            new WslPairingError({ message: "Sign in to Tailscale to pair WSL." }),
-          );
-        endpointUrl = buildTailscaleHttpsBaseUrl({
-          magicDnsName: status.Self.DNSName.replace(/\.$/, ""),
-          servePort: s.wslPairingRoute.port,
-        });
+        endpointUrl = yield* attempt(async () => pairingEndpoint(status, s.wslPairingRoute));
         const verifiedUrl = endpointUrl;
         if (
           (yield* attempt(() => io.descriptor(verifiedUrl))).environmentId !==
@@ -274,6 +309,7 @@ export const make = (io: WslPairingIO) =>
         enabled: s.wslPairingRoute.enabled,
         port: s.wslPairingRoute.port,
         endpointUrl,
+        protocol: s.wslPairingRoute.protocol ?? "https",
         error: null,
       } satisfies DesktopWslPairingState;
     });
@@ -289,6 +325,7 @@ export const make = (io: WslPairingIO) =>
             enabled: s.wslPairingRoute.enabled,
             port: s.wslPairingRoute.port,
             endpointUrl: null,
+            protocol: s.wslPairingRoute.protocol ?? "https",
             error: error.message,
           };
         }),
@@ -339,10 +376,24 @@ export const make = (io: WslPairingIO) =>
             const s = yield* settings.get;
             const previous = s.wslPairingRoute;
             const selectedPort = input.enabled ? input.port : previous.port;
+            const protocol = input.enabled
+              ? (input.protocol ?? "https")
+              : (previous.protocol ?? "https");
+            if (
+              previous.enabled &&
+              previous.port === selectedPort &&
+              (previous.protocol ?? "https") !== protocol
+            )
+              return yield* Effect.fail(
+                new WslPairingError({
+                  message: "Choose a different port when switching between HTTPS and IP access.",
+                }),
+              );
             const route = {
               enabled: input.enabled,
               port: selectedPort,
               target: previous.port === selectedPort ? previous.target : null,
+              protocol,
             };
             const result = yield* attempt(() =>
               reconcileRoute({ io, route, target: t.url, environmentId: input.environmentId }),
@@ -354,10 +405,11 @@ export const make = (io: WslPairingIO) =>
                   routeMapping(
                     JSON.parse(await io.command(["serve", "status", "--json"])),
                     previous.port,
+                    previous.protocol,
                   ),
                 );
                 if (oldMapping === previous.target) {
-                  yield* attempt(() => io.command(["serve", `--https=${previous.port}`, "off"]));
+                  yield* attempt(() => io.command(["serve", routeFlag(previous), "off"]));
                   oldRouteRemoved = true;
                 }
               }
@@ -367,27 +419,28 @@ export const make = (io: WslPairingIO) =>
                 attempt(async () => {
                   const config = JSON.parse(await io.command(["serve", "status", "--json"]));
                   if (
-                    routeMapping(config, selectedPort) === (input.enabled ? result.target : null)
+                    routeMapping(config, selectedPort, route.protocol) ===
+                    (input.enabled ? result.target : null)
                   ) {
                     if (result.previousTarget && result.previousTarget !== "occupied")
                       await io.command([
                         "serve",
                         "--bg",
-                        `--https=${selectedPort}`,
-                        result.previousTarget,
+                        routeFlag(route),
+                        routeTarget(route, result.previousTarget),
                       ]);
-                    else await io.command(["serve", `--https=${selectedPort}`, "off"]);
+                    else await io.command(["serve", routeFlag(route), "off"]);
                   }
                   if (
                     oldRouteRemoved &&
                     previous.target &&
-                    routeMapping(config, previous.port) === null
+                    routeMapping(config, previous.port, previous.protocol) === null
                   )
                     await io.command([
                       "serve",
                       "--bg",
-                      `--https=${previous.port}`,
-                      previous.target,
+                      routeFlag(previous),
+                      routeTarget(previous, previous.target),
                     ]);
                 }).pipe(Effect.ignore),
               ),

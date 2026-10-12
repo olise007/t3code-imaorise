@@ -37,6 +37,7 @@ export interface DesktopSettings {
     readonly enabled: boolean;
     readonly port: number;
     readonly target: string | null;
+    readonly protocol?: "https" | "http";
   };
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
@@ -119,6 +120,7 @@ const DesktopSettingsDocument = Schema.Struct({
       enabled: Schema.Boolean,
       port: Schema.Number,
       target: Schema.NullOr(Schema.String),
+      protocol: Schema.optionalKey(Schema.Literals(["https", "http"])),
     }),
   ),
   tailscaleServeEnabled: Schema.optionalKey(Schema.Boolean),
@@ -326,7 +328,8 @@ function toDesktopSettingsDocument(
   if (
     settings.wslPairingRoute.enabled ||
     settings.wslPairingRoute.port !== defaults.wslPairingRoute.port ||
-    settings.wslPairingRoute.target !== null
+    settings.wslPairingRoute.target !== null ||
+    settings.wslPairingRoute.protocol === "http"
   )
     document.wslPairingRoute = settings.wslPairingRoute;
   if (settings.tailscaleServeEnabled !== defaults.tailscaleServeEnabled) {

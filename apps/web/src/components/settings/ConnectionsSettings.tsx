@@ -2151,6 +2151,7 @@ function WslPairingAccess({
     canRead ? authEnvironment.accessChanges({ environmentId: id, input: null }) : null,
   );
   const [port, setPort] = useState(String(state.port));
+  const [protocol, setProtocol] = useState<"https" | "http">(state.protocol ?? "https");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<ReadonlyMap<string, string>>(new Map());
@@ -2168,7 +2169,7 @@ function WslPairingAccess({
           provider: { id: "tailscale", label: "Tailscale", kind: "private-network", isAddon: true },
           source: "desktop-addon",
           id: `wsl-tailscale:${state.endpointUrl}`,
-          label: "WSL Tailscale HTTPS",
+          label: state.protocol === "http" ? "WSL Tailscale IP" : "WSL Tailscale HTTPS",
           httpBaseUrl: state.endpointUrl,
           reachability: "private-network",
           status: "available",
@@ -2200,6 +2201,7 @@ function WslPairingAccess({
         bearerToken: prepared.httpAuthorization.token,
         enabled,
         port: Number(port),
+        protocol,
       });
       setCreated(new Map());
       onState(route);
@@ -2224,9 +2226,9 @@ function WslPairingAccess({
     <div className="space-y-2 px-3 pb-3 sm:px-4">
       <div className="flex flex-wrap items-center gap-2">
         <label className="flex items-center gap-2 text-xs">
-          HTTPS port
+          {protocol === "http" ? "IP port" : "HTTPS port"}
           <Input
-            aria-label="WSL HTTPS port"
+            aria-label="WSL pairing port"
             type="number"
             min={1}
             max={65535}
@@ -2237,13 +2239,39 @@ function WslPairingAccess({
         </label>
         <Button
           size="xs"
+          variant={protocol === "https" ? "default" : "outline"}
+          disabled={busy}
+          onClick={() => {
+            setProtocol("https");
+            setPort(String((state.protocol ?? "https") === "https" ? state.port : 4776));
+          }}
+        >
+          DNS (HTTPS)
+        </Button>
+        <Button
+          size="xs"
+          variant={protocol === "http" ? "default" : "outline"}
+          disabled={busy}
+          onClick={() => {
+            setProtocol("http");
+            setPort(String(state.protocol === "http" ? state.port : 4777));
+          }}
+        >
+          IP (HTTP)
+        </Button>
+        <Button
+          size="xs"
           variant="outline"
           disabled={
             busy || !allowed || !/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535
           }
           onClick={() => void configure(true)}
         >
-          {busy ? "Working…" : state.endpointUrl ? "Update HTTPS route" : "Set up Tailscale HTTPS"}
+          {busy
+            ? "Working…"
+            : protocol === "http"
+              ? "Set up Tailscale IP"
+              : "Set up Tailscale HTTPS"}
         </Button>
         {state.enabled ? (
           <Button
@@ -2252,13 +2280,16 @@ function WslPairingAccess({
             disabled={busy || !allowed}
             onClick={() => void configure(false)}
           >
-            Disable WSL HTTPS
+            Disable WSL route
           </Button>
         ) : null}
       </div>
       <p className="text-xs text-muted-foreground">
         Your other device must be connected to the same tailnet. This route exposes only the WSL
         environment.
+        {protocol === "http"
+          ? " IP access bypasses DNS; Tailscale encrypts the connection between devices."
+          : ""}
       </p>
       {!allowed ? (
         <p className="text-xs text-muted-foreground">

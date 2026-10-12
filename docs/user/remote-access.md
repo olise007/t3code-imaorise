@@ -36,13 +36,18 @@ disconnect an otherwise healthy conversation.
 
 When Windows and WSL run together, their chats belong to separate environments.
 Open **Settings → Connections → Pair WSL with another device**, set up
-**Tailscale HTTPS**, then create and share a pairing link or QR code. Connect the
+**Tailscale HTTPS**, then create and share a pairing link or QR code. If your
+phone cannot resolve the Tailscale hostname, choose **IP (HTTP)** and set up
+Tailscale IP access instead. Its pairing URL uses the PC's assigned Tailscale
+IPv4 address without DNS. Both modes require Tailscale on the phone; IP access
+travels through the encrypted tailnet connection. Connect the
 phone to the same tailnet and add that link in **Settings → Environments**.
 This adds access to the WSL chats alongside the Windows connection.
 
-The WSL HTTPS route uses a separate port, starting at 4775. Choose another port
+The WSL route uses a separate port, starting at 4776 for HTTPS or 4777 for IP
+access. Switching modes replaces the previous WSL route. Choose another port
 if it is already used. The desktop restores the route when WSL restarts;
-**Disable WSL HTTPS** removes it. WSL-only mode uses the primary environment’s
+**Disable WSL route** removes it. WSL-only mode uses the primary environment’s
 existing pairing controls.
 
 Use direct pairing when the other device can reach the host's network address.

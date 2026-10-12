@@ -545,6 +545,7 @@ export const DesktopWslPairingStateSchema = Schema.Struct({
   enabled: Schema.Boolean,
   port: Schema.Number,
   endpointUrl: Schema.NullOr(Schema.String),
+  protocol: Schema.optionalKey(Schema.Literals(["https", "http"])),
   error: Schema.NullOr(Schema.String),
 });
 export type DesktopWslPairingState = typeof DesktopWslPairingStateSchema.Type;
@@ -553,6 +554,7 @@ export const DesktopWslPairingInputSchema = Schema.Struct({
   bearerToken: Schema.String,
   enabled: Schema.Boolean,
   port: Schema.Number,
+  protocol: Schema.optionalKey(Schema.Literals(["https", "http"])),
 });
 
 export interface PickFolderOptions {

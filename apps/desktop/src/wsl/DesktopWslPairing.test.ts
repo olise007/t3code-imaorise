@@ -14,6 +14,7 @@ import * as Settings from "../settings/DesktopAppSettings.ts";
 import {
   make,
   makeLiveIO,
+  pairingEndpoint,
   reconcileRoute,
   routeMapping,
   WslPairingError,
@@ -30,6 +31,7 @@ const descriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor)({
 });
 function fixture(initial: Record<string, string> = {}) {
   const mappings = new Map(Object.entries(initial));
+  const tcpPorts = new Set<string>();
   const commands: string[][] = [];
   let mismatched = false;
   let denied = false;
@@ -37,24 +39,41 @@ function fixture(initial: Record<string, string> = {}) {
     command: async (args) => {
       commands.push([...args]);
       if (args[0] === "status")
-        return JSON.stringify({ BackendState: "Running", Self: { DNSName: "host.tail.ts.net." } });
+        return JSON.stringify({
+          BackendState: "Running",
+          Self: { DNSName: "host.tail.ts.net.", TailscaleIPs: ["100.90.1.2"] },
+        });
       if (args[1] === "status")
         return JSON.stringify({
-          TCP: Object.fromEntries([...mappings.keys()].map((port) => [port, { HTTPS: true }])),
-          Web: Object.fromEntries(
+          TCP: Object.fromEntries(
             [...mappings].map(([port, url]) => [
-              `host.tail.ts.net:${port}`,
-              { Handlers: { "/": { Proxy: url } } },
+              port,
+              tcpPorts.has(port) ? { TCPForward: new URL(url).host } : { HTTPS: true },
             ]),
           ),
+          Web: Object.fromEntries(
+            [...mappings]
+              .filter(([port]) => !tcpPorts.has(port))
+              .map(([port, url]) => [
+                `host.tail.ts.net:${port}`,
+                { Handlers: { "/": { Proxy: url } } },
+              ]),
+          ),
         });
-      const port = args.find((arg) => arg.startsWith("--https="))!.slice(8);
-      if (args.at(-1) === "off") mappings.delete(port);
-      else mappings.set(port, args.at(-1)!);
+      const flag = args.find((arg) => arg.startsWith("--https=") || arg.startsWith("--tcp="))!;
+      const port = flag.split("=")[1]!;
+      if (args.at(-1) === "off") {
+        mappings.delete(port);
+        tcpPorts.delete(port);
+      } else {
+        mappings.set(port, args.at(-1)!.replace(/^tcp:/, "http:"));
+        if (flag.startsWith("--tcp=")) tcpPorts.add(port);
+        else tcpPorts.delete(port);
+      }
       return "";
     },
     descriptor: async (url) =>
-      mismatched && url.startsWith("https:")
+      mismatched && !url.startsWith("http://127.0.0.1")
         ? { ...descriptor, environmentId: EnvironmentId.make("other-environment") }
         : descriptor,
     authorize: async () => {
@@ -76,6 +95,54 @@ function fixture(initial: Record<string, string> = {}) {
 const route = { enabled: true, port: 4776, target: null };
 
 describe("WSL Tailscale routes", () => {
+  it("constructs an IP endpoint without DNS and rejects non-tailnet addresses", () => {
+    const ipRoute = { ...route, protocol: "http" as const, port: 4777 };
+    expect(
+      pairingEndpoint(
+        { Self: { TailscaleIPs: ["192.168.1.2", "fd7a::1", "100.90.1.2"] } },
+        ipRoute,
+      ),
+    ).toBe("http://100.90.1.2:4777/");
+    expect(() =>
+      pairingEndpoint({ Self: { TailscaleIPs: ["192.168.1.2", "100.64..1"] } }, ipRoute),
+    ).toThrow("no assigned IPv4");
+    expect(() =>
+      pairingEndpoint({ BackendState: "Stopped", Self: { TailscaleIPs: ["100.90.1.2"] } }, ipRoute),
+    ).toThrow("Connect Tailscale");
+  });
+  it("creates and removes a verified IP route without modifying other services", async () => {
+    const f = fixture({ "443": "http://127.0.0.1:8080" });
+    const ipRoute = { ...route, protocol: "http" as const, port: 4777 };
+    const result = await reconcileRoute({
+      io: f.io,
+      route: ipRoute,
+      target,
+      environmentId: descriptor.environmentId,
+    });
+    expect(result.endpointUrl).toBe("http://100.90.1.2:4777/");
+    expect(f.commands).toContainEqual(["serve", "--bg", "--tcp=4777", "tcp://127.0.0.1:4775"]);
+    await reconcileRoute({
+      io: f.io,
+      route: { ...ipRoute, enabled: false, target },
+      target,
+      environmentId: descriptor.environmentId,
+    });
+    expect(Object.fromEntries(f.mappings)).toEqual({ "443": "http://127.0.0.1:8080" });
+    expect(f.commands).toContainEqual(["serve", "--tcp=4777", "off"]);
+  });
+  it("rolls back an IP route when endpoint identity verification fails", async () => {
+    const f = fixture();
+    f.mismatch();
+    await expect(
+      reconcileRoute({
+        io: f.io,
+        route: { ...route, protocol: "http", port: 4777 },
+        target,
+        environmentId: descriptor.environmentId,
+      }),
+    ).rejects.toThrow("different environment");
+    expect(f.mappings.size).toBe(0);
+  });
   it("rejects a backend port collision before touching Tailscale", async () => {
     const f = fixture();
     await expect(
@@ -245,6 +312,37 @@ function service(
   );
 }
 describe("managed WSL pairing", () => {
+  it.effect("switches from DNS to IP, persists the choice and disables only its owned route", () =>
+    Effect.gen(function* () {
+      const f = fixture({ "443": "http://127.0.0.1:8080" });
+      const s = yield* service(f);
+      yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: true,
+        port: 4776,
+      });
+      const state = yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: true,
+        port: 4777,
+        protocol: "http",
+      });
+      expect(state.protocol).toBe("http");
+      expect(state.endpointUrl).toBe("http://100.90.1.2:4777/");
+      expect(f.mappings.has("4776")).toBe(false);
+      yield* s.reconcile;
+      expect((yield* s.getState).endpointUrl).toBe(state.endpointUrl);
+      yield* s.configure({
+        environmentId: descriptor.environmentId,
+        bearerToken: "private",
+        enabled: false,
+        port: 4999,
+      });
+      expect(Object.fromEntries(f.mappings)).toEqual({ "443": "http://127.0.0.1:8080" });
+    }),
+  );
   it.effect("rejects an environment ID mismatch before changing routes", () =>
     Effect.gen(function* () {
       const f = fixture();
