@@ -4,7 +4,13 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeNet from "node:net";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { ownsRuntime, readRuntime, startRuntime, stopRuntime } from "./desktopRuntime.ts";
+import {
+  ownsRuntime,
+  readRuntime,
+  startRuntime,
+  stopRuntime,
+  waitForManagedReadiness,
+} from "./desktopRuntime.ts";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -14,7 +20,7 @@ afterEach(async () => {
   }
 });
 
-async function fixture() {
+async function fixture(deferListen = false) {
   const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-background-test-"));
   directories.push(directory);
   await NodeFSP.mkdir(NodePath.join(directory, "userdata"));
@@ -33,6 +39,7 @@ async function fixture() {
     import { createInterface } from 'node:readline';
     const line = await createInterface({ input: process.stdin })[Symbol.asyncIterator]().next();
     const { port } = JSON.parse(line.value);
+    if (${deferListen}) await new Promise(() => setInterval(() => {}, 1000));
     const server = createServer((req, res) => res.end(JSON.stringify({ environmentId: "test-environment", orchestrationProtocolVersion: 2, serverVersion: "test" })));
     server.listen(port, '127.0.0.1', () => writeFileSync(${JSON.stringify(NodePath.join(directory, "ready"))}, 'ready'));
     process.on('SIGTERM', () => server.close(() => process.exit(0)));
@@ -112,6 +119,63 @@ describe("managed WSL runtime", () => {
       cancelWatch();
       await watcher.return?.();
       await new Promise<void>((resolve) => owner.close(() => resolve()));
+    }
+  });
+
+  it("keeps polling an attested live process beyond the old startup cutoff", async () => {
+    const { input, watcher } = await fixture();
+    try {
+      const record = await startRuntime(input);
+      let probes = 0;
+      await waitForManagedReadiness(record, {
+        verify: async () => {
+          if (++probes <= 301) throw new Error("Still starting");
+        },
+        live: ownsRuntime,
+        wait: async () => {},
+      });
+      expect(probes).toBe(302);
+      expect(await ownsRuntime(record)).toBe(true);
+    } finally {
+      await watcher.return?.();
+    }
+  });
+
+  it("stops an owned child while startup holds the readiness lock", async () => {
+    const { input, watcher, cancelWatch } = await fixture(true);
+    const changes = NodeFSP.watch(input.directory);
+    const registered = (async () => {
+      for await (const event of changes) if (event.filename === "runtime.json") return;
+    })();
+    const starting = startRuntime(input).then(
+      () => "ready",
+      () => "interrupted",
+    );
+    try {
+      await registered;
+      const record = await readRuntime(input.directory);
+      expect(record).not.toBeNull();
+      await stopRuntime(input.directory);
+      expect(await starting).toBe("interrupted");
+      expect(await readRuntime(input.directory)).toBeNull();
+      expect(await ownsRuntime(record!)).toBe(false);
+    } finally {
+      cancelWatch();
+      await watcher.return?.();
+      await changes.return?.();
+    }
+  });
+
+  it("rejects a symlinked metadata directory before signaling its live child", async () => {
+    const { input, watcher } = await fixture();
+    try {
+      const record = await startRuntime(input);
+      const alias = NodePath.join(input.directory, "alias");
+      await NodeFSP.symlink(input.directory, alias, "dir");
+      await expect(stopRuntime(alias)).rejects.toThrow("not owned");
+      expect(await ownsRuntime(record)).toBe(true);
+    } finally {
+      await watcher.return?.();
     }
   });
 

@@ -202,7 +202,7 @@ export async function runManagedRuntimeAction(
   };
 }
 
-async function acquireRuntimeLock(directory: string) {
+async function ensureRuntimeDirectory(directory: string) {
   await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
   const stat = await NodeFSP.lstat(directory);
   if (
@@ -212,6 +212,10 @@ async function acquireRuntimeLock(directory: string) {
   )
     throw new Error("Runtime directory is not owned by this user.");
   await NodeFSP.chmod(directory, 0o700);
+}
+
+async function acquireRuntimeLock(directory: string) {
+  await ensureRuntimeDirectory(directory);
   const lockPath = NodePath.join(directory, "startup.lock");
   const file = await NodeFSP.open(lockPath, "a", 0o600);
   await file.chmod(0o600);
@@ -245,13 +249,61 @@ async function acquireRuntimeLock(directory: string) {
   };
 }
 
+/** A live startup can remain quiet; only verified process loss ends readiness polling. */
+export async function waitForManagedReadiness(
+  record: RuntimeRecord,
+  checks = {
+    verify: verifyHealth,
+    live: ownsRuntime,
+    wait: () => new Promise<void>((resolve) => setTimeout(resolve, 100)),
+  },
+) {
+  for (;;) {
+    try {
+      await checks.verify(record);
+      return;
+    } catch (error) {
+      if (!(await checks.live(record))) throw error;
+      await checks.wait();
+    }
+  }
+}
+
 export async function stopRuntime(directory: string) {
-  const releaseLock = await acquireRuntimeLock(directory);
+  await ensureRuntimeDirectory(directory);
+  // Startup holds the lock until readiness. Signal its attested child first so
+  // an explicit Stop can release that lock even while startup remains quiet.
+  const captured: { record: RuntimeRecord | null } = { record: null };
+  const interruptOwned = async () => {
+    const record = await readRuntime(directory);
+    if (
+      !record ||
+      (captured.record && captured.record.nonce !== record.nonce) ||
+      !(await ownsRuntime(record))
+    )
+      return;
+    captured.record ??= record;
+    try {
+      process.kill(record.pid, "SIGTERM");
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error;
+    }
+  };
+  await interruptOwned();
+  const releaseLock = await acquireRuntimeLock(directory).catch(async () => {
+    // A stop launched before metadata existed can now attest the starting child.
+    await interruptOwned();
+    return acquireRuntimeLock(directory);
+  });
   try {
     const record = await readRuntime(directory);
-    if (!record || !(await ownsRuntime(record))) return;
-    // Only signal an attested T3 child. Never search for a process by name.
-    process.kill(record.pid, "SIGTERM");
+    if (!record || (captured.record && captured.record.nonce !== record.nonce)) return;
+    if (!(await ownsRuntime(record))) {
+      if (captured.record?.nonce === record.nonce)
+        await NodeFSP.unlink(NodePath.join(directory, "runtime.json")).catch(() => {});
+      return;
+    }
+    await interruptOwned();
     for (let attempt = 0; attempt < 150; attempt++) {
       if (!(await ownsRuntime(record))) {
         const current = await readRuntime(directory);
@@ -360,18 +412,7 @@ export async function startRuntime(input: {
       await NodeFSP.rename(temporary, NodePath.join(directory, "runtime.json"));
       // Keep the startup lock until the new server is ready. A concurrent
       // launcher must reuse a healthy server, not race its cold boot.
-      let healthy = false;
-      for (let attempt = 0; attempt < 300; attempt++) {
-        try {
-          await verifyHealth(record);
-          healthy = true;
-          break;
-        } catch (error) {
-          if (!(await ownsRuntime(record))) throw error;
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-      }
-      if (!healthy) throw new Error("Background server did not become ready. See server.log.");
+      await waitForManagedReadiness(record);
       await NodeFSP.writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
       await NodeFSP.rename(temporary, NodePath.join(directory, "runtime.json"));
       child.unref();
