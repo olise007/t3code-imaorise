@@ -23,9 +23,9 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - name: Pairing request regressions
-        run: timeout 600 vp test run --maxWorkers 1 apps/web/src/rpc/environmentAccess.test.ts apps/web/src/authBootstrap.test.ts apps/desktop/src/wsl/DesktopWslPairing.test.ts apps/desktop/src/settings/DesktopAppSettings.test.ts apps/mobile/src/features/connection/pairing.test.ts apps/web/src/components/settings/ConnectionsSettings.logic.test.ts
+        run: timeout 600 vp test run --maxWorkers 1 apps/web/src/rpc/environmentAccess.test.ts apps/web/src/authBootstrap.test.ts apps/desktop/src/wsl/DesktopWslPairing.test.ts apps/desktop/src/settings/DesktopAppSettings.test.ts apps/mobile/src/features/connection/pairing.test.ts apps/web/src/components/settings/ConnectionsSettings.logic.test.ts apps/desktop/src/backend/DesktopBackendConfiguration.test.ts apps/desktop/src/wsl/DesktopWslBackend.test.ts
       - name: Scoped lint
-        run: vp lint apps/web/src/rpc/environmentAccess.ts apps/web/src/rpc/environmentAccess.test.ts apps/desktop/src/wsl/DesktopWslPairing.ts apps/desktop/src/wsl/DesktopWslPairing.test.ts apps/desktop/src/settings/DesktopAppSettings.ts apps/web/src/components/settings/ConnectionsSettings.tsx packages/contracts/src/ipc.ts apps/web/src/components/settings/ConnectionsSettings.logic.ts apps/web/src/components/settings/ConnectionsSettings.logic.test.ts apps/desktop/src/settings/DesktopAppSettings.test.ts
+        run: vp lint apps/web/src/rpc/environmentAccess.ts apps/web/src/rpc/environmentAccess.test.ts apps/desktop/src/wsl/DesktopWslPairing.ts apps/desktop/src/wsl/DesktopWslPairing.test.ts apps/desktop/src/settings/DesktopAppSettings.ts apps/web/src/components/settings/ConnectionsSettings.tsx packages/contracts/src/ipc.ts apps/web/src/components/settings/ConnectionsSettings.logic.ts apps/web/src/components/settings/ConnectionsSettings.logic.test.ts apps/desktop/src/settings/DesktopAppSettings.test.ts apps/desktop/src/backend/DesktopBackendConfiguration.ts apps/desktop/src/wsl/DesktopWslBackend.ts
       - name: Web types
         run: timeout 600 vp run --filter @t3tools/web typecheck
       - name: Desktop types

@@ -1147,6 +1147,7 @@ export const make = Effect.gen(function* () {
           ...attemptedPorts,
           persisted.tailscaleServePort,
           persisted.wslPairingRoute.port,
+          persisted.wslIpPairingRoute.port,
           ...(primary ? [] : [exposure.port]),
         ]);
         const distro = previous.runningDistro;

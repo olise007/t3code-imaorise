@@ -152,7 +152,11 @@ export const layer = Layer.effect(
       // interface while Windows loopback still appears available.
       const port = yield* scanForWslPort(
         primaryConfig.port + 1,
-        [settings.tailscaleServePort, settings.wslPairingRoute.port],
+        [
+          settings.tailscaleServePort,
+          settings.wslPairingRoute.port,
+          settings.wslIpPairingRoute.port,
+        ],
         (port) => wslEnvironment.isPortAvailable?.(input.distro, port) ?? Effect.succeed(false),
       ).pipe(
         Effect.provideService(NetService.NetService, net),
