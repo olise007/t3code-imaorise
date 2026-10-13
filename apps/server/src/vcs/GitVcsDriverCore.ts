@@ -1039,7 +1039,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         );
         const env = {
           ...process.env,
-          LC_ALL: "C",
           // Status polling runs beside the user's own git commands; without this,
           // `git status` takes index.lock to save its refreshed index.
           GIT_OPTIONAL_LOCKS: "0",
