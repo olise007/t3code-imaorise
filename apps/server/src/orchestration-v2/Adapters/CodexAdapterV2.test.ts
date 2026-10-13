@@ -4270,6 +4270,95 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ],
   });
 
+  for (const snapshotStatus of ["completed", "failed", "inProgress", "absent"] as const) {
+    it.effect(
+      `reconciles a ${snapshotStatus} command snapshot without a completion notification`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const terminal = snapshotStatus === "completed" || snapshotStatus === "failed";
+            const item = {
+              ...backgroundCommandItem(terminal ? "completed" : "inProgress"),
+              status: snapshotStatus,
+              exitCode: snapshotStatus === "failed" ? 1 : terminal ? 0 : null,
+            };
+            const transcript = makeCodexReplayTranscript({
+              scenario: `codex-command-snapshot-${snapshotStatus}`,
+              entries: [
+                ...codexReplayPreamble({
+                  nativeThreadId: BG_NATIVE_THREAD,
+                  nativeTurnId: BG_NATIVE_TURN,
+                  prompt: BG_PROMPT,
+                }),
+                {
+                  type: "emit_inbound",
+                  label: "item/started",
+                  frame: {
+                    method: "item/started",
+                    params: {
+                      threadId: BG_NATIVE_THREAD,
+                      turnId: BG_NATIVE_TURN,
+                      startedAtMs: 1782622440500,
+                      item: backgroundCommandItem("inProgress"),
+                    },
+                  },
+                },
+                {
+                  type: "emit_inbound",
+                  label: "turn/completed",
+                  frame: {
+                    method: "turn/completed",
+                    params: {
+                      threadId: BG_NATIVE_THREAD,
+                      turn: {
+                        ...makeCodexReplayTurn({ id: BG_NATIVE_TURN, status: "completed" }),
+                        items: snapshotStatus === "absent" ? [] : [item],
+                        itemsView: "loaded",
+                      },
+                    },
+                  },
+                },
+              ],
+            });
+            const harness = yield* makeCodexReplayHarness(transcript);
+            const now = yield* DateTime.now;
+            yield* harness.runtime.startTurn(
+              makeCodexTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now,
+                attemptId: RunAttemptId.make(`attempt-snapshot-${snapshotStatus}`),
+                text: BG_PROMPT,
+              }),
+            );
+            yield* awaitUntil(
+              () => harness.terminalEvents().length === 1,
+              "root terminal after snapshot",
+            );
+            assert.equal(yield* harness.hasPendingBackgroundWork, !terminal);
+            const commandEvents = harness.events.filter(
+              (event) =>
+                event.type === "turn_item.updated" && event.turnItem.type === "command_execution",
+            );
+            const last = commandEvents.at(-1);
+            assert.isTrue(last?.type === "turn_item.updated");
+            if (last?.type === "turn_item.updated") {
+              assert.equal(last.turnItem.status, terminal ? snapshotStatus : "running");
+              if (terminal && last.turnItem.type === "command_execution") {
+                assert.equal(last.turnItem.output, "CODEX_BG_WAKE_DONE\n");
+                assert.equal(last.turnItem.exitCode, snapshotStatus === "failed" ? 1 : 0);
+              }
+            }
+            assert.lengthOf(harness.continuationRequests, 0);
+          }).pipe(
+            Effect.provide(
+              Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+            ),
+          ),
+        ),
+    );
+  }
+
   it.effect(
     "projects a post-settle background command completion and requests a continuation",
     () =>

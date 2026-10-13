@@ -5743,12 +5743,34 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly completedAt: DateTime.Utc;
           readonly failureMessage?: string;
           readonly failureCode?: string | null;
+          readonly commandItems?: ReadonlyArray<
+            Parameters<typeof buildCommandExecutionArtifacts>[1]
+          >;
         }) =>
           turnTerminalizationPermit.withPermits(1)(
             Effect.gen(function* () {
               const current = (yield* Ref.get(activeTurns)).get(input.nativeTurnId);
               if (current !== input.context) {
                 return false;
+              }
+              // The final snapshot can contain completion even when the individual
+              // item notification was missed. Keep absent and still-running items.
+              for (const item of input.commandItems ?? []) {
+                if (!codexItemStatus(item.status).completed) continue;
+                const tracked = (yield* Ref.get(runningCommandItemsByTurn)).get(input.nativeTurnId);
+                if (!tracked?.has(item.id)) continue;
+                const artifacts = yield* buildCommandExecutionArtifacts(input.context, item);
+                yield* emitProviderEvent({
+                  type: "node.updated",
+                  driver: CODEX_PROVIDER,
+                  node: artifacts.node,
+                });
+                yield* emitProviderEvent({
+                  type: "turn_item.updated",
+                  driver: CODEX_PROVIDER,
+                  turnItem: artifacts.turnItem,
+                });
+                yield* clearRunningCommandItem(input.nativeTurnId, item.id);
               }
               const providerRetry = yield* Ref.modify(providerRetries, (current) => {
                 const retry = current.get(input.context.providerTurnId);
@@ -6010,6 +6032,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             yield* finalizeCodexTurn({
               context,
               nativeTurnId: payload.turn.id,
+              commandItems: payload.turn.items.filter((item) => item.type === "commandExecution"),
               status,
               completedAt: codexTimestamp(payload.turn.completedAt),
               ...(payload.turn.error?.message === undefined
