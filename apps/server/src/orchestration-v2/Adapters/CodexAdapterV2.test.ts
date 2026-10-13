@@ -4313,7 +4313,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                       turn: {
                         ...makeCodexReplayTurn({ id: BG_NATIVE_TURN, status: "completed" }),
                         items: snapshotStatus === "absent" ? [] : [item],
-                        itemsView: "loaded",
+                        itemsView: "full",
                       },
                     },
                   },
