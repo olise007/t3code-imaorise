@@ -441,7 +441,18 @@ function gitCommandContext(
 // it echoes argv and remote URLs, which can carry credentials. Matching it
 // against fixed patterns yields a tag the caller can act on and a message that
 // quotes none of the matched text. Patterns run in order, specific first.
-const GIT_FAILURE_REASON_PATTERNS: ReadonlyArray<readonly [RegExp, GitCommandFailureReason]> = [
+type GitFailureDiagnosis =
+  | GitCommandFailureReason
+  | "index_locked"
+  | "permission_denied"
+  | "pathspec_not_found"
+  | "ignored_path"
+  | "storage_full"
+  | "index_corrupt"
+  | "dubious_ownership"
+  | "file_missing";
+
+const GIT_FAILURE_REASON_PATTERNS: ReadonlyArray<readonly [RegExp, GitFailureDiagnosis]> = [
   [/would clobber existing tag/i, "tag_would_be_clobbered"],
   [/is already (?:used by worktree at|checked out at)/i, "branch_checked_out_in_worktree"],
   [/a branch named .+ already exists/i, "branch_already_exists"],
@@ -461,7 +472,62 @@ const GIT_FAILURE_REASON_PATTERNS: ReadonlyArray<readonly [RegExp, GitCommandFai
   // Quoted-path forms only: an unquoted `fatal: <thing> already exists` also
   // covers tag and ref collisions, which are not path collisions.
   [/fatal: '[^']+' already exists|destination path .+ already exists/i, "path_already_exists"],
+  [/unable to create .+index\.lock.+file exists/i, "index_locked"],
+  [/permission denied/i, "permission_denied"],
+  [/pathspec .+ did not match any files/i, "pathspec_not_found"],
+  [/^The following paths are ignored by one of your \.gitignore files:/m, "ignored_path"],
+  [/no space left on device|disk quota exceeded/i, "storage_full"],
+  [/index file (?:corrupt|smaller than expected)|bad index file|index signature/i, "index_corrupt"],
+  [/detected dubious ownership/i, "dubious_ownership"],
+  [
+    /(?:unable to stat|cannot stat|could not open|unable to open).+no such file or directory/i,
+    "file_missing",
+  ],
 ];
+
+const GIT_FAILURE_DETAILS: Record<GitFailureDiagnosis, string> = {
+  authentication_failed: "Git authentication failed. Check the repository credentials.",
+  branch_already_exists: "A branch with that name already exists.",
+  branch_checked_out_in_worktree: "That branch is already checked out in another worktree.",
+  host_key_unverified: "SSH could not verify the remote host key.",
+  not_a_repository: "The selected directory is not a Git repository.",
+  path_already_exists: "The destination path already exists.",
+  remote_unreachable: "Git could not access the remote repository.",
+  tag_would_be_clobbered: "Fetching would overwrite an existing local tag.",
+  index_locked:
+    "Git could not acquire the index lock. Another Git operation may be active, or a stale lock may remain.",
+  permission_denied: "Git was denied permission to access a required file or directory.",
+  pathspec_not_found:
+    "A selected path no longer matches a file Git can stage. Refresh the file selection and retry.",
+  ignored_path: "A selected file is excluded by a Git ignore rule.",
+  storage_full: "Git could not write because the disk is full or its quota is exhausted.",
+  index_corrupt: "Git reported an invalid or corrupt index.",
+  dubious_ownership: "Git rejected the repository because its ownership is not trusted.",
+  file_missing: "Git could not read a required file because it no longer exists.",
+};
+
+function gitFailureDetail(reason: GitFailureDiagnosis | null, exitCode: number | null) {
+  return reason === null
+    ? `Git exited with status ${exitCode ?? "unknown"}; its diagnostic was not recognized.`
+    : GIT_FAILURE_DETAILS[reason];
+}
+
+// New diagnoses travel as safe detail text; older clients retain their error schema.
+function gitFailureReason(reason: GitFailureDiagnosis | null): GitCommandFailureReason | undefined {
+  switch (reason) {
+    case "index_locked":
+    case "permission_denied":
+    case "pathspec_not_found":
+    case "ignored_path":
+    case "storage_full":
+    case "index_corrupt":
+    case "dubious_ownership":
+    case "file_missing":
+      return undefined;
+    default:
+      return reason ?? undefined;
+  }
+}
 
 // Hooks write to the same stream git does, and nothing distinguishes their
 // text from git's: a pre-push hook echoing "authentication failed" would
@@ -478,12 +544,13 @@ const GIT_DIAGNOSTIC_LINE_PATTERN = /^(?:fatal|error):|^!\s|^\s+!\s/;
 const SSH_TRANSPORT_REFUSAL_PATTERN =
   /Permission denied \((?:publickey|password|keyboard-interactive)|Permission denied, please try again|Host key verification failed/i;
 
-function classifyGitFailure(stderr: string): GitCommandFailureReason | null {
+function classifyGitFailure(stderr: string): GitFailureDiagnosis | null {
   const diagnostics = stderr
     .split(/\r?\n/)
     .filter(
       (line) =>
         GIT_DIAGNOSTIC_LINE_PATTERN.test(line) ||
+        /^The following paths are ignored by one of your \.gitignore files:$/.test(line) ||
         // A remote hook can echo ssh's wording; only the local ssh's line counts.
         (!/^remote:/.test(line) && SSH_TRANSPORT_REFUSAL_PATTERN.test(line)),
     )
@@ -972,6 +1039,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         );
         const env = {
           ...process.env,
+          LC_ALL: "C",
           // Status polling runs beside the user's own git commands; without this,
           // `git status` takes index.lock to save its refreshed index.
           GIT_OPTIONAL_LOCKS: "0",
@@ -1050,8 +1118,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           const reason = classifyGitFailure(stderr.text);
           return yield* new GitCommandError({
             ...gitCommandContext(commandInput),
-            ...(reason === null ? {} : { reason }),
-            detail: "Git command exited with a non-zero status.",
+            ...(gitFailureReason(reason) === undefined ? {} : { reason: gitFailureReason(reason) }),
+            detail: gitFailureDetail(reason, exitCode),
             exitCode,
             stdoutLength: stdout.text.length,
             stderrLength: stderr.text.length,
@@ -1139,8 +1207,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         return Effect.fail(
           new GitCommandError({
             ...gitCommandContext({ operation, cwd, args }),
-            ...(reason === null ? {} : { reason }),
-            detail: options.fallbackErrorDetail ?? "Git command exited with a non-zero status.",
+            ...(gitFailureReason(reason) === undefined ? {} : { reason: gitFailureReason(reason) }),
+            detail: options.fallbackErrorDetail ?? gitFailureDetail(reason, result.exitCode),
             ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
             stdoutLength: result.stdout.length,
             stderrLength: result.stderr.length,

@@ -3499,6 +3499,81 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
   });
 
   describe("commit context", () => {
+    it.effect.each([
+      {
+        stderr: "fatal: Unable to create '/private/secret/index.lock': File exists.",
+        text: "index lock",
+      },
+      {
+        stderr: "fatal: cannot open '/private/secret': Permission denied",
+        text: "denied permission",
+      },
+      {
+        stderr: "fatal: pathspec 'private-secret' did not match any files",
+        text: "selected path no longer matches",
+      },
+      {
+        stderr: "The following paths are ignored by one of your .gitignore files:\nprivate-secret",
+        text: "Git ignore rule",
+      },
+      {
+        stderr: "error: unable to write file private-secret: No space left on device",
+        text: "disk is full",
+      },
+      { stderr: "fatal: index file corrupt: private-secret", text: "invalid or corrupt index" },
+      {
+        stderr: "fatal: detected dubious ownership in repository at 'private-secret'",
+        text: "ownership is not trusted",
+      },
+      {
+        stderr: "fatal: unable to stat 'private-secret': No such file or directory",
+        text: "no longer exists",
+      },
+      {
+        stderr: "fatal: unexpected diagnostic https://private-secret@host.invalid/repo",
+        text: "status 1; its diagnostic was not recognized",
+      },
+      {
+        stderr: "remote: fatal: Permission denied private-secret",
+        text: "status 1; its diagnostic was not recognized",
+      },
+    ])("reports a safe diagnosis for $text", ({ stderr, text }) =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const script = "diagnostic.sh";
+        yield* writeTextFile(
+          cwd,
+          script,
+          `#!/bin/sh\ncat >&2 <<'GIT_DIAGNOSTIC'\n${stderr}\nGIT_DIAGNOSTIC\nexit 1\n`,
+        );
+        const error = yield* driver
+          .execute({
+            operation: "GitVcsDriver.test.safeDiagnostic",
+            cwd,
+            args: ["-c", "alias.diagnostic=!sh diagnostic.sh", "diagnostic"],
+          })
+          .pipe(Effect.flip);
+        assert.include(error.detail, text);
+        assert.notInclude(error.message, "private-secret");
+        assert.notInclude(JSON.stringify(error), "private-secret");
+        assert.equal(error.exitCode, 1);
+      }),
+    );
+    it.effect("reports a missing selected path from commit preview without exposing the path", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const error = yield* driver
+          .prepareCommitContext(cwd, ["private-secret.txt"])
+          .pipe(Effect.flip);
+        assert.include(error.detail, "selected path no longer matches");
+        assert.notInclude(error.message, "private-secret");
+        assert.equal(yield* git(cwd, ["diff", "--cached", "--name-only"]), "");
+      }),
+    );
     it.effect("prepares selected files without staging and commits only those files", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
