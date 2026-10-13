@@ -1,6 +1,13 @@
 name: Personal Git diagnostics validation
 on:
   workflow_dispatch:
+    inputs:
+      source_revision:
+        description: Optional source revision for baseline comparisons
+        default: ""
+      driver_test_pattern:
+        description: Scoped Git driver test names
+        default: "commit context|process environment|refused|untrusted host|filesystem permission|hook|clobber"
 permissions:
   contents: read
 jobs:
@@ -16,6 +23,8 @@ jobs:
       GOMEMLIMIT: 5GiB
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_revision || github.sha }}
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
         with:
           node-version-file: package.json
@@ -23,7 +32,11 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - name: Git errors and commit preview regressions
-        run: timeout 900 vp test run --maxWorkers 1 apps/server/src/vcs/GitVcsDriverCore.test.ts apps/server/src/git/GitManager.test.ts
+        env:
+          DRIVER_TEST_PATTERN: ${{ inputs.driver_test_pattern }}
+        run: timeout 900 vp test run --maxWorkers 1 apps/server/src/vcs/GitVcsDriverCore.test.ts --testNamePattern "$DRIVER_TEST_PATTERN"
+      - name: Commit manager regressions
+        run: timeout 900 vp test run --maxWorkers 1 apps/server/src/git/GitManager.test.ts
       - name: Scoped lint
         run: vp lint apps/server/src/vcs/GitVcsDriverCore.ts apps/server/src/vcs/GitVcsDriverCore.test.ts
       - name: Server types
