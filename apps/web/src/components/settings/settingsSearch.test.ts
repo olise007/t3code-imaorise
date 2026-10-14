@@ -20,10 +20,16 @@ describe("WSL and desktop window settings destinations", () => {
     ["Pair WSL with another device", "wsl-pairing", "/settings/wsl"],
     ["Close to system tray", "close-to-tray", "/settings/general"],
     ["Minimize to system tray", "minimize-to-tray", "/settings/general"],
-  ])("finds %s on its dedicated page", (query, id, to) => {
-    expect(searchSettings(query, SETTINGS_SEARCH_ITEMS).find((item) => item.id === id)?.to).toBe(
-      to,
-    );
+  ])("finds %s on its dedicated page", async (query, id, to) => {
+    vi.resetModules();
+    vi.stubGlobal("window", { desktopBridge: {} });
+    vi.stubGlobal("navigator", { platform: "Win32" });
+    try {
+      const desktopSearch = await import("./settingsSearch");
+      expect(desktopSearch.searchSettings(query).find((item) => item.id === id)?.to).toBe(to);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -180,7 +186,7 @@ describe("searchSettings", () => {
     expect(SETTINGS_SEARCH_ITEMS.find((item) => item.id === "wsl-backend")).toMatchObject({
       id: "wsl-backend",
       title: "WSL backend",
-      to: "/settings/connections",
+      to: "/settings/wsl",
       desktopOnly: true,
       windowsOnly: true,
     });
