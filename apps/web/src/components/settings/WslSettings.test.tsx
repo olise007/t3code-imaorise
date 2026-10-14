@@ -113,8 +113,16 @@ describe("WSL settings refresh reconciliation", () => {
     vi.useFakeTimers();
     try {
       window.desktopBridge!.getBackendStartupStates = vi.fn(async () => [
-        { id: "primary", label: "Windows", status: { phase: "running", port: 4773, attempt: 1 } },
-        { id: "wsl:Ubuntu", label: "Ubuntu", status: { phase: "running", port: 4775, attempt: 1 } },
+        {
+          id: "primary",
+          label: "Windows",
+          status: { phase: "running" as const, port: 4773, attempt: 1 },
+        },
+        {
+          id: "wsl:Ubuntu",
+          label: "Ubuntu",
+          status: { phase: "running" as const, port: 4775, attempt: 1 },
+        },
       ]);
       await render(<BackendStartupSettings bridge={window.desktopBridge!} kind="wsl" />);
       expect(host.textContent).toContain("Ubuntu:");
