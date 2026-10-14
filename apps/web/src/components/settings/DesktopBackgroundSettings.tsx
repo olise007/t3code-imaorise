@@ -4,7 +4,9 @@ import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
 
-export function DesktopBackgroundSettings(props: { wslEnabled: boolean }) {
+import { isWindowsPlatform } from "~/lib/utils";
+import { searchableSetting } from "./settingsSearch";
+function useDesktopBackgroundSettings() {
   const bridge = window.desktopBridge;
   const [settings, setSettings] = useState<BackgroundSettings | null>(null);
   const [busy, setBusy] = useState(false);
@@ -36,6 +38,11 @@ export function DesktopBackgroundSettings(props: { wslEnabled: boolean }) {
       setBusy(false);
     }
   };
+  return { bridge, settings, busy, error, setBusy, setError, setSettings, save };
+}
+export function DesktopBackgroundSettings(props: { wslEnabled: boolean }) {
+  const { bridge, settings, busy, error, setBusy, setError, setSettings, save } =
+    useDesktopBackgroundSettings();
   if (!bridge?.getBackgroundSettings) return null;
   if (!settings)
     return error ? (
@@ -46,31 +53,7 @@ export function DesktopBackgroundSettings(props: { wslEnabled: boolean }) {
   return (
     <>
       <SettingsRow
-        title="Close to system tray"
-        description="Keep the app in the tray when you close its window. Windows only."
-        control={
-          <Switch
-            aria-label="Close to system tray"
-            checked={settings.closeToTray}
-            disabled={busy}
-            onCheckedChange={(closeToTray) => void save({ closeToTray })}
-          />
-        }
-      />
-      <SettingsRow
-        title="Minimize to system tray"
-        description="Hide the minimized window from the taskbar. Windows only."
-        control={
-          <Switch
-            aria-label="Minimize to system tray"
-            checked={settings.minimizeToTray}
-            disabled={busy}
-            onCheckedChange={(minimizeToTray) => void save({ minimizeToTray })}
-          />
-        }
-      />
-      <SettingsRow
-        title="Keep agents running when T3 closes"
+        {...searchableSetting("wsl-agent-persistence")}
         description={`Applies to ${settings.distro}. Closing Desktop leaves agents and tools running in WSL. Changes apply on the next exit.`}
         control={
           <Switch
@@ -82,7 +65,7 @@ export function DesktopBackgroundSettings(props: { wslEnabled: boolean }) {
         }
       />
       <SettingsRow
-        title="WSL background server"
+        {...searchableSetting("wsl-background-server")}
         description="Stop shuts down this environment's agents and tools. Start reconnects to an existing server when available."
         status={
           error ? (
@@ -115,6 +98,42 @@ export function DesktopBackgroundSettings(props: { wslEnabled: boolean }) {
           </Button>
         }
       />
+    </>
+  );
+}
+
+export function DesktopTraySettings() {
+  const { bridge, settings, busy, error, save } = useDesktopBackgroundSettings();
+  if (!bridge?.getBackgroundSettings || !isWindowsPlatform(navigator.platform)) return null;
+  if (!settings) return error ? <p role="alert">{error}</p> : null;
+  return (
+    <>
+      {" "}
+      <SettingsRow
+        {...searchableSetting("close-to-tray")}
+        description="Keep the app in the tray when you close its window. Windows only."
+        control={
+          <Switch
+            aria-label="Close to system tray"
+            checked={settings.closeToTray}
+            disabled={busy}
+            onCheckedChange={(closeToTray) => void save({ closeToTray })}
+          />
+        }
+      />
+      <SettingsRow
+        {...searchableSetting("minimize-to-tray")}
+        description="Hide the minimized window from the taskbar. Windows only."
+        control={
+          <Switch
+            aria-label="Minimize to system tray"
+            checked={settings.minimizeToTray}
+            disabled={busy}
+            onCheckedChange={(minimizeToTray) => void save({ minimizeToTray })}
+          />
+        }
+      />
+      {error ? <p role="alert">{error}</p> : null}
     </>
   );
 }

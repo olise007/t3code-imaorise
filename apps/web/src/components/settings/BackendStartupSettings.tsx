@@ -2,7 +2,15 @@ import { useEffect, useState } from "react";
 import type { DesktopBridge, DesktopBackendStartupState } from "@t3tools/contracts";
 import { Button } from "~/components/ui/button";
 
-export function BackendStartupSettings({ bridge }: { bridge: DesktopBridge }) {
+export function BackendStartupSettings({
+  bridge,
+  kind,
+  wslOnly = false,
+}: {
+  bridge: DesktopBridge;
+  kind?: "windows" | "wsl";
+  wslOnly?: boolean;
+}) {
   const [states, setStates] = useState<readonly DesktopBackendStartupState[]>([]);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -28,42 +36,47 @@ export function BackendStartupSettings({ bridge }: { bridge: DesktopBridge }) {
   return (
     <div aria-live="polite" className="space-y-2">
       {error && <p className="text-sm text-destructive">{error}</p>}
-      {states.map(({ id, label, status }) =>
-        status ? (
-          <div key={id} className="flex items-center justify-between gap-3 px-4 py-2">
-            <p className="text-sm text-muted-foreground">
-              {label}:{" "}
-              {status.diagnostic ??
-                (status.phase === "retrying"
-                  ? `Retrying on port ${status.port} (${status.attempt}/5)`
-                  : status.phase === "running"
-                    ? `Running on port ${status.port}`
-                    : `Starting on port ${status.port}`)}
-            </p>
-            {(status.phase === "slow" || status.phase === "failed") && (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={pending !== null}
-                onClick={async () => {
-                  if (pending !== null) return;
-                  setPending(id);
-                  setError(null);
-                  try {
-                    await bridge.retryBackendStartup?.(id);
-                  } catch {
-                    setError("Backend retry failed. Check startup diagnostics and try again.");
-                  } finally {
-                    setPending(null);
-                  }
-                }}
-              >
-                {pending === id ? "Retrying…" : "Retry"}
-              </Button>
-            )}
-          </div>
-        ) : null,
-      )}
+      {states
+        .filter(({ id }) => {
+          const isWsl = id.startsWith("wsl:") || (wslOnly && id === "primary");
+          return kind === undefined || (kind === "wsl" ? isWsl : !isWsl);
+        })
+        .map(({ id, label, status }) =>
+          status ? (
+            <div key={id} className="flex items-center justify-between gap-3 px-4 py-2">
+              <p className="text-sm text-muted-foreground">
+                {label}:{" "}
+                {status.diagnostic ??
+                  (status.phase === "retrying"
+                    ? `Retrying on port ${status.port} (${status.attempt}/5)`
+                    : status.phase === "running"
+                      ? `Running on port ${status.port}`
+                      : `Starting on port ${status.port}`)}
+              </p>
+              {(status.phase === "slow" || status.phase === "failed") && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={pending !== null}
+                  onClick={async () => {
+                    if (pending !== null) return;
+                    setPending(id);
+                    setError(null);
+                    try {
+                      await bridge.retryBackendStartup?.(id);
+                    } catch {
+                      setError("Backend retry failed. Check startup diagnostics and try again.");
+                    } finally {
+                      setPending(null);
+                    }
+                  }}
+                >
+                  {pending === id ? "Retrying…" : "Retry"}
+                </Button>
+              )}
+            </div>
+          ) : null,
+        )}
     </div>
   );
 }

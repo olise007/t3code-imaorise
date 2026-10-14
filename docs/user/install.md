@@ -87,12 +87,12 @@ from npm, it stays as it is.
 
 ### Windows Subsystem for Linux
 
-Choose a WSL distro in **Settings → Connections** to run agents and projects
+Choose a WSL distro in **Settings → WSL** to run agents and projects
 there. Install the provider CLIs inside that distro. T3 Code installs its own
 server runtime there automatically; the first launch after an app update can
 take longer.
 
-**Keep agents running when T3 closes** in **Settings → Connections → WSL** is
+**Keep agents running when T3 closes** in **Settings → WSL** is
 enabled by default. Exiting Desktop leaves that distro's server, agents, and
 tools running. Reopening Desktop reconnects to their existing history. Turn
 the setting off to stop that environment on the next exit, or use **Stop
@@ -100,7 +100,7 @@ background server** to stop it now. A running server keeps its current version
 until you explicitly stop and start it.
 
 On Windows, **Close to system tray** is enabled by default; **Minimize to system
-tray** is optional. Use the tray to reopen Settings or exit. **Exit** respects
+tray** is optional. Configure both in **Settings → General → Desktop window behavior**. Use the tray to reopen Settings or exit. **Exit** respects
 the WSL background setting; **Exit and stop servers** stops all T3-owned desktop
 servers. Background work survives Desktop closing while WSL remains running.
 Shutting down the PC or WSL, or a server failure, interrupts it.

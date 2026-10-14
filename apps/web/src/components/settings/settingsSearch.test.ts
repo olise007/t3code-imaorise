@@ -13,6 +13,20 @@ import {
   type SettingsSearchItem,
 } from "./settingsSearch";
 
+describe("WSL and desktop window settings destinations", () => {
+  it.each([
+    ["WSL backend", "wsl-backend", "/settings/wsl"],
+    ["WSL background server", "wsl-background-server", "/settings/wsl"],
+    ["Pair WSL with another device", "wsl-pairing", "/settings/wsl"],
+    ["Close to system tray", "close-to-tray", "/settings/general"],
+    ["Minimize to system tray", "minimize-to-tray", "/settings/general"],
+  ])("finds %s on its dedicated page", (query, id, to) => {
+    expect(searchSettings(query, SETTINGS_SEARCH_ITEMS).find((item) => item.id === id)?.to).toBe(
+      to,
+    );
+  });
+});
+
 const ITEMS: ReadonlyArray<SettingsSearchItem> = [
   {
     id: "word-wrap",

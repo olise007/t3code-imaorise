@@ -1,3 +1,4 @@
+import { DesktopTraySettings } from "./DesktopBackgroundSettings";
 import { flushComposerDraftWrites } from "../../composerDraftStore";
 import { SettingsGroup } from "./SettingsGroup";
 import { useScopedSettingsWriteAllowed } from "./useScopedSettings";
@@ -3136,8 +3137,11 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+      </SettingsSection>
 
-        {isElectron ? (
+      {isElectron ? (
+        <SettingsSection id="desktop-window-behavior" title="Desktop window behavior">
+          <DesktopTraySettings />
           <SettingsRow
             {...searchableSetting("quit-confirmation")}
             description="Hold mode also quits on two quick presses."
@@ -3177,8 +3181,8 @@ export function GeneralSettingsPanel() {
               </Select>
             }
           />
-        ) : null}
-      </SettingsSection>
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection id="text-generation" title="Text generation">
         <SettingsRow

@@ -26,6 +26,7 @@ export type SettingsPath =
   | "/settings/source-control"
   | "/settings/storage"
   | "/settings/connections"
+  | "/settings/wsl"
   | "/settings/archived";
 
 /**
@@ -105,6 +106,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
   "/settings/connections": "Connections",
+  "/settings/wsl": "WSL",
   "/settings/archived": "Archive",
 };
 
@@ -936,7 +938,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "wsl-backend",
     title: "WSL backend",
-    to: "/settings/connections",
+    to: "/settings/wsl",
     searchTerms: [
       "windows subsystem linux distro second server projects stop windows backend restart pair pairing mobile android tailscale https qr link",
     ],
@@ -944,6 +946,49 @@ export const SETTINGS_SEARCH_ITEMS = [
     windowsOnly: true,
     localBackendManagementOnly: true,
     wslAvailableOnly: true,
+  },
+  {
+    id: "wsl-agent-persistence",
+    title: "Keep agents running when T3 closes",
+    to: "/settings/wsl",
+    searchTerms: ["wsl background persistence distro exit"],
+    desktopOnly: true,
+    windowsOnly: true,
+    localBackendManagementOnly: true,
+  },
+  {
+    id: "wsl-background-server",
+    title: "WSL background server",
+    to: "/settings/wsl",
+    searchTerms: ["wsl start stop agents runtime"],
+    desktopOnly: true,
+    windowsOnly: true,
+    localBackendManagementOnly: true,
+  },
+  {
+    id: "wsl-pairing",
+    title: "Pair WSL with another device",
+    to: "/settings/wsl",
+    searchTerms: ["tailscale dns ip http https qr mobile pairing ports"],
+    desktopOnly: true,
+    windowsOnly: true,
+    localBackendManagementOnly: true,
+  },
+  {
+    id: "close-to-tray",
+    title: "Close to system tray",
+    to: "/settings/general",
+    searchTerms: ["desktop window close background"],
+    desktopOnly: true,
+    windowsOnly: true,
+  },
+  {
+    id: "minimize-to-tray",
+    title: "Minimize to system tray",
+    to: "/settings/general",
+    searchTerms: ["desktop window taskbar minimize"],
+    desktopOnly: true,
+    windowsOnly: true,
   },
   {
     id: "t3-connect",
@@ -1028,6 +1073,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/source-control": "environment-defaults",
   "/settings/storage": "project-defaults",
   "/settings/connections": "connections",
+  "/settings/wsl": null,
   "/settings/scheduled-tasks": null,
   "/settings/archived": "project-defaults",
 };

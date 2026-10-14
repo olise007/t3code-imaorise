@@ -1,3 +1,6 @@
+import { isElectron } from "~/env";
+import { isWindowsPlatform } from "~/lib/utils";
+import { useEnvironments } from "~/state/environments";
 import {
   lazy,
   Suspense,
@@ -89,6 +92,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/source-control": GitBranchIcon,
   "/settings/storage": HardDriveIcon,
   "/settings/connections": Link2Icon,
+  "/settings/wsl": PanelsTopLeftIcon,
   "/settings/archived": ArchiveIcon,
 };
 
@@ -114,8 +118,17 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const currentHash = useLocation({ select: (location) => location.hash });
   const currentSearch = useLocation({ select: (location) => location.search });
   const scopeSearch = useMemo(() => validateSettingsScopeSearch(currentSearch), [currentSearch]);
+  const { environments } = useEnvironments();
+  const showWsl =
+    (isElectron && isWindowsPlatform(navigator.platform)) ||
+    environments.some(
+      (environment) =>
+        environment.serverConfig?.environment.capabilities.desktopBackgroundRuntime === true,
+    );
   const navItems = SETTINGS_NAV_ITEMS.filter(
-    (item) => item.to !== "/settings/projects" || isSettingsOverviewVisible(scopeSearch),
+    (item) =>
+      (item.to !== "/settings/projects" || isSettingsOverviewVisible(scopeSearch)) &&
+      (item.to !== "/settings/wsl" || showWsl),
   );
   const { isMobile, setOpenMobile, open, setOpen } = useSidebar();
   const searchInputRef = useRef<HTMLInputElement>(null);

@@ -1,0 +1,53 @@
+name: Personal WSL settings validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Settings refresh, search, scope, pairing and tray regressions
+        run: >-
+          timeout 900 vp test run --maxWorkers 1
+          apps/web/src/components/settings/WslSettings.test.tsx
+          apps/web/src/routes/settings.wsl-navigation.test.ts
+          apps/web/src/components/settings/settingsSearch.test.ts
+          apps/web/src/components/settings/settingsScopeRetention.test.tsx
+          apps/web/src/components/settings/ConnectionsSettings.logic.test.ts
+          apps/web/src/components/settings/SettingsPanels.logic.test.ts
+          apps/web/src/state/desktopWslState.test.ts
+          apps/desktop/src/settings/DesktopAppSettings.test.ts
+          apps/desktop/src/window/trayWindowPolicy.test.ts
+      - name: Scoped lint
+        run: >-
+          vp lint apps/web/src/components/settings/WslSettings.tsx
+          apps/web/src/components/settings/WslSettings.test.tsx
+          apps/web/src/routes/settings.wsl-navigation.test.ts
+          apps/web/src/components/settings/ConnectionsSettings.tsx
+          apps/web/src/components/settings/DesktopBackgroundSettings.tsx
+          apps/web/src/components/settings/BackendStartupSettings.tsx
+          apps/web/src/components/settings/SettingsPanels.tsx
+          apps/web/src/components/settings/SettingsSidebarNav.tsx
+          apps/web/src/components/settings/SettingsScopeSentence.tsx
+          apps/web/src/components/settings/settingsSearch.ts apps/web/src/components/settings/settingsSearch.test.ts
+          apps/web/src/routes/settings.connections.tsx apps/web/src/routes/settings.wsl.tsx
+      - name: Web types
+        run: timeout 600 vp run --filter @t3tools/web typecheck
+      - name: Desktop types
+        run: timeout 600 vp run --filter @t3tools/desktop typecheck
