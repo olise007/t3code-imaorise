@@ -62,7 +62,7 @@ import { BackendStartupSettings } from "./BackendStartupSettings";
 
 let host: HTMLDivElement;
 let root: Root;
-let warnings: ReturnType<typeof vi.spyOn>;
+let warnings: { mock: { calls: unknown[][] } };
 const settings = {
   distro: "Ubuntu",
   keepAgentsRunning: true,
@@ -82,8 +82,9 @@ beforeEach(() => {
     enabled: true,
     wslOnly: false,
     distro: "Ubuntu",
-    distros: [{ name: "Ubuntu", isDefault: true }],
-  } as DesktopWslState;
+    distros: [{ name: "Ubuntu", isDefault: true, version: 2 }],
+    preflightError: null,
+  };
   window.desktopBridge = {
     getBackgroundSettings: vi.fn(async () => ({
       ...settings,
