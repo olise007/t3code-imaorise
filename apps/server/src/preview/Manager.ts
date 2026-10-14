@@ -23,6 +23,7 @@ import {
   type PreviewResizeInput,
   type PreviewAdjustInput,
   FILL_PREVIEW_VIEWPORT,
+  DEFAULT_BROWSER_VIEWPORT,
   PreviewSessionLookupError,
   type PreviewSessionSnapshot,
 } from "@t3tools/contracts";
@@ -218,7 +219,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           : { _tag: "Idle" },
         canGoBack: false,
         canGoForward: false,
-        viewport: input.viewport ?? FILL_PREVIEW_VIEWPORT,
+        viewport: input.viewport ?? DEFAULT_BROWSER_VIEWPORT,
         ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
         ...(runtime === undefined ? {} : { runtime }),
         ...(runtime === "server" && input.automationOwner !== undefined

@@ -34,7 +34,6 @@ import { BrowserProfile, BrowserProfileId, DEFAULT_BROWSER_PROFILE_ID } from "./
 import {
   DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
-  FILL_PREVIEW_VIEWPORT,
   PreviewAppearancePreference,
   PreviewViewportSetting,
   PreviewZoomFactor,
@@ -273,7 +272,12 @@ export type DefaultThemePreference = typeof DefaultThemePreference.Type;
  * client-local for the same reason: the Chromium guest being captured belongs
  * to the desktop app.
  */
-export const DEFAULT_BROWSER_VIEWPORT: PreviewViewportSetting = FILL_PREVIEW_VIEWPORT;
+export const DEFAULT_BROWSER_VIEWPORT: PreviewViewportSetting = {
+  _tag: "preset",
+  presetId: "desktop-1440x900",
+  width: 1440,
+  height: 900,
+};
 export const DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW = true;
 export const BROWSER_RECORDING_FRAME_RATES = [30, 60] as const;
 export const BrowserRecordingFrameRate = Schema.Literals(BROWSER_RECORDING_FRAME_RATES);

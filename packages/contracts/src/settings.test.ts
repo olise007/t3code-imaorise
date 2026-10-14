@@ -8,6 +8,7 @@ import {
   ClientSettingsPatch,
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
+  DEFAULT_BROWSER_VIEWPORT,
   requiredScopesForProjectMutation,
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
@@ -22,6 +23,32 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+
+describe("browser viewport defaults", () => {
+  it("uses desktop 1440×900 when the preference is missing", () => {
+    expect(decodeClientSettings({}).browserDefaultViewport).toEqual(DEFAULT_BROWSER_VIEWPORT);
+    expect(DEFAULT_BROWSER_VIEWPORT).toEqual({
+      _tag: "preset",
+      presetId: "desktop-1440x900",
+      width: 1440,
+      height: 900,
+    });
+  });
+
+  it.each([
+    { _tag: "fill" },
+    { _tag: "freeform", width: 900, height: 600 },
+    { _tag: "preset", presetId: "iphone-12-pro", width: 390, height: 844 },
+    { _tag: "preset", presetId: "desktop-1920x1080", width: 1920, height: 1080 },
+    { _tag: "preset", presetId: "iphone-15-pro", width: 393, height: 852 },
+  ])("preserves saved viewport %j", (browserDefaultViewport) => {
+    const decoded = decodeClientSettings({ browserDefaultViewport });
+    expect(decoded.browserDefaultViewport).toEqual(browserDefaultViewport);
+    expect(decodeClientSettings(encodeClientSettings(decoded)).browserDefaultViewport).toEqual(
+      browserDefaultViewport,
+    );
+  });
+});
 
 describe("ServerSettings response streaming", () => {
   it("defaults to paragraph buffering", () => {

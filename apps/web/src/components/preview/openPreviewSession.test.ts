@@ -1,7 +1,7 @@
 import {
   DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_CLIENT_SETTINGS,
-  FILL_PREVIEW_VIEWPORT,
+  DEFAULT_BROWSER_VIEWPORT,
   type PreviewOpenInput,
   type PreviewSessionSnapshot,
   type ScopedThreadRef,
@@ -52,6 +52,25 @@ afterEach(() => {
 });
 
 describe("openPreviewSession", () => {
+  it.each(["desktop", "server"] as const)(
+    "preserves an explicit mobile viewport on %s",
+    async (runtime) => {
+      const viewport = {
+        _tag: "preset",
+        presetId: "iphone-12-pro",
+        width: 390,
+        height: 844,
+      } as const;
+      const open = vi.fn(async (_input: PreviewOpenInput) => AsyncResult.success(snapshot));
+      await openPreviewSession({
+        openPreview: ({ input }) => open(input),
+        threadRef,
+        runtime,
+        viewport,
+      });
+      expect(open.mock.calls[0]?.[0]).toMatchObject({ viewport });
+    },
+  );
   it("creates an idle tab without recording a recently visited URL", async () => {
     const idleSnapshot: PreviewSessionSnapshot = {
       ...snapshot,
@@ -67,7 +86,7 @@ describe("openPreviewSession", () => {
 
     expect(open).toHaveBeenCalledWith({
       threadId: "thread-1",
-      viewport: FILL_PREVIEW_VIEWPORT,
+      viewport: DEFAULT_BROWSER_VIEWPORT,
       profileId: DEFAULT_BROWSER_PROFILE_ID,
     });
     expect(readThreadPreviewState(threadRef).snapshot).toEqual(idleSnapshot);
@@ -86,7 +105,7 @@ describe("openPreviewSession", () => {
     expect(open).toHaveBeenCalledWith({
       threadId: "thread-1",
       url: "t3.chat",
-      viewport: FILL_PREVIEW_VIEWPORT,
+      viewport: DEFAULT_BROWSER_VIEWPORT,
       profileId: DEFAULT_BROWSER_PROFILE_ID,
     });
     expect(readThreadPreviewState(threadRef).snapshot).toEqual(snapshot);

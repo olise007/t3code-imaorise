@@ -1,7 +1,7 @@
 import {
   DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_CLIENT_SETTINGS,
-  FILL_PREVIEW_VIEWPORT,
+  DEFAULT_BROWSER_VIEWPORT,
   type PreviewOpenInput,
   type PreviewSessionSnapshot,
   type ScopedThreadRef,
@@ -53,7 +53,7 @@ describe("addBrowserSurface", () => {
 
     expect(openPreview).toHaveBeenCalledWith({
       threadId: "thread-1",
-      viewport: FILL_PREVIEW_VIEWPORT,
+      viewport: DEFAULT_BROWSER_VIEWPORT,
       profileId: "profile-work",
     });
   });
@@ -69,7 +69,7 @@ describe("addBrowserSurface", () => {
 
     expect(openPreview).toHaveBeenCalledWith({
       threadId: "thread-1",
-      viewport: FILL_PREVIEW_VIEWPORT,
+      viewport: DEFAULT_BROWSER_VIEWPORT,
       profileId: DEFAULT_BROWSER_PROFILE_ID,
     });
     expect(Object.keys(readThreadPreviewState(threadRef).sessions)).toEqual(["tab-1", "tab-2"]);

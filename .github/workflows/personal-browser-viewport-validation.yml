@@ -1,0 +1,60 @@
+name: Personal browser viewport validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Presets, defaults, manual and agent opens, persistence and layout
+        run: >-
+          timeout 900 vp test run --maxWorkers 1
+          packages/shared/src/previewViewport.test.ts
+          packages/contracts/src/settings.test.ts
+          apps/web/src/browser/browserDefaults.test.ts
+          apps/web/src/browser/browserViewportLayout.test.ts
+          apps/web/src/hooks/useSettings.test.ts
+          apps/web/src/components/preview/openPreviewSession.test.ts
+          apps/web/src/components/preview/addBrowserSurface.test.ts
+          apps/server/src/preview/Manager.test.ts
+          apps/server/src/preview/ServerBrowser.test.ts
+          apps/desktop/src/settings/DesktopClientSettings.test.ts
+      - name: Scoped lint
+        run: >-
+          vp lint packages/contracts/src/preview.ts packages/contracts/src/previewAutomation.ts
+          packages/contracts/src/settings.ts packages/contracts/src/settings.test.ts
+          packages/shared/src/previewViewport.ts packages/shared/src/previewViewport.test.ts
+          apps/web/src/browser/BrowserDeviceToolbar.tsx apps/web/src/browser/BrowserProfileReporter.tsx
+          apps/web/src/components/settings/IntegrationsSettings.tsx
+          apps/web/src/components/preview/openPreviewSession.test.ts
+          apps/web/src/components/preview/addBrowserSurface.test.ts apps/web/src/hooks/useSettings.test.ts
+          apps/server/src/preview/Manager.ts apps/server/src/preview/Manager.test.ts
+          apps/server/src/preview/ServerBrowser.ts apps/server/src/preview/ServerBrowser.test.ts
+      - name: Contracts types
+        run: timeout 600 vp run --filter @t3tools/contracts typecheck
+      - name: Shared types
+        run: timeout 600 vp run --filter @t3tools/shared typecheck
+      - name: Web types
+        run: timeout 600 vp run --filter @t3tools/web typecheck
+      - name: Server types
+        run: timeout 600 vp run --filter t3 typecheck
+      - name: Desktop types
+        run: timeout 600 vp run --filter @t3tools/desktop typecheck
+      - name: Mobile contract consumers
+        run: timeout 600 vp run --filter @t3tools/mobile typecheck

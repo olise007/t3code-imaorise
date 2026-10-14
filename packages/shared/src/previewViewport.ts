@@ -16,9 +16,37 @@ export interface PreviewViewportPreset {
 
 type PreviewViewportPresetDefinition = Omit<PreviewViewportPreset, "id">;
 
-// Keep this in Chrome DevTools' default-device order. Dimensions are CSS
-// viewport sizes from Chromium's EmulatedDevices.ts standard catalog.
+// Desktop sizes precede Chrome DevTools' standard device catalog. All sizes
+// are CSS viewport dimensions, independent of the browser panel's size.
 const PREVIEW_VIEWPORT_PRESET_DEFINITIONS = {
+  "desktop-1920x1080": {
+    label: "Desktop 1920×1080",
+    category: "Desktop",
+    detail: "1920 × 1080",
+    width: 1920,
+    height: 1080,
+  },
+  "desktop-1440x900": {
+    label: "Desktop 1440×900",
+    category: "Desktop",
+    detail: "1440 × 900",
+    width: 1440,
+    height: 900,
+  },
+  "laptop-1366x768": {
+    label: "Laptop 1366×768",
+    category: "Desktop",
+    detail: "1366 × 768",
+    width: 1366,
+    height: 768,
+  },
+  "laptop-1280x800": {
+    label: "Laptop 1280×800",
+    category: "Desktop",
+    detail: "1280 × 800",
+    width: 1280,
+    height: 800,
+  },
   "iphone-se": {
     label: "iPhone SE",
     category: "Phone",
@@ -145,6 +173,13 @@ export const PREVIEW_VIEWPORT_PRESETS: ReadonlyArray<PreviewViewportPreset> =
     id,
     ...PREVIEW_VIEWPORT_PRESET_DEFINITIONS[id],
   }));
+
+export const PREVIEW_VIEWPORT_PRESET_GROUPS = (["Desktop", "Tablet", "Phone"] as const).map(
+  (category) => ({
+    category,
+    presets: PREVIEW_VIEWPORT_PRESETS.filter((preset) => preset.category === category),
+  }),
+);
 
 export function resolvePreviewViewport(
   input: PreviewAutomationResizeInput,

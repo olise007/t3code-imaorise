@@ -1,7 +1,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { type PreviewEvent, ThreadId } from "@t3tools/contracts";
+import { DEFAULT_BROWSER_VIEWPORT, type PreviewEvent, ThreadId } from "@t3tools/contracts";
 import { PreviewUrlNormalizationError } from "@t3tools/shared/preview";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -55,6 +55,7 @@ it.layer(layer)("PreviewManager", (it) => {
 
       const snapshot = yield* manager.open({ threadId, url: "localhost:5173" });
       expect(snapshot.tabId.startsWith("tab_")).toBe(true);
+      expect(snapshot.viewport).toEqual(DEFAULT_BROWSER_VIEWPORT);
       expect(snapshot.navStatus._tag).toBe("Loading");
       if (snapshot.navStatus._tag === "Loading") {
         expect(snapshot.navStatus.url).toBe("http://localhost:5173/");

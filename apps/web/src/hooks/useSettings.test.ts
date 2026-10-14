@@ -3,7 +3,11 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
 } from "@t3tools/contracts";
-import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts/settings";
+import {
+  DEFAULT_BROWSER_VIEWPORT,
+  DEFAULT_CLIENT_SETTINGS,
+  type ClientSettings,
+} from "@t3tools/contracts/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const persistenceMocks = vi.hoisted(() => ({
@@ -39,6 +43,15 @@ afterEach(() => {
 });
 
 describe("client settings hydration", () => {
+  it("persists the desktop viewport and restores it after rehydrating", async () => {
+    await persistClientSettingsPatch({ browserDefaultViewport: DEFAULT_BROWSER_VIEWPORT });
+    const stored = persistenceMocks.setClientSettings.mock.calls.at(-1)?.[0];
+    expect(stored?.browserDefaultViewport).toEqual(DEFAULT_BROWSER_VIEWPORT);
+    __resetClientSettingsPersistenceForTests();
+    persistenceMocks.getClientSettings.mockResolvedValue(stored ?? null);
+    await ensureClientSettingsHydrated();
+    expect(getClientSettings().browserDefaultViewport).toEqual(DEFAULT_BROWSER_VIEWPORT);
+  });
   const savedSettings = {
     ...DEFAULT_CLIENT_SETTINGS,
     timestampFormat: "12-hour" as const,

@@ -60,6 +60,10 @@ export const PreviewRenderedViewportSize = Schema.Struct({
 export type PreviewRenderedViewportSize = typeof PreviewRenderedViewportSize.Type;
 
 export const PREVIEW_VIEWPORT_PRESET_IDS = [
+  "desktop-1920x1080",
+  "desktop-1440x900",
+  "laptop-1366x768",
+  "laptop-1280x800",
   "iphone-se",
   "iphone-xr",
   "iphone-12-pro",
@@ -88,10 +92,6 @@ export type PreviewViewportPresetId = typeof PreviewViewportPresetId.Type;
  * PREVIEW_VIEWPORT_PRESET_IDS.
  */
 const LEGACY_PREVIEW_VIEWPORT_PRESET_IDS = [
-  "desktop-1920x1080",
-  "desktop-1440x900",
-  "laptop-1366x768",
-  "laptop-1280x800",
   "ipad-pro-11",
   "iphone-15-pro",
   "pixel-8",
@@ -300,6 +300,8 @@ export const PreviewReportProfilesInput = Schema.Struct({
   /** The user's own profiles; the server adds the built-ins. */
   profiles: Schema.Array(BrowserProfile).check(Schema.isMaxLength(BROWSER_PROFILE_MAX_COUNT)),
   defaultProfileId: BrowserProfileId,
+  /** Optional for older clients; applies only to newly opened agent tabs. */
+  defaultViewport: Schema.optional(PreviewViewportSetting),
 });
 export type PreviewReportProfilesInput = typeof PreviewReportProfilesInput.Type;
 

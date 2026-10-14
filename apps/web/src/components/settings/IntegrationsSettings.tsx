@@ -39,7 +39,10 @@ import {
   type PreviewAppearancePreference,
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
-import { PREVIEW_VIEWPORT_PRESETS } from "@t3tools/shared/previewViewport";
+import {
+  PREVIEW_VIEWPORT_PRESETS,
+  PREVIEW_VIEWPORT_PRESET_GROUPS,
+} from "@t3tools/shared/previewViewport";
 import { MoreVertical, Plus as PlusIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 
@@ -299,7 +302,12 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
       {...searchableSetting("browser-default-viewport")}
       description="Tab size for you and agents. Fill fits the panel; other sizes show the device toolbar."
       resetAction={
-        !disabled && viewport._tag !== DEFAULT_BROWSER_VIEWPORT._tag ? (
+        !disabled &&
+        (viewportSelectValue(viewport) !== viewportSelectValue(DEFAULT_BROWSER_VIEWPORT) ||
+          (viewport._tag !== "fill" &&
+            DEFAULT_BROWSER_VIEWPORT._tag !== "fill" &&
+            (viewport.width !== DEFAULT_BROWSER_VIEWPORT.width ||
+              viewport.height !== DEFAULT_BROWSER_VIEWPORT.height))) ? (
           <SettingResetButton
             label="default browser viewport"
             onClick={() => updateSettings({ browserDefaultViewport: DEFAULT_BROWSER_VIEWPORT })}
@@ -323,19 +331,21 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
             <SelectPopup align="end" alignItemWithTrigger={false}>
               <SelectItem value={FILL_VALUE}>Fill panel</SelectItem>
               <SelectItem value={RESPONSIVE_VALUE}>Responsive</SelectItem>
-              <SelectGroup>
-                <SelectGroupLabel>Standard</SelectGroupLabel>
-                {PREVIEW_VIEWPORT_PRESETS.map((preset) => (
-                  <SelectItem key={preset.id} value={preset.id}>
-                    <span className="flex w-full items-center justify-between gap-5">
-                      <span>{preset.label}</span>
-                      <span className="text-xs tabular-nums text-muted-foreground">
-                        {preset.detail}
+              {PREVIEW_VIEWPORT_PRESET_GROUPS.map(({ category, presets }) => (
+                <SelectGroup key={category}>
+                  <SelectGroupLabel>{category}</SelectGroupLabel>
+                  {presets.map((preset) => (
+                    <SelectItem key={preset.id} value={preset.id}>
+                      <span className="flex w-full items-center justify-between gap-5">
+                        <span>{preset.label}</span>
+                        <span className="text-xs tabular-nums text-muted-foreground">
+                          {preset.detail}
+                        </span>
                       </span>
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectGroup>
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
             </SelectPopup>
           </Select>
 

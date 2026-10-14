@@ -4,10 +4,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
   EnvironmentId,
+  DEFAULT_BROWSER_VIEWPORT,
   PreviewTabId,
   ProviderInstanceId,
   ThreadId,
   type PreviewAutomationSnapshot,
+  type PreviewAutomationResizeResult,
   type PreviewAutomationStatus,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -1539,10 +1541,70 @@ it.live(
     ).pipe(Effect.provide(layer)),
 );
 
+it.live.each([false, true])(
+  "agent opens honor viewport preferences with desktop hosting=%s",
+  (desktop) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* ServerBrowser.ServerBrowser;
+        const broker = yield* Broker.PreviewAutomationBroker;
+        yield* Effect.yieldNow;
+        const mobile = {
+          _tag: "preset",
+          presetId: "iphone-12-pro",
+          width: 390,
+          height: 844,
+        } as const;
+        yield* browser.reportProfiles({
+          profiles: [],
+          defaultProfileId: "default",
+          defaultViewport: mobile,
+        });
+        desktopRendersNext = desktop;
+        const opened = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "open",
+          input: { reuseExistingTab: false, show: false },
+        });
+        expect(opened.viewportSetting).toEqual(mobile);
+        yield* browser.reportProfiles({
+          profiles: [],
+          defaultProfileId: "default",
+          defaultViewport: DEFAULT_BROWSER_VIEWPORT,
+        });
+        const reused = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "open",
+          input: { tabId: opened.tabId, show: false },
+        });
+        expect(reused.viewportSetting).toEqual(mobile);
+        desktopRendersNext = desktop;
+        const next = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "open",
+          input: { reuseExistingTab: false, show: false },
+        });
+        expect(next.viewportSetting).toEqual(DEFAULT_BROWSER_VIEWPORT);
+        const resized = yield* broker.invoke<PreviewAutomationResizeResult>({
+          scope,
+          operation: "resize",
+          input: { tabId: next.tabId, mode: "preset", preset: "iphone-12-pro" },
+        });
+        expect(resized.setting).toEqual(mobile);
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
 it.live("an agent tab keeps throwaway storage when no client reported profiles", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      yield* ready;
+      const { broker } = yield* ready;
+      const status = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "status",
+        input: {},
+      });
+      expect(status.viewportSetting).toEqual(DEFAULT_BROWSER_VIEWPORT);
       expect(contextRequests).toEqual([{ profileId: "default", isolated: true }]);
     }),
   ).pipe(Effect.provide(layer)),

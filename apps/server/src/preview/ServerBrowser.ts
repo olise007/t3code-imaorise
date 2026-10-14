@@ -1271,6 +1271,7 @@ const make = Effect.gen(function* () {
   let reportedProfiles: {
     readonly profiles: ReadonlyArray<BrowserProfile>;
     readonly defaultProfileId: string;
+    readonly defaultViewport?: PreviewViewportSetting;
   } | null = null;
 
   const reportProfiles: ServerBrowser["Service"]["reportProfiles"] = (input) =>
@@ -1280,6 +1281,7 @@ const make = Effect.gen(function* () {
         profiles,
         defaultProfileId:
           findBrowserProfile(profiles, input.defaultProfileId)?.id ?? DEFAULT_BROWSER_PROFILE_ID,
+        ...(input.defaultViewport === undefined ? {} : { defaultViewport: input.defaultViewport }),
       };
     });
 
@@ -1746,6 +1748,9 @@ const make = Effect.gen(function* () {
                 ...(url ? { url } : {}),
                 ...(profileId === undefined ? {} : { profileId }),
                 runtime: "server",
+                ...(reportedProfiles?.defaultViewport === undefined
+                  ? {}
+                  : { viewport: reportedProfiles.defaultViewport }),
                 reveal: false,
                 automationOwner: request.agentSessionId,
               }),

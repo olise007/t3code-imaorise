@@ -282,7 +282,7 @@ export const PreviewAutomationResizeInput = Schema.Struct({
   }),
   preset: Schema.optional(
     PreviewViewportPresetId.annotate({
-      description: "Named viewport from Chrome DevTools' standard device catalog.",
+      description: "Named desktop, tablet, or phone viewport from the browser's preset catalog.",
     }),
   ).annotate({
     description: "Named device size. Required only when mode is preset.",

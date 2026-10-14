@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { PREVIEW_VIEWPORT_PRESETS, resolvePreviewViewport } from "./previewViewport.ts";
+import {
+  PREVIEW_VIEWPORT_PRESETS,
+  PREVIEW_VIEWPORT_PRESET_GROUPS,
+  resolvePreviewViewport,
+} from "./previewViewport.ts";
 
 describe("previewViewport", () => {
   it("resolves fill and exact freeform viewports", () => {
@@ -33,8 +37,12 @@ describe("previewViewport", () => {
     });
   });
 
-  it("matches Chrome's standard device catalog ordering", () => {
+  it("puts desktop sizes before Chrome's standard device catalog", () => {
     expect(PREVIEW_VIEWPORT_PRESETS.map((preset) => preset.label)).toEqual([
+      "Desktop 1920×1080",
+      "Desktop 1440×900",
+      "Laptop 1366×768",
+      "Laptop 1280×800",
       "iPhone SE",
       "iPhone XR",
       "iPhone 12 Pro",
@@ -53,5 +61,30 @@ describe("previewViewport", () => {
       "Nest Hub",
       "Nest Hub Max",
     ]);
+  });
+
+  it.each([
+    ["desktop-1920x1080", 1920, 1080],
+    ["desktop-1440x900", 1440, 900],
+    ["laptop-1366x768", 1366, 768],
+    ["laptop-1280x800", 1280, 800],
+  ] as const)("resolves restored preset %s", (preset, width, height) => {
+    expect(resolvePreviewViewport({ mode: "preset", preset })).toEqual({
+      _tag: "preset",
+      presetId: preset,
+      width,
+      height,
+    });
+  });
+
+  it("groups every preset once under its device category", () => {
+    expect(PREVIEW_VIEWPORT_PRESET_GROUPS.map((group) => group.category)).toEqual([
+      "Desktop",
+      "Tablet",
+      "Phone",
+    ]);
+    const grouped = PREVIEW_VIEWPORT_PRESET_GROUPS.flatMap((group) => group.presets);
+    expect(new Set(grouped.map((preset) => preset.id)).size).toBe(PREVIEW_VIEWPORT_PRESETS.length);
+    expect(grouped).toHaveLength(PREVIEW_VIEWPORT_PRESETS.length);
   });
 });
