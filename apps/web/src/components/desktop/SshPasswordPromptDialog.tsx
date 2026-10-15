@@ -158,10 +158,22 @@ function ActiveSshPasswordPrompt({
     >
       <DialogPopup className="max-w-md" showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle>SSH Password Required</DialogTitle>
+          <DialogTitle>
+            {request.prompt.startsWith("Verify SSH host key")
+              ? "Verify SSH host key"
+              : "SSH authentication required"}
+          </DialogTitle>
           <DialogDescription>
-            T3 needs your SSH password to connect to <code>{target}</code>. The password is passed
-            to the local SSH process for this connection attempt and is not saved by T3 Code.
+            {request.prompt.startsWith("Verify SSH host key") ? (
+              <>
+                Check the fingerprint for <code>{target}</code> before trusting this host.
+              </>
+            ) : (
+              <>
+                Enter the SSH password or key passphrase for <code>{target}</code>. It is passed to
+                the selected SSH client and is not saved by T3 Code.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel scrollFade={false}>
@@ -193,7 +205,7 @@ function ActiveSshPasswordPrompt({
                 autoComplete="current-password"
                 disabled={isResponding || isExpired}
                 name="ssh-password"
-                type="password"
+                type={request.prompt.startsWith("Verify SSH host key") ? "text" : "password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
               />

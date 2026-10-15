@@ -1244,6 +1244,9 @@ export interface DesktopBridge {
   clearConnectionCatalog?: () => Promise<void>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
   discoverSshConnections?: (loadDistro?: string) => Promise<DesktopSshDiscoveryReport>;
+  onSshConnectionProgress?: (
+    listener: (progress: { target: DesktopSshEnvironmentTarget; stage: string }) => void,
+  ) => () => void;
   /** Resolves a suggested SSH alias before populating the connection form. */
   resolveSshHost: (
     alias: string,

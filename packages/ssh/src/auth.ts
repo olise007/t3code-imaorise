@@ -29,6 +29,7 @@ export interface SshAskpassHelperDescriptor {
 }
 
 export interface SshAuthOptions {
+  readonly trustedHostPrompt?: string;
   readonly authSecret?: string | null;
   readonly batchMode?: "yes" | "no";
   readonly interactiveAuth?: boolean;
@@ -54,6 +55,7 @@ export class SshPasswordPrompt extends Context.Service<SshPasswordPrompt, SshPas
 }
 
 export interface SshChildEnvironmentOptions {
+  readonly trustedHostPrompt?: string;
   readonly interactiveAuth?: boolean;
   readonly baseEnv?: NodeJS.ProcessEnv;
   readonly askpassDirectory?: string;
@@ -75,6 +77,8 @@ const ASKPASS_POSIX_SCRIPT = `#!/bin/sh
 # Invoked by ssh via SSH_ASKPASS when T3 Code re-runs ssh with a cached password
 # from the renderer's in-app prompt. We never expose a native dialog here - if
 # T3_SSH_AUTH_SECRET is missing, that's a caller bug and we fail loudly.
+if [ -n "\${T3_SSH_TRUST_PROMPT:-}" ] && [ "$*" = "$T3_SSH_TRUST_PROMPT" ]; then printf 'yes\\n'; exit 0; fi
+case "$*" in *'yes/no'*) printf 'T3_SSH_PROMPT:%s\\n' "$(printf '%s' "$*" | base64 | tr -d '\\n')" >&2; exit 1 ;; esac
 if [ "\${T3_SSH_AUTH_SECRET+x}" = "x" ]; then
   printf "%s\\n" "$T3_SSH_AUTH_SECRET"
   exit 0
@@ -91,6 +95,9 @@ const ASKPASS_WINDOWS_SCRIPT = `# Invoked by ssh via SSH_ASKPASS (through ssh-as
 # ssh with a cached password from the renderer's in-app prompt. We never expose\r
 # a native dialog here - if T3_SSH_AUTH_SECRET is missing, that's a caller bug\r
 # and we fail loudly.\r
+$promptText = $args -join ' '\r
+if ($env:T3_SSH_TRUST_PROMPT -and $promptText -eq $env:T3_SSH_TRUST_PROMPT) { [Console]::Out.WriteLine('yes'); exit 0 }\r
+if ($promptText.Contains('yes/no')) { [Console]::Error.WriteLine('T3_SSH_PROMPT:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($promptText))); exit 1 }\r
 if ($null -ne $env:T3_SSH_AUTH_SECRET) {\r
   [Console]::Out.WriteLine($env:T3_SSH_AUTH_SECRET)\r
   exit 0\r
@@ -197,6 +204,9 @@ export const buildSshChildEnvironment = Effect.fn("ssh/auth.buildSshChildEnviron
     ...baseEnv,
     SSH_ASKPASS: sshAskpass,
     SSH_ASKPASS_REQUIRE: "force",
+    ...(input.trustedHostPrompt === undefined
+      ? {}
+      : { T3_SSH_TRUST_PROMPT: input.trustedHostPrompt }),
     ...(input.authSecret === undefined ? {} : { T3_SSH_AUTH_SECRET: input.authSecret ?? "" }),
     ...(platform === "win32" || baseEnv.DISPLAY || hostDisplay ? {} : { DISPLAY: "t3code" }),
   };

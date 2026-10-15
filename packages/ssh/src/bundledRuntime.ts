@@ -43,11 +43,11 @@ export const remoteRuntimeInvocation = (
   runtime.platform === "windows"
     ? {
         remoteCommandArgs: powershellFileArgs(),
-        stdin: `$ErrorActionPreference='Stop'\n& (Join-Path $HOME ${quotePs(runtime.relativeExecutable)}) ${args.map(quotePs).join(" ")}\nif($LASTEXITCODE -ne 0){exit $LASTEXITCODE}\n`,
+        stdin: `$ErrorActionPreference='Stop'\nSet-Location -LiteralPath $HOME\n& (Join-Path $HOME ${quotePs(runtime.relativeExecutable)}) ${args.map(quotePs).join(" ")}\nif($LASTEXITCODE -ne 0){exit $LASTEXITCODE}\n`,
       }
     : {
         remoteCommandArgs: ["sh", "-l", "-s"],
-        stdin: `set -eu\nexec "$HOME"/'${runtime.relativeExecutable}' ${args.map((arg) => `'${arg.replaceAll("'", "'\\''")}'`).join(" ")}\n`,
+        stdin: `set -eu\ncd "$HOME"\nexec "$HOME"/'${runtime.relativeExecutable}' ${args.map((arg) => `'${arg.replaceAll("'", "'\\''")}'`).join(" ")}\n`,
       };
 
 export const detectRemotePlatform = Effect.fn("ssh.runtime.detect")(function* (
@@ -57,7 +57,10 @@ export const detectRemotePlatform = Effect.fn("ssh.runtime.detect")(function* (
   const linux = yield* Effect.result(
     runSshCommand(target, { ...auth, remoteCommandArgs: ["uname", "-sm"] }),
   );
-  if (linux._tag === "Success") {
+  if (
+    linux._tag === "Success" &&
+    getLastNonEmptyOutputLine(linux.success.stdout)?.startsWith("Linux ")
+  ) {
     if (getLastNonEmptyOutputLine(linux.success.stdout) !== "Linux x86_64")
       return yield* new SshLaunchError({
         message: "Automatic SSH setup supports Linux x64 and Windows x64 only.",
@@ -65,7 +68,7 @@ export const detectRemotePlatform = Effect.fn("ssh.runtime.detect")(function* (
       });
     return "linux" as const;
   }
-  if (isSshAuthFailure(linux.failure)) return yield* linux.failure;
+  if (linux._tag === "Failure" && isSshAuthFailure(linux.failure)) return yield* linux.failure;
   const windows = yield* runSshCommand(target, {
     ...auth,
     remoteCommandArgs: powershellArgs(
@@ -127,6 +130,7 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
   target: DesktopSshEnvironmentTarget,
   auth: SshAuthOptions,
   bundles: BundledSshArchives,
+  progress: (stage: string) => Effect.Effect<void> = () => Effect.void,
 ) {
   const platform = yield* detectRemotePlatform(target, auth);
   const archive = platform === "windows" ? bundles.windows : bundles.linux;
@@ -135,6 +139,18 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
       message: "The bundled SSH runtime has no valid checksum.",
       stdout: "",
     });
+  const hash = archive.sha256;
+  const runtime: PreparedSshRuntime = {
+    platform,
+    relativeExecutable: `.t3-imaorise/runtime/sha256-${hash}/${platform === "windows" ? "t3.exe" : "t3"}`,
+    version: bundles.version,
+  };
+  yield* progress("Checking the installed remote runtime…");
+  const warm = yield* Effect.result(
+    runSshCommand(target, { ...auth, ...remoteRuntimeInvocation(runtime, ["--version"]) }),
+  );
+  if (warm._tag === "Success" && warm.success.stdout.includes(bundles.version)) return runtime;
+  yield* progress("Verifying bundled runtime…");
   const fs = yield* FileSystem.FileSystem;
   const crypto = yield* Crypto.Crypto;
   const bytes = yield* fs.readFile(archive.path).pipe(
@@ -153,7 +169,7 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
       message: "The bundled SSH runtime failed checksum verification.",
       stdout: "",
     });
-  const hash = archive.sha256;
+  yield* progress("Transferring the matching runtime over SSH…");
   const transfer =
     platform === "windows"
       ? powershellArgs(
@@ -170,15 +186,12 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
     stdinBytes: bytes,
     timeoutMs: 300_000,
   });
+  yield* progress("Verifying and installing remote runtime…");
   yield* runSshCommand(target, {
     ...auth,
     remoteCommandArgs: platform === "windows" ? powershellFileArgs() : ["sh", "-s"],
     stdin: platform === "windows" ? windowsInstallScript(hash) : linuxInstallScript(hash),
     timeoutMs: 120_000,
   });
-  return {
-    platform,
-    relativeExecutable: `.t3-imaorise/runtime/sha256-${hash}/${platform === "windows" ? "t3.exe" : "t3"}`,
-    version: bundles.version,
-  } satisfies PreparedSshRuntime;
+  return runtime;
 });

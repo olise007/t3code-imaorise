@@ -182,20 +182,29 @@ In the desktop app, open **Settings → Connections → Add environment**, choos
 or reuses a server there and opens the port forward for you. Projects, provider
 credentials, and agent work stay on the remote machine.
 
-The remote host must be Linux or an Apple Silicon Mac with `curl` or `wget`,
-`tar`, `sha256sum` or `shasum`, and [provider setup](./install.md#providers).
-The first launch downloads T3 Code's server to `~/.t3/runtime` on the host, so
-it takes longer than later ones.
-Provider CLIs must be on the `PATH` of a non-interactive login shell there;
-check with:
+On Windows, choose **Windows** or a **WSL distro** as the SSH configuration
+source. T3 uses that source's SSH aliases, keys, agent, and jump-host settings.
+Running distros are discovered automatically; **Load hosts** starts a stopped
+distro when you need it. Hosts with the same alias in different sources stay
+separate.
+
+Imaorise Windows desktop builds prepare Linux x64 and native Windows x64 hosts
+by uploading their bundled server runtime over SSH. The remote machine needs
+OpenSSH plus extraction and checksum tools; Windows hosts need PowerShell.
+Provider CLIs and account login must be configured on the remote machine.
+No remote Node installation or desktop installer is needed.
+
+Provider CLIs must be on the remote SSH session's `PATH`. For Linux, check with:
 
 ```bash
 ssh user@example.com 'sh -lc "command -v claude codex"'
 ```
 
-If SSH reconnecting fails after an app update, retry the launch once. Removing
-the connection stops a server that T3 Code launched; a server that was already
-running is left alone.
+Disconnecting, removing the saved connection, or closing T3 leaves remote agents
+running. Reconnect through the same SSH source to continue. To stop a verified
+T3-managed server and its agents, use **Stop remote server** in its connection
+menu. A running incompatible version requires an explicit stop before changing
+runtime versions.
 
 For Antigravity's Google callback on a remote host, see
 [remote sign-in](./providers-antigravity.md#sign-in-from-a-remote-device).

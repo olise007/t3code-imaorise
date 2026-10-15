@@ -73,6 +73,7 @@ export class DesktopSshEnvironment extends Context.Service<
 
 export interface DesktopSshEnvironmentLayerOptions {
   readonly resolveCliRunner?: Effect.Effect<SshTunnel.RemoteT3RunnerOptions>;
+  readonly onProgress?: SshTunnel.SshEnvironmentManagerOptions["onProgress"];
 }
 
 function discoverDesktopSshHostsEffect(input?: { readonly homeDir?: string }) {
@@ -177,10 +178,11 @@ export const make = Effect.gen(function* () {
 export const layer = (options: DesktopSshEnvironmentLayerOptions = {}) =>
   Layer.effect(DesktopSshEnvironment, make).pipe(
     Layer.provide(
-      SshTunnel.SshEnvironmentManager.layer(
-        options.resolveCliRunner === undefined
+      SshTunnel.SshEnvironmentManager.layer({
+        ...(options.resolveCliRunner === undefined
           ? {}
-          : { resolveCliRunner: options.resolveCliRunner },
-      ),
+          : { resolveCliRunner: options.resolveCliRunner }),
+        ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
+      }),
     ),
   );

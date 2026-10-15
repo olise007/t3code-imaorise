@@ -78,20 +78,26 @@ export function targetConnectionKey(target: DesktopSshEnvironmentTarget): string
 
 // Authentication material travels on stdin, never through wsl.exe's arguments.
 // Keep the helper alive for the tunnel's lifetime and remove it on every exit.
-const WSL_SSH_WRAPPER = `set -eu
+const WSL_SSH_WRAPPER = String.raw`set -eu
 IFS= read -r secret
-helper=""
-cleanup() { [ -z "$helper" ] || rm -rf "$helper"; }
+IFS= read -r trusted
+umask 077
+helper=$(mktemp -d)
+cleanup() { rm -rf "$helper"; }
 trap cleanup EXIT HUP INT TERM
-if [ -n "$secret" ]; then
-  umask 077
-  helper=$(mktemp -d)
-  printf '%s' "$secret" | base64 -d > "$helper/secret"
-  printf '#!/bin/sh\\ncat "$(dirname "$0")/secret"\\n' > "$helper/askpass"
-  chmod 700 "$helper/askpass"
-  export SSH_ASKPASS="$helper/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=t3code
-fi
-unset secret
+printf '%s' "$secret" | base64 -d > "$helper/secret"
+printf '%s' "$trusted" | base64 -d > "$helper/trust"
+cat > "$helper/askpass" <<'ASKPASS'
+#!/bin/sh
+folder=$(dirname "$0")
+if [ -s "$folder/trust" ] && [ "$*" = "$(cat "$folder/trust")" ]; then printf 'yes\n'; exit 0; fi
+case "$*" in *'yes/no'*) printf 'T3_SSH_PROMPT:%s\n' "$(printf '%s' "$*" | base64 | tr -d '\n')" >&2; exit 1 ;; esac
+if [ -s "$folder/secret" ]; then cat "$folder/secret"; exit 0; fi
+exit 1
+ASKPASS
+chmod 700 "$helper/askpass"
+export SSH_ASKPASS="$helper/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=t3code
+unset secret trusted
 ssh "$@"
 `;
 
@@ -120,7 +126,11 @@ export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function
       ],
       env: {},
       stdin: Stream.concat(
-        Stream.make(encoder.encode(`${Buffer.from(input.authSecret ?? "").toString("base64")}\n`)),
+        Stream.make(
+          encoder.encode(
+            `${Buffer.from(input.authSecret ?? "").toString("base64")}\n${Buffer.from(input.trustedHostPrompt ?? "").toString("base64")}\n`,
+          ),
+        ),
         input.stdin ?? Stream.empty,
       ),
     };
@@ -245,6 +255,9 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
 > {
   const hostSpec = yield* buildSshHostSpecEffect(target);
   const auth = {
+    ...(input.trustedHostPrompt === undefined
+      ? {}
+      : { trustedHostPrompt: input.trustedHostPrompt }),
     ...(input.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
     ...(input.authSecret === undefined ? {} : { authSecret: input.authSecret }),
   };

@@ -13,8 +13,9 @@ visited="$(mktemp)"
 trap 'rm -f "$visited"' EXIT
 scan() {
   [ -r "$1" ] || return 0
-  grep -Fxq -- "$1" "$visited" && return 0
-  printf '%s\n' "$1" >> "$visited"
+  canonical=$(readlink -f -- "$1")
+  grep -Fxq -- "$canonical" "$visited" && return 0
+  printf '%s\n' "$canonical" >> "$visited"
   awk '{sub(/#.*/, ""); key=tolower($1); if(key=="host" || key=="include") {for(i=2;i<=NF;i++) print key "\t" $i}}' "$1" |
   while IFS="$(printf '\t')" read -r key value; do
     case "$key" in

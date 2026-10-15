@@ -144,8 +144,15 @@ const resolveDesktopSshCliRunner = (
 const layerDesktopSshEnvironment = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
     return DesktopSshEnvironment.layer({
       resolveCliRunner: Effect.succeed(resolveDesktopSshCliRunner(environment)),
+      onProgress: (target, stage) =>
+        Effect.gen(function* () {
+          const window = yield* electronWindow.main;
+          if (Option.isSome(window) && !window.value.isDestroyed())
+            window.value.webContents.send("desktop:ssh-connection-progress", { target, stage });
+        }).pipe(Effect.ignoreCause),
     });
   }),
 );

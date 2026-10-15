@@ -2521,6 +2521,7 @@ export function ConnectionsSettings() {
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [sshSource, setSshSource] = useState<DesktopSshExecutionSource>({ type: "local" });
+  const [sshProgress, setSshProgress] = useState<string | null>(null);
   const [sshReport, setSshReport] = useState<DesktopSshDiscoveryReport | null>(null);
   const sshDiscoverySequence = useRef(0);
   const refreshSshConnections = useCallback(
@@ -2604,6 +2605,19 @@ export function ConnectionsSettings() {
       sshDiscoverySequence.current++;
     };
   }, [isSshDiscoveryActive, refreshDesktopSshHosts, refreshSshConnections]);
+  useEffect(() => {
+    if (!isSshDiscoveryActive) return;
+    return desktopBridge?.onSshConnectionProgress?.(({ target, stage }) => {
+      if (
+        target.alias === savedBackendSshHost.trim() &&
+        (target.executionSource?.type ?? "local") === sshSource.type &&
+        (sshSource.type !== "wsl" ||
+          (target.executionSource?.type === "wsl" &&
+            target.executionSource.distro === sshSource.distro))
+      )
+        setSshProgress(stage);
+    });
+  }, [desktopBridge, isSshDiscoveryActive, savedBackendSshHost, sshSource]);
   const desktopWsl = useEnvironmentQuery(
     canManageLocalBackend && desktopBridge ? desktopWslStateAtom : null,
   );
@@ -3368,6 +3382,11 @@ export function ConnectionsSettings() {
   );
   const renderSshFields = () => (
     <div className="space-y-4">
+      {isAddingSavedBackend && sshProgress ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          {sshProgress}
+        </p>
+      ) : null}
       <label className="block">
         <span className="mb-1.5 block text-xs font-medium text-foreground">
           SSH configuration source

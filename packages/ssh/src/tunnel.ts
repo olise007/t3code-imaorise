@@ -92,6 +92,7 @@ export interface RemoteT3RunnerOptions {
 
 export interface SshEnvironmentManagerOptions {
   readonly resolveCliRunner?: Effect.Effect<RemoteT3RunnerOptions>;
+  readonly onProgress?: (target: DesktopSshEnvironmentTarget, stage: string) => Effect.Effect<void>;
 }
 
 interface SshTunnelEntry {
@@ -907,6 +908,9 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
       timeoutMs: isNodeScriptRunner(runner)
         ? REMOTE_LAUNCH_TIMEOUT_MS
         : REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
+      ...(input?.trustedHostPrompt === undefined
+        ? {}
+        : { trustedHostPrompt: input.trustedHostPrompt }),
       ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
       ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
       ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
@@ -964,11 +968,21 @@ export const issueRemotePairingToken = Effect.fn("ssh/tunnel.issueRemotePairingT
   });
   const result = yield* runSshCommand(target, {
     ...(runner?.prepared
-      ? remoteRuntimeInvocation(runner.prepared, ["auth", "pairing", "create", "--json"])
+      ? remoteRuntimeInvocation(runner.prepared, [
+          "auth",
+          "pairing",
+          "create",
+          "--base-dir",
+          ".t3-imaorise",
+          "--json",
+        ])
       : { remoteCommandArgs: ["sh", "-s"], stdin: buildRemotePairingScript(stateKey, runner) }),
     // Pairing may be the first command on a cold remote, so it can install
     // the archive on the way.
     ...(isNodeScriptRunner(runner) ? {} : { timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS }),
+    ...(input?.trustedHostPrompt === undefined
+      ? {}
+      : { trustedHostPrompt: input.trustedHostPrompt }),
     ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
     ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
@@ -1022,6 +1036,9 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
     ...(runner?.prepared
       ? remoteRuntimeInvocation(runner.prepared, ["__ssh-helper", "managed-stop", stateKey])
       : { remoteCommandArgs: ["sh", "-s"], stdin: buildRemoteStopScript(stateKey) }),
+    ...(input?.trustedHostPrompt === undefined
+      ? {}
+      : { trustedHostPrompt: input.trustedHostPrompt }),
     ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
     ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
@@ -1044,6 +1061,9 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
     remoteCommandArgs: ["sh", "-s"],
     stdin: buildRemoteLogTailScript(yield* remoteStateKey(target)),
     timeoutMs: 10_000,
+    ...(input?.trustedHostPrompt === undefined
+      ? {}
+      : { trustedHostPrompt: input.trustedHostPrompt }),
     ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
     ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
@@ -1357,6 +1377,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const tunnels = new Map<string, SshTunnelEntry>();
   const targetLocks = yield* KeyedLock.make<string>();
   const authSecrets = new Map<string, string>();
+  const reportProgress = (target: DesktopSshEnvironmentTarget, stage: string) =>
+    options.onProgress?.(target, stage) ?? Effect.void;
+  const trustedHostPrompts = new Map<string, string>();
 
   // Keep one lock per target so reconnect cannot reuse a server while stop is pending.
   const withTargetLock = Effect.fn("ssh/tunnel.withTargetLock")(function* <A, E, R>(
@@ -1446,6 +1469,28 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         readonly error: SshEnvironmentEffectError;
       },
     ): Effect.fn.Return<T, SshEnvironmentEffectError, SshEnvironmentEffectContext> {
+      const evidence =
+        input.error instanceof SshCommandError
+          ? input.error.stderr.match(/T3_SSH_PROMPT:([A-Za-z0-9+/=]+)/)?.[1]
+          : undefined;
+      if (evidence && !trustedHostPrompts.has(input.key)) {
+        const prompt = Buffer.from(evidence, "base64").toString("utf8");
+        if (prompt.includes("yes/no") && /SHA256:[A-Za-z0-9+/]+/.test(prompt)) {
+          const service = yield* SshAuth.SshPasswordPrompt;
+          const answer = yield* service.request({
+            destination: input.target.alias,
+            username: input.target.username,
+            attempt: 1,
+            prompt: `Verify SSH host key\n${prompt}\nType yes only if you trust this fingerprint.`,
+          });
+          if (answer?.trim().toLowerCase() !== "yes")
+            return yield* new SshPasswordPromptError({
+              message: "SSH host-key verification was cancelled.",
+            });
+          trustedHostPrompts.set(input.key, prompt);
+          return yield* runWithSshAuthAttempt(input);
+        }
+      }
       if (!SshAuth.isSshAuthFailure(input.error)) {
         return yield* input.error;
       }
@@ -1485,8 +1530,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const authOptions =
       input.authSecret === null
         ? {
-            batchMode: promptService.isAvailable ? ("yes" as const) : ("no" as const),
-            interactiveAuth: !promptService.isAvailable,
+            batchMode: promptService.isAvailable ? ("no" as const) : ("yes" as const),
+            interactiveAuth: promptService.isAvailable,
           }
         : {
             authSecret: input.authSecret,
@@ -1495,7 +1540,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           };
 
     return yield* input
-      .operation(authOptions)
+      .operation({
+        ...authOptions,
+        ...(trustedHostPrompts.has(input.key)
+          ? { trustedHostPrompt: trustedHostPrompts.get(input.key)! }
+          : {}),
+      })
       .pipe(Effect.catch((error) => handleSshAuthFailure({ ...input, error })));
   });
 
@@ -1514,6 +1564,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     readonly resolvedTarget: DesktopSshEnvironmentTarget;
     readonly runner?: RemoteT3RunnerOptions;
   }): Effect.fn.Return<SshTunnelEntry, SshEnvironmentEffectError, SshEnvironmentEffectContext> {
+    yield* reportProgress(input.resolvedTarget, "Starting or reusing remote server…");
     yield* Effect.logDebug("ssh.environment.tunnel.create.start", {
       ...sshTargetLogFields(input.resolvedTarget),
       ...sshRunnerLogFields(input.runner),
@@ -1542,6 +1593,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       remotePort,
     });
     const entryScope = yield* Scope.make("sequential");
+    yield* reportProgress(input.resolvedTarget, "Opening SSH tunnel…");
     const tunnelEntry = yield* runWithSshAuth({
       key: input.key,
       target: input.resolvedTarget,
@@ -1657,6 +1709,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     });
     const configuredRunner =
       options.resolveCliRunner === undefined ? undefined : yield* options.resolveCliRunner;
+    yield* reportProgress(resolvedTarget, "Authenticating and inspecting remote host…");
     const runner = configuredRunner?.bundles
       ? {
           ...configuredRunner,
@@ -1664,7 +1717,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             key,
             target: resolvedTarget,
             operation: (auth) =>
-              prepareBundledRuntime(resolvedTarget, auth, configuredRunner.bundles!),
+              prepareBundledRuntime(resolvedTarget, auth, configuredRunner.bundles!, (stage) =>
+                reportProgress(resolvedTarget, stage),
+              ),
           }),
         }
       : configuredRunner;
@@ -1687,6 +1742,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             })
           : null;
         const pairingToken = pairingResult?.credential ?? null;
+        yield* reportProgress(resolvedTarget, "Connected");
 
         yield* Effect.logInfo("ssh.environment.ensure.succeeded", {
           ...sshTargetLogFields(entry.target),
@@ -1751,25 +1807,40 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     disconnectEnvironment,
     stopEnvironment: (target) =>
       Effect.gen(function* () {
-        yield* disconnectEnvironment(target);
-        const key = targetConnectionKey(target);
+        const base = yield* resolveSshTarget(
+          target.alias || target.hostname,
+          target.executionSource,
+        );
+        const resolved = {
+          ...base,
+          ...(target.username !== null ? { username: target.username } : {}),
+          ...(target.port !== null ? { port: target.port } : {}),
+        };
+        const key = targetConnectionKey(resolved);
         const configured =
           options.resolveCliRunner === undefined ? undefined : yield* options.resolveCliRunner;
         yield* withTargetLock(
           key,
-          runWithSshAuth({
-            key,
-            target,
-            operation: (auth) =>
-              Effect.gen(function* () {
-                const runner = configured?.bundles
-                  ? {
-                      ...configured,
-                      prepared: yield* prepareBundledRuntime(target, auth, configured.bundles),
-                    }
-                  : configured;
-                yield* stopRemoteServer(target, auth, runner);
-              }),
+          Effect.gen(function* () {
+            const entry = tunnels.get(key);
+            if (entry) {
+              tunnels.delete(key);
+              yield* closeTunnelEntry(entry);
+            }
+            yield* runWithSshAuth({
+              key,
+              target: resolved,
+              operation: (auth) =>
+                Effect.gen(function* () {
+                  const runner = configured?.bundles
+                    ? {
+                        ...configured,
+                        prepared: yield* prepareBundledRuntime(resolved, auth, configured.bundles),
+                      }
+                    : configured;
+                  yield* stopRemoteServer(resolved, auth, runner);
+                }),
+            });
           }),
         );
       }),

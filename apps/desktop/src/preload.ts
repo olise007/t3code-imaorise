@@ -145,6 +145,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_HOST_CHANNEL, { alias, executionSource }),
   discoverSshConnections: (loadDistro) =>
     ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_CONNECTIONS_CHANNEL, loadDistro),
+  onSshConnectionProgress: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof listener>[0]) =>
+      listener(progress);
+    ipcRenderer.on(IpcChannels.SSH_CONNECTION_PROGRESS_CHANNEL, handler);
+    return () => ipcRenderer.removeListener(IpcChannels.SSH_CONNECTION_PROGRESS_CHANNEL, handler);
+  },
   stopSshEnvironment: (target) =>
     ipcRenderer.invoke(IpcChannels.STOP_SSH_ENVIRONMENT_CHANNEL, target),
   ensureSshEnvironment: async (target, options) =>
