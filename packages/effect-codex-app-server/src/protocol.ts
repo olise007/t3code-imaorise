@@ -42,7 +42,7 @@ export interface CodexAppServerPatchedProtocolOptions {
   readonly logger?: (event: CodexAppServerProtocolLogEvent) => Effect.Effect<void, never>;
   readonly onNotification?: (
     notification: CodexAppServerIncomingNotification,
-  ) => Effect.Effect<void, never>;
+  ) => Effect.Effect<void, CodexError.CodexAppServerError>;
   readonly onRequest?: (
     request: CodexAppServerIncomingRequest,
   ) => Effect.Effect<unknown, CodexError.CodexAppServerError>;
