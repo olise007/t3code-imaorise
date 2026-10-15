@@ -36,7 +36,7 @@ export const powershellArgs = (script: string) => [
 // on stdin into a private user temporary file and removed even if execution fails.
 export const powershellFileArgs = () =>
   powershellArgs(
-    `$ErrorActionPreference='Stop'; $p=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString()+'.ps1'); try { [IO.File]::WriteAllText($p,[Console]::In.ReadToEnd(),(New-Object Text.UTF8Encoding($false))); & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $p; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE} } finally { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }`,
+    `$ErrorActionPreference='Stop'; $p=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString()+'.ps1'); try { [IO.File]::WriteAllText($p,[Console]::In.ReadToEnd(),(New-Object Text.UTF8Encoding($true))); & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $p; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE} } finally { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }`,
   );
 
 export const remoteRuntimeInvocation = (

@@ -339,7 +339,7 @@ async function providerSetupWarnings(platform: NodeJS.Platform) {
         NodePath.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "where.exe"),
         commands,
         { timeout: 1500, windowsHide: true },
-        (error, stdout) => resolve(!error && stdout.trim().length > 0),
+        (_error, stdout) => resolve(stdout.trim().length > 0),
       );
     });
     return found ? [] : guidance;
