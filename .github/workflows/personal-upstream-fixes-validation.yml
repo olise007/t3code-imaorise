@@ -33,7 +33,8 @@ jobs:
           apps/desktop/src/wsl/DesktopWslPairing.test.ts
           apps/desktop/src/window/trayWindowPolicy.test.ts
       - name: Terminal resize with the web WASM asset configuration
-        run: timeout 600 vp test run --config apps/web/vite.config.ts --project unit --maxWorkers 1 apps/web/src/terminal/ghostty/surface.test.ts
+        working-directory: apps/web
+        run: timeout 600 vp test run --project unit --maxWorkers 1 src/terminal/ghostty/surface.test.ts
       - name: Scoped lint
         run: >-
           vp lint apps/server/src/process/externalLauncher.ts apps/server/src/process/externalLauncher.test.ts
