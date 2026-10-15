@@ -8,6 +8,7 @@ import * as NodeHttp from "node:http";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeSea from "node:sea";
 import * as Context from "effect/Context";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -40,7 +41,7 @@ export class SshManagedRuntime extends Context.Service<
       version: string,
     ) => Effect.Effect<void, SshManagedRuntimeError>;
   }
->()("t3/ssh/ManagedRuntime") {}
+>()("t3/cli/sshManagedRuntime") {}
 
 const operation = <A>(run: () => Promise<A>) =>
   Effect.tryPromise({
@@ -53,7 +54,10 @@ const operation = <A>(run: () => Promise<A>) =>
   });
 export const layer = Layer.sync(SshManagedRuntime, () =>
   SshManagedRuntime.of({
-    start: (key, version) => operation(() => startManagedSsh(key, version)),
+    start: (key, version) =>
+      Effect.flatMap(HostProcess.Platform, (platform) =>
+        operation(() => startManagedSsh(key, version, platform)),
+      ),
     stop: (key) => operation(() => stopManagedSsh(key)),
     supervise: (key, version) => operation(() => superviseManagedSsh(key, version)),
   }),
@@ -103,6 +107,7 @@ async function readRecord(key: string): Promise<ManagedSshRecord | null> {
     return value;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if (error instanceof SyntaxError) throw new Error("Invalid supervisor record.");
     throw error;
   }
 }
@@ -136,18 +141,43 @@ export async function stopManagedSsh(key: string) {
   await control(record, "stop");
 }
 
-export async function startManagedSsh(key: string, version: string) {
+export async function startManagedSsh(key: string, version: string, platform: NodeJS.Platform) {
   const file = recordPath(key);
   await NodeFSP.mkdir(NodePath.dirname(file), { recursive: true, mode: 0o700 });
   const lock = `${file}.lock`;
   let handle;
   try {
     handle = await NodeFSP.open(lock, "wx", 0o600);
-  } catch {
-    throw new Error(
-      "Another SSH setup is in progress. Retry when it finishes; an abandoned lock requires inspection.",
-    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const recovery = `${lock}.recovery`;
+    try {
+      await NodeFSP.mkdir(recovery);
+    } catch {
+      throw new Error("Another SSH setup is inspecting the lock. Retry when it finishes.");
+    }
+    try {
+      let previous: string;
+      try {
+        previous = await NodeFSP.readFile(lock, "utf8");
+        const owner = JSON.parse(previous) as { pid?: unknown };
+        if (
+          typeof owner.pid !== "number" ||
+          !Number.isInteger(owner.pid) ||
+          owner.pid <= 0 ||
+          processAlive(owner.pid)
+        )
+          throw new Error("busy");
+      } catch {
+        throw new Error("Another SSH setup is in progress, or its lock requires inspection.");
+      }
+      await NodeFSP.unlink(lock);
+      handle = await NodeFSP.open(lock, "wx", 0o600);
+    } finally {
+      await NodeFSP.rmdir(recovery).catch(() => {});
+    }
   }
+  await handle.writeFile(JSON.stringify({ pid: process.pid, nonce: NodeCrypto.randomUUID() }));
   try {
     const existing = await readRecord(key);
     if (existing !== null) {
@@ -157,7 +187,11 @@ export async function startManagedSsh(key: string, version: string) {
           throw new Error(
             "A different managed runtime is still running. Stop it explicitly before changing versions.",
           );
-        return { remotePort: health.remotePort, serverKind: "managed" };
+        return {
+          remotePort: health.remotePort,
+          serverKind: "managed",
+          setupWarnings: await providerSetupWarnings(platform),
+        };
       } catch (error) {
         if (processAlive(existing.pid)) throw error;
         await NodeFSP.unlink(file);
@@ -178,8 +212,8 @@ export async function startManagedSsh(key: string, version: string) {
       .join(" ");
     const launchPowerShell = `$ErrorActionPreference='Stop'; $settings=New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{CreateFlags=[uint32]16778240;ShowWindow=[uint16]0;EnvironmentVariables=[string[]]@([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { $_.Key+'='+$_.Value })}; $r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ProcessStartupInformation=$settings;CommandLine='${commandLine.replaceAll("'", "''")}'}; if($r.ReturnValue -ne 0){throw 'Could not detach SSH supervisor'};`;
     const supervisor = NodeChildProcess.spawn(
-      process.platform === "win32" ? "powershell.exe" : process.execPath,
-      process.platform === "win32"
+      platform === "win32" ? "powershell.exe" : process.execPath,
+      platform === "win32"
         ? [
             "-NoProfile",
             "-NonInteractive",
@@ -198,15 +232,26 @@ export async function startManagedSsh(key: string, version: string) {
     supervisor.unref();
     await log.close();
     let spawnError: Error | undefined;
+    supervisor.once("exit", (code) => {
+      if (platform === "win32" && code !== 0)
+        spawnError = new Error(
+          "The remote Windows account could not detach the SSH supervisor. Inspect its server log.",
+        );
+    });
     supervisor.once("error", (error) => {
       spawnError = error;
     });
     for (let attempt = 0; attempt < 300; attempt++) {
-      if (spawnError) throw new Error("Could not start the remote supervisor.");
+      if (spawnError) throw spawnError;
       const current = await readRecord(key);
       if (current !== null) {
         const health = await control(current, "health").catch(() => null);
-        if (health?.remotePort) return { remotePort: health.remotePort, serverKind: "managed" };
+        if (health?.remotePort)
+          return {
+            remotePort: health.remotePort,
+            serverKind: "managed",
+            setupWarnings: await providerSetupWarnings(platform),
+          };
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
@@ -215,6 +260,38 @@ export async function startManagedSsh(key: string, version: string) {
     await handle.close();
     await NodeFSP.unlink(lock).catch(() => {});
   }
+}
+
+async function providerSetupWarnings(platform: NodeJS.Platform) {
+  const directories = (process.env.PATH ?? "").split(NodePath.delimiter).filter(Boolean);
+  const extensions =
+    platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""];
+  for (const command of [
+    "codex",
+    "claude",
+    "cursor-agent",
+    "agent",
+    "grok",
+    "opencode",
+    "antigravity",
+  ]) {
+    for (const directory of directories) {
+      for (const extension of extensions) {
+        try {
+          await NodeFSP.access(
+            NodePath.join(directory, `${command}${extension}`),
+            platform === "win32" ? NodeFSP.constants.F_OK : NodeFSP.constants.X_OK,
+          );
+          return [];
+        } catch {
+          /* A missing candidate is normal. */
+        }
+      }
+    }
+  }
+  return [
+    "No provider CLI was found on the remote SSH session's PATH. Install and sign in to your provider on that machine, then check Settings → Providers.",
+  ];
 }
 
 export async function superviseManagedSsh(key: string, version: string) {

@@ -469,6 +469,7 @@ export interface DesktopSshEnvironmentBootstrap {
   pairingToken: string | null;
   remotePort?: number;
   remoteServerKind?: "external" | "managed";
+  setupWarnings?: readonly string[];
 }
 
 export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
@@ -478,6 +479,7 @@ export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
   pairingToken: Schema.NullOr(Schema.String),
   remotePort: Schema.optionalKey(Schema.Number),
   remoteServerKind: Schema.optionalKey(Schema.Literals(["external", "managed"])),
+  setupWarnings: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 export interface DesktopSshPasswordPromptRequest {

@@ -46,6 +46,7 @@ export class SshConnectionProfile extends Schema.TaggedClass<SshConnectionProfil
   {
     ...ConnectionProfileBase,
     target: DesktopSshEnvironmentTargetSchema,
+    setupWarnings: Schema.optionalKey(Schema.Array(Schema.String)),
   },
 ) {}
 

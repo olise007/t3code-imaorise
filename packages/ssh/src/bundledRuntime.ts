@@ -83,11 +83,11 @@ export const detectRemotePlatform = Effect.fn("ssh.runtime.detect")(function* (
   return "windows" as const;
 });
 
-export function linuxInstallScript(hash: string) {
+export function linuxInstallScript(hash: string, suffix = "") {
   return `set -eu
 umask 077
 root="$HOME/.t3-imaorise/runtime/sha256-${hash}"
-archive="$HOME/.t3-imaorise/runtime/upload-${hash}.tar.gz"
+archive="$HOME/.t3-imaorise/runtime/upload-${hash}${suffix}.tar.gz"
 if [ -x "$root/t3" ] && [ "$(cat "$root/.archive-sha256" 2>/dev/null)" = '${hash}' ]; then "$root/t3" --version >/dev/null; exit 0; fi
 mkdir -p "$HOME/.t3-imaorise/runtime"
 if ! mkdir "$root.lock" 2>/dev/null; then printf 'Another runtime setup is in progress; retry when it finishes.\\n' >&2; exit 1; fi
@@ -103,11 +103,11 @@ mv "$stage" "$root"
 `;
 }
 
-export function windowsInstallScript(hash: string) {
+export function windowsInstallScript(hash: string, suffix = "") {
   return `$ErrorActionPreference='Stop'
 $parent=Join-Path $HOME '.t3-imaorise/runtime'
 $root=Join-Path $parent 'sha256-${hash}'
-$archive=Join-Path $parent 'upload-${hash}.zip'
+$archive=Join-Path $parent 'upload-${hash}${suffix}.zip'
 if((Test-Path -LiteralPath "$root/t3.exe") -and (Test-Path -LiteralPath "$root/.archive-sha256") -and ((Get-Content -LiteralPath "$root/.archive-sha256" -Raw) -eq '${hash}')){ & "$root/t3.exe" --version | Out-Null; if($LASTEXITCODE -ne 0){throw 'Runtime failed its readiness check'}; exit 0 }
 $lock=Join-Path $parent 'sha256-${hash}.lock'
 $handle=[IO.File]::Open($lock,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
@@ -169,29 +169,48 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
       message: "The bundled SSH runtime failed checksum verification.",
       stdout: "",
     });
+  const suffix = `-${Hex.encode(yield* crypto.randomBytes(8).pipe(Effect.orDie))}`;
   yield* progress("Transferring the matching runtime over SSH…");
   const transfer =
     platform === "windows"
       ? powershellArgs(
-          `$ErrorActionPreference='Stop'; $d=Join-Path $HOME '.t3-imaorise/runtime'; [IO.Directory]::CreateDirectory($d)|Out-Null; $f=[IO.File]::Open((Join-Path $d 'upload-${hash}.zip'),[IO.FileMode]::Create); try{[Console]::OpenStandardInput().CopyTo($f)}finally{$f.Dispose()}`,
+          `$ErrorActionPreference='Stop'; $d=Join-Path $HOME '.t3-imaorise/runtime'; [IO.Directory]::CreateDirectory($d)|Out-Null; $f=[IO.File]::Open((Join-Path $d 'upload-${hash}${suffix}.zip'),[IO.FileMode]::Create); try{[Console]::OpenStandardInput().CopyTo($f)}finally{$f.Dispose()}`,
         )
       : [
           "sh",
           "-c",
-          `'umask 077; mkdir -p "$HOME/.t3-imaorise/runtime"; cat > "$HOME/.t3-imaorise/runtime/upload-${hash}.tar.gz"'`,
+          `'umask 077; mkdir -p "$HOME/.t3-imaorise/runtime"; cat > "$HOME/.t3-imaorise/runtime/upload-${hash}${suffix}.tar.gz"'`,
         ];
-  yield* runSshCommand(target, {
-    ...auth,
-    remoteCommandArgs: transfer,
-    stdinBytes: bytes,
-    timeoutMs: 300_000,
-  });
-  yield* progress("Verifying and installing remote runtime…");
-  yield* runSshCommand(target, {
-    ...auth,
-    remoteCommandArgs: platform === "windows" ? powershellFileArgs() : ["sh", "-s"],
-    stdin: platform === "windows" ? windowsInstallScript(hash) : linuxInstallScript(hash),
-    timeoutMs: 120_000,
-  });
+  yield* Effect.gen(function* () {
+    yield* runSshCommand(target, {
+      ...auth,
+      remoteCommandArgs: transfer,
+      stdinBytes: bytes,
+      timeoutMs: 300_000,
+    });
+    yield* progress("Verifying and installing remote runtime…");
+    yield* runSshCommand(target, {
+      ...auth,
+      remoteCommandArgs: platform === "windows" ? powershellFileArgs() : ["sh", "-s"],
+      stdin:
+        platform === "windows"
+          ? windowsInstallScript(hash, suffix)
+          : linuxInstallScript(hash, suffix),
+      timeoutMs: 120_000,
+    });
+  }).pipe(
+    Effect.ensuring(
+      runSshCommand(target, {
+        ...auth,
+        remoteCommandArgs:
+          platform === "windows"
+            ? powershellArgs(
+                `Remove-Item -LiteralPath (Join-Path $HOME '.t3-imaorise/runtime/upload-${hash}${suffix}.zip') -Force -ErrorAction SilentlyContinue`,
+              )
+            : ["sh", "-c", `'rm -f "$HOME/.t3-imaorise/runtime/upload-${hash}${suffix}.tar.gz"'`],
+        timeoutMs: 10_000,
+      }).pipe(Effect.ignore),
+    ),
+  );
   return runtime;
 });

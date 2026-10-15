@@ -497,7 +497,7 @@ describe("ssh tunnel scripts", () => {
     }).pipe(Effect.provide(layerProcess));
   });
 
-  it.effect.each(["successful stop", "failed stop"] as const)(
+  it.effect.each(["disconnect", "successful stop", "failed stop"] as const)(
     "closes the tunnel scope and starts fresh after a %s",
     (mode) => {
       const spawnedCommands: Array<ReadonlyArray<string>> = [];
@@ -557,7 +557,11 @@ describe("ssh tunnel scripts", () => {
         assert.include(firstTunnelArgs, "ControlPath=none");
         assert.include(firstTunnelArgs, "ControlPersist=no");
 
-        const disconnected = yield* Effect.result(manager.stopEnvironment(target));
+        const disconnected = yield* Effect.result(
+          mode === "disconnect"
+            ? manager.disconnectEnvironment(target)
+            : manager.stopEnvironment(target),
+        );
         if (mode === "failed stop") {
           assert.isTrue(Result.isFailure(disconnected));
           if (Result.isFailure(disconnected)) {
@@ -571,7 +575,7 @@ describe("ssh tunnel scripts", () => {
           assert.isTrue(Result.isSuccess(disconnected));
         }
         assert.equal(tunnelKillCount, 1);
-        assert.equal(stopCommandCount, 1);
+        assert.equal(stopCommandCount, mode === "disconnect" ? 0 : 1);
 
         if (mode === "failed stop") {
           yield* manager.stopEnvironment(target);
@@ -589,7 +593,10 @@ describe("ssh tunnel scripts", () => {
         Effect.andThen(
           Effect.sync(() => {
             assert.equal(tunnelKillCount, 2);
-            assert.equal(stopCommandCount, mode === "failed stop" ? 2 : 1);
+            assert.equal(
+              stopCommandCount,
+              mode === "failed stop" ? 2 : mode === "disconnect" ? 0 : 1,
+            );
           }),
         ),
       );

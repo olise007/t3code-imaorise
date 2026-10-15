@@ -36,13 +36,23 @@ if (!includeAndroid && files.some((f) => f.endsWith(".apk") || /^android-.*\.jso
 const distribution = [];
 if (
   !includeDesktop &&
-  files.some((f) => /\.(exe|yml|blockmap)$/.test(f) || f.endsWith("-linux-x64.tar.gz"))
+  files.some(
+    (f) =>
+      /\.(exe|yml|blockmap)$/.test(f) ||
+      f.endsWith("-linux-x64.tar.gz") ||
+      f.endsWith("-win32-x64.zip"),
+  )
 )
   throw new Error("Unexpected desktop assets in an Android-only release.");
 if (includeDesktop) {
   const exe = exactly((f) => f.endsWith(".exe"), "NSIS installer");
   const runtime = exactly((f) => f.endsWith("-linux-x64.tar.gz"), "matching Linux runtime");
   if (!runtime.includes(version)) throw new Error("Artifacts do not match the release version.");
+  const windowsRuntime = files.filter((f) => f.endsWith("-win32-x64.zip"));
+  if (process.env.INCLUDE_WINDOWS_SSH_RUNTIME === "true" && windowsRuntime.length !== 1)
+    throw new Error("Matching Windows SSH runtime is missing.");
+  if (windowsRuntime.length > 1 || windowsRuntime.some((f) => f !== `t3-${version}-win32-x64.zip`))
+    throw new Error("Windows SSH runtime version mismatch.");
   const metadata = `${channel === "beta" ? "beta" : "latest"}.yml`;
   if (!files.includes(metadata)) throw new Error("Updater metadata is missing.");
   const yml = NodeFS.readFileSync(NodePath.join(dir, metadata), "utf8");
@@ -52,7 +62,13 @@ if (includeDesktop) {
   const sha512 = NodeCrypto.createHash("sha512").update(installerBytes).digest("base64");
   if (!yml.includes(sha512) || !yml.includes(exe))
     throw new Error("Windows updater metadata does not match the installer.");
-  distribution.push(exe, runtime, metadata, ...files.filter((f) => f.endsWith(".blockmap")));
+  distribution.push(
+    exe,
+    runtime,
+    ...windowsRuntime,
+    metadata,
+    ...files.filter((f) => f.endsWith(".blockmap")),
+  );
 }
 if (apk && !apk.includes(version)) throw new Error("APK version mismatch.");
 if (!includeAndroid && !includeDesktop) throw new Error("No release targets selected.");

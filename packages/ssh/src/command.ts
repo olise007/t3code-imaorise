@@ -159,6 +159,16 @@ function buildSshHostSpec(target: DesktopSshEnvironmentTarget): string {
   if (destination.length === 0) {
     throw new Error("SSH target is missing its alias/hostname.");
   }
+  if (
+    destination.startsWith("-") ||
+    target.username?.startsWith("-") ||
+    /[\x00-\x1f]/.test(destination) ||
+    (target.username !== null && /[\x00-\x1f]/.test(target.username))
+  ) {
+    throw new Error(
+      "SSH host and username cannot contain control characters or begin with an option.",
+    );
+  }
   return target.username ? `${target.username}@${destination}` : destination;
 }
 
@@ -182,6 +192,8 @@ export function baseSshArgs(
     `BatchMode=${input?.batchMode ?? "no"}`,
     "-o",
     "ConnectTimeout=10",
+    "-o",
+    "StrictHostKeyChecking=ask",
     ...(target.port !== null ? ["-p", String(target.port)] : []),
   ];
 }

@@ -95,6 +95,7 @@ export interface SshEnvironmentManagerOptions {
 }
 
 interface SshTunnelEntry {
+  readonly setupWarnings?: readonly string[];
   readonly key: string;
   readonly target: DesktopSshEnvironmentTarget;
   readonly remotePort: number;
@@ -180,6 +181,7 @@ export interface SshEnvironmentManagerShape {
 const RemoteLaunchResult = Schema.Struct({
   remotePort: Schema.Number,
   serverKind: Schema.optional(Schema.Literals(["external", "managed"])),
+  setupWarnings: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 const RemotePairingResult = Schema.Struct({
@@ -882,7 +884,11 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
     input?: SshAuth.SshAuthOptions,
     runner?: RemoteT3RunnerOptions,
   ): Effect.fn.Return<
-    { readonly remotePort: number; readonly remoteServerKind: "external" | "managed" | null },
+    {
+      readonly remotePort: number;
+      readonly remoteServerKind: "external" | "managed" | null;
+      readonly setupWarnings?: readonly string[];
+    },
     SshCommandError | SshInvalidTargetError | SshLaunchError,
     ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
   > {
@@ -940,11 +946,13 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
       ...sshTargetLogFields(target),
       remotePort: parsed.remotePort,
       remoteServerKind: parsed.serverKind ?? null,
+      ...(parsed.setupWarnings === undefined ? {} : { setupWarnings: parsed.setupWarnings }),
       stateKey,
     });
     return {
       remotePort: parsed.remotePort,
       remoteServerKind: parsed.serverKind ?? null,
+      ...(parsed.setupWarnings === undefined ? {} : { setupWarnings: parsed.setupWarnings }),
     };
   },
 );
@@ -1155,6 +1163,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
   readonly wsBaseUrl: string;
   readonly authOptions: SshAuth.SshAuthOptions;
   readonly remoteServerKind: "external" | "managed" | null;
+  readonly setupWarnings?: readonly string[];
   readonly scope: Scope.Closeable;
 }): Effect.fn.Return<
   SshTunnelEntry,
@@ -1258,6 +1267,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
     wsBaseUrl: input.wsBaseUrl,
     process: child,
     scope,
+    ...(input.setupWarnings === undefined ? {} : { setupWarnings: input.setupWarnings }),
   };
   const exitFailure = Effect.all(
     [collectProcessOutput(child.stderr), child.exitCode.pipe(Effect.map(Number))],
@@ -1606,6 +1616,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           wsBaseUrl,
           authOptions,
           remoteServerKind: remoteLaunch.remoteServerKind,
+          ...(remoteLaunch.setupWarnings === undefined
+            ? {}
+            : { setupWarnings: remoteLaunch.setupWarnings }),
           scope: entryScope,
         }),
     }).pipe(
@@ -1712,27 +1725,27 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const configuredRunner =
       options.resolveCliRunner === undefined ? undefined : yield* options.resolveCliRunner;
     yield* reportProgress(resolvedTarget, "Authenticating and inspecting remote host…");
-    const runner = configuredRunner?.bundles
-      ? {
-          ...configuredRunner,
-          prepared: yield* runWithSshAuth({
-            key,
-            target: resolvedTarget,
-            operation: (auth) =>
-              prepareBundledRuntime(resolvedTarget, auth, configuredRunner.bundles!, (stage) =>
-                reportProgress(resolvedTarget, stage),
-              ),
-          }),
-        }
-      : configuredRunner;
-    yield* Effect.logDebug("ssh.environment.runner.resolved", {
-      ...sshTargetLogFields(resolvedTarget),
-      ...sshRunnerLogFields(runner),
-      key,
-    });
     return yield* withTargetLock(
       key,
       Effect.gen(function* () {
+        const runner = configuredRunner?.bundles
+          ? {
+              ...configuredRunner,
+              prepared: yield* runWithSshAuth({
+                key,
+                target: resolvedTarget,
+                operation: (auth) =>
+                  prepareBundledRuntime(resolvedTarget, auth, configuredRunner.bundles!, (stage) =>
+                    reportProgress(resolvedTarget, stage),
+                  ),
+              }),
+            }
+          : configuredRunner;
+        yield* Effect.logDebug("ssh.environment.runner.resolved", {
+          ...sshTargetLogFields(resolvedTarget),
+          ...sshRunnerLogFields(runner),
+          key,
+        });
         const entry = yield* ensureTunnelEntry(key, resolvedTarget, runner);
 
         const pairingResult = requestOptions?.issuePairingToken
@@ -1759,6 +1772,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           httpBaseUrl: entry.httpBaseUrl,
           wsBaseUrl: entry.wsBaseUrl,
           pairingToken,
+          ...(entry.setupWarnings === undefined ? {} : { setupWarnings: entry.setupWarnings }),
           remotePort: entry.remotePort,
           ...(entry.remoteServerKind ? { remoteServerKind: entry.remoteServerKind } : {}),
         };

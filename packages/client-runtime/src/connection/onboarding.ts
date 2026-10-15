@@ -275,6 +275,9 @@ export const prepareSshRegistration = Effect.fn(
       environmentId: provisioned.environmentId,
       label,
       target: provisioned.bootstrap.target,
+      ...(provisioned.bootstrap.setupWarnings === undefined
+        ? {}
+        : { setupWarnings: provisioned.bootstrap.setupWarnings }),
     }),
   });
 });

@@ -51,7 +51,7 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - name: Native Windows supervisor and source tests
-        run: vp test run --maxWorkers 1 packages/ssh/src/source.test.ts apps/server/src/cli/sshManagedRuntime.test.ts
+        run: vp test run --maxWorkers 1 packages/ssh/src/source.test.ts packages/ssh/src/bundledRuntime.test.ts apps/server/src/cli/sshManagedRuntime.test.ts
       - name: Isolated Windows OpenSSH default shells and reconnect
         shell: pwsh
         run: ./scripts/imaorise/ssh-windows-smoke.ps1

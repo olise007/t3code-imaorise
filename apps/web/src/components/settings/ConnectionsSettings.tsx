@@ -1529,6 +1529,7 @@ function SavedBackendListRow({
   onRemove,
   onAddRoute,
 }: SavedBackendListRowProps) {
+  const desktopBridge = window.desktopBridge;
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const environmentId = environment.environmentId;
@@ -1720,11 +1721,26 @@ function SavedBackendListRow({
         </span>
       }
       below={
-        serverUpdateState.status !== "idle" ? (
-          <div className="mt-1 max-w-md">
-            <ServerUpdateProgress state={serverUpdateState} />
-          </div>
-        ) : null
+        <>
+          {Array.from(
+            new Set(
+              connectionRoutes(environment.entry).flatMap((route) =>
+                Option.isSome(route.profile) && route.profile.value._tag === "SshConnectionProfile"
+                  ? (route.profile.value.setupWarnings ?? [])
+                  : [],
+              ),
+            ),
+          ).map((warning) => (
+            <p key={warning} className="mt-1 max-w-md text-xs text-muted-foreground">
+              {warning}
+            </p>
+          ))}
+          {serverUpdateState.status !== "idle" ? (
+            <div className="mt-1 max-w-md">
+              <ServerUpdateProgress state={serverUpdateState} />
+            </div>
+          ) : null}
+        </>
       }
       detail={
         <>

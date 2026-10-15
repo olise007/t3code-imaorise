@@ -165,6 +165,7 @@ jobs:
           path: |
             personal-windows/*.exe
             personal-windows/*.yml
+            release-cli/*-win32-x64.zip
             personal-windows/*.blockmap
           retention-days: 1
           if-no-files-found: error
@@ -248,6 +249,7 @@ jobs:
           RELEASE_CHANNEL: ${{ needs.reserve.outputs.channel }}
           INCLUDE_ANDROID: ${{ needs.android.result == 'success' }}
           INCLUDE_DESKTOP: ${{ needs.windows.result == 'success' }}
+          INCLUDE_WINDOWS_SSH_RUNTIME: ${{ needs.windows.result == 'success' }}
           PUBLISH_RELEASE: ${{ github.event_name == 'push' || inputs.publish }}
           VERSION_CODE: ${{ needs.reserve.outputs.version_code }}
           SOURCE_REVISION: ${{ needs.reserve.outputs.revision }}
