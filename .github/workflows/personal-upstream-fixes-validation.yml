@@ -1,0 +1,67 @@
+name: Personal focused upstream fixes validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Upstream fixes and personal feature regressions
+        run: >-
+          timeout 900 vp test run --maxWorkers 1
+          apps/server/src/process/externalLauncher.test.ts
+          apps/web/src/terminal/ghostty/surface.test.ts
+          packages/client-runtime/src/connection/registry.test.ts
+          packages/client-runtime/src/state/commandPermissions.test.ts
+          apps/web/src/components/files/openDirectoryInTerminal.test.ts
+          apps/web/src/components/settings/WslSettings.test.tsx
+          apps/desktop/src/wsl/DesktopWslPairing.test.ts
+          apps/desktop/src/window/trayWindowPolicy.test.ts
+      - name: Scoped lint
+        run: >-
+          vp lint apps/server/src/process/externalLauncher.ts apps/server/src/process/externalLauncher.test.ts
+          apps/web/src/terminal/ghostty/surface.ts apps/web/src/terminal/ghostty/surface.test.ts
+          packages/client-runtime/src/connection/registry.ts packages/client-runtime/src/connection/registry.test.ts
+      - name: Client runtime types
+        run: timeout 600 vp run --filter @t3tools/client-runtime typecheck
+      - name: Web types
+        run: timeout 600 vp run --filter @t3tools/web typecheck
+      - name: Server types
+        run: timeout 600 vp run --filter t3 typecheck
+      - name: Desktop types
+        run: timeout 600 vp run --filter @t3tools/desktop typecheck
+      - name: Mobile types
+        run: timeout 600 vp run --filter @t3tools/mobile typecheck
+  windows:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Real PowerShell launch and scope cleanup regressions
+        run: vp test run --maxWorkers 1 apps/server/src/process/externalLauncher.test.ts
