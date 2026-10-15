@@ -70,9 +70,12 @@ describe("directory terminal action", () => {
 
   it("keeps existing tabs and reveals the new terminal only after the open succeeds", async () => {
     useTerminalUiStateStore.getState().newTerminal(threadRef, "term-1");
-    const pending = Promise.withResolvers<ReturnType<typeof AsyncResult.success<void>>>();
+    let finishOpen!: (result: ReturnType<typeof AsyncResult.success<void>>) => void;
+    const pending = new Promise<ReturnType<typeof AsyncResult.success<void>>>((resolve) => {
+      finishOpen = resolve;
+    });
     const focus = vi.fn();
-    const open = vi.fn(async () => pending.promise);
+    const open = vi.fn(async () => pending);
     const opening = openDirectoryInTerminal({
       threadRef,
       workspaceRoot: "/repo/worktree",
@@ -96,7 +99,7 @@ describe("directory terminal action", () => {
       },
     });
     expect(focus).not.toHaveBeenCalled();
-    pending.resolve(AsyncResult.success(undefined));
+    finishOpen(AsyncResult.success(undefined));
     await opening;
     expect(state()).toMatchObject({
       terminalIds: ["term-1", "term-2"],

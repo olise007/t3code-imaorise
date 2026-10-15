@@ -39,7 +39,7 @@ interface FileBrowserPanelProps {
   /** Bumped when the same path should be revealed again (e.g. re-opened from search). */
   selectedPathRevealId: number;
   onOpenFile: (relativePath: string) => void;
-  onOpenDirectoryInTerminal?: (relativePath: string) => Promise<void>;
+  onOpenDirectoryInTerminal?: ((relativePath: string) => Promise<void>) | undefined;
   onRefreshSelectedFile?: () => void;
   workspaceMutationId: string | null;
 }

@@ -129,7 +129,7 @@ interface FilePreviewPanelProps {
   revealLine: number | null;
   revealRequestId: number;
   onOpenFile: (relativePath: string) => void;
-  onOpenDirectoryInTerminal?: (relativePath: string) => Promise<void>;
+  onOpenDirectoryInTerminal?: ((relativePath: string) => Promise<void>) | undefined;
   onPendingChange: (relativePath: string, pending: boolean) => void;
   selectedFilePending: boolean;
   workspaceMutationId: string | null;
