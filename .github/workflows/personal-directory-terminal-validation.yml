@@ -31,7 +31,8 @@ jobs:
           packages/client-runtime/src/state/commandPermissions.test.ts
           packages/client-runtime/src/state/terminalSession.test.ts
       - name: Terminal host validates directory access
-        run: timeout 600 vp test run --maxWorkers 1 apps/server/src/terminal/Manager.test.ts --testNamePattern 'cwd|spawns lazily|reuses|environment'
+        # chmod permission fixtures require an unprivileged host; this container runs as root.
+        run: timeout 600 vp test run --maxWorkers 1 apps/server/src/terminal/Manager.test.ts --testNamePattern 'reports a missing cwd|reports a cwd that is not a directory|spawns lazily|reuses|environment'
       - name: Scoped lint
         run: >-
           vp lint apps/web/src/components/files/openDirectoryInTerminal.ts
