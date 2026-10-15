@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+// Isolated process-boundary fixtures intentionally exercise native files and processes.
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

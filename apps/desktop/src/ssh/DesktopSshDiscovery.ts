@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { discoverSshHosts } from "@t3tools/ssh/config";
+import { SshHostDiscoveryError } from "@t3tools/ssh/errors";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 
 // Run in the owning distro: absolute Include paths and ~ refer to its filesystem.
@@ -53,7 +54,10 @@ const runWsl = Effect.fn("desktop.ssh.discovery.wsl")(function* (
       });
       if (Number(code) !== 0)
         return yield* Effect.fail(
-          new Error("WSL SSH discovery failed. Check the distro and its OpenSSH installation."),
+          new SshHostDiscoveryError({
+            message: "WSL SSH discovery failed. Check the distro and its OpenSSH installation.",
+            cause: null,
+          }),
         );
       const bytes = Buffer.concat(Array.from(chunks, (chunk) => Buffer.from(chunk)));
       return bytes.toString(bytes.includes(0) ? "utf16le" : "utf8").replace(/^\uFEFF/, "");
@@ -78,12 +82,10 @@ export const discoverConnections = Effect.fn("desktop.ssh.discovery")(function* 
   if (environment.platform !== "win32") return { hosts, sources };
   const listed = yield* Effect.result(runWsl(["--list", "--quiet"]));
   if (listed._tag === "Failure") {
-    sources.push({
-      executionSource: { type: "local" },
-      label: "WSL discovery",
-      running: false,
+    sources[0] = {
+      ...sources[0]!,
       error: "Could not list WSL distros. Windows SSH is still available.",
-    });
+    };
     return { hosts, sources };
   }
   const names = listed.success

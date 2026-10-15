@@ -9,7 +9,7 @@ import * as NodeNet from "node:net";
 
 import * as Effect from "effect/Effect";
 import { Argument, Command } from "effect/cli";
-import { startManagedSsh, stopManagedSsh, superviseManagedSsh } from "./sshManagedRuntime.ts";
+import * as SshManagedRuntime from "./sshManagedRuntime.ts";
 
 /**
  * Small helpers the SSH launch script needs on the remote host. The script
@@ -126,20 +126,31 @@ const managedStart = Command.make("managed-start", {
   version: Argument.String("version"),
 }).pipe(
   Command.withHandler(({ key, version }) =>
-    Effect.promise(async () => {
-      process.stdout.write(JSON.stringify(await startManagedSsh(key, version)));
-    }),
+    Effect.gen(function* () {
+      const service = yield* SshManagedRuntime.SshManagedRuntime;
+      const result = yield* service.start(key, version);
+      yield* Effect.sync(() => {
+        // @effect-diagnostics-next-line preferSchemaOverJson:off - Internal process-boundary helper prints its bounded result.
+        process.stdout.write(JSON.stringify(result));
+      });
+    }).pipe(Effect.provide(SshManagedRuntime.layer)),
   ),
 );
 const managedStop = Command.make("managed-stop", { key: Argument.String("key") }).pipe(
-  Command.withHandler(({ key }) => Effect.promise(() => stopManagedSsh(key))),
+  Command.withHandler(({ key }) =>
+    Effect.flatMap(SshManagedRuntime.SshManagedRuntime, (service) => service.stop(key)).pipe(
+      Effect.provide(SshManagedRuntime.layer),
+    ),
+  ),
 );
 const supervise = Command.make("supervise", {
   key: Argument.String("key"),
   version: Argument.String("version"),
 }).pipe(
   Command.withHandler(({ key, version }) =>
-    Effect.promise(() => superviseManagedSsh(key, version)),
+    Effect.flatMap(SshManagedRuntime.SshManagedRuntime, (service) =>
+      service.supervise(key, version),
+    ).pipe(Effect.provide(SshManagedRuntime.layer)),
   ),
 );
 

@@ -2476,23 +2476,6 @@ export function ConnectionsSettings() {
     ],
     [primaryEnvironment, savedEnvironments],
   );
-  const savedDesktopSshEnvironmentKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const environment of savedEnvironments) {
-      const profile = environment.entry.profile;
-      if (
-        environment.entry.target._tag !== "SshConnectionTarget" ||
-        Option.isNone(profile) ||
-        profile.value._tag !== "SshConnectionProfile"
-      ) {
-        continue;
-      }
-      const target = profile.value.target;
-      keys.add(target.alias);
-      keys.add(formatDesktopSshTarget(target));
-    }
-    return keys;
-  }, [savedEnvironments]);
   const [desktopServerExposureMutationError, setDesktopServerExposureMutationError] = useState<
     string | null
   >(null);
@@ -2522,6 +2505,7 @@ export function ConnectionsSettings() {
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [sshSource, setSshSource] = useState<DesktopSshExecutionSource>({ type: "local" });
   const [sshProgress, setSshProgress] = useState<string | null>(null);
+  const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
   const [sshReport, setSshReport] = useState<DesktopSshDiscoveryReport | null>(null);
   const sshDiscoverySequence = useRef(0);
   const refreshSshConnections = useCallback(
@@ -2543,7 +2527,6 @@ export function ConnectionsSettings() {
   const [sshHostSuggestionsOpen, setSshHostSuggestionsOpen] = useState(false);
   // Tracks the arrow-key/hover highlight so Enter selects it instead of submitting the typed text.
   const highlightedSshHostRef = useRef<DesktopDiscoveredSshHost | undefined>(undefined);
-  const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
   const [isAddingSavedBackend, setIsAddingSavedBackend] = useState(false);
   const [removingSavedEnvironmentId, setRemovingSavedEnvironmentId] =
     useState<EnvironmentId | null>(null);
@@ -2597,11 +2580,15 @@ export function ConnectionsSettings() {
   // each time the SSH tab is shown; stale hosts stay visible while it refreshes.
   const refreshDesktopSshHosts = desktopSshHosts.refresh;
   useEffect(() => {
-    if (isSshDiscoveryActive) {
-      refreshDesktopSshHosts();
-      void refreshSshConnections();
-    }
+    let active = true;
+    queueMicrotask(() => {
+      if (active && isSshDiscoveryActive) {
+        refreshDesktopSshHosts();
+        void refreshSshConnections();
+      }
+    });
     return () => {
+      active = false;
       sshDiscoverySequence.current++;
     };
   }, [isSshDiscoveryActive, refreshDesktopSshHosts, refreshSshConnections]);
@@ -2633,14 +2620,9 @@ export function ConnectionsSettings() {
               target.executionSource.distro !== sshSource.distro))
         )
           return false;
-        const address = formatDesktopSshTarget(target);
-        return (
-          (target.executionSource?.type === "wsl" ||
-            !savedDesktopSshEnvironmentKeys.has(target.alias)) &&
-          (target.executionSource?.type === "wsl" || !savedDesktopSshEnvironmentKeys.has(address))
-        );
+        return true;
       }),
-    [discoveredSshHosts, savedDesktopSshEnvironmentKeys, sshSource],
+    [discoveredSshHosts, sshSource],
   );
   const filteredDiscoveredSshHosts = useMemo(
     () => filterDiscoveredSshHosts(unsavedDiscoveredSshHosts, savedBackendSshHost),

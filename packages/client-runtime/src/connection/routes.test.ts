@@ -20,9 +20,23 @@ import {
   removedWithRelay,
   routesAfterRemoving,
   upsertRoute,
+  sshTargetKey,
 } from "./routes.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
+
+it("preserves local SSH route IDs and separates equal aliases from WSL sources", () => {
+  const target = { alias: "dev", hostname: "host", username: "user", port: 22 };
+  expect(sshTargetKey(target)).toBe(
+    sshTargetKey({ ...target, executionSource: { type: "local" } }),
+  );
+  expect(sshTargetKey(target)).not.toBe(
+    sshTargetKey({ ...target, executionSource: { type: "wsl", distro: "Ubuntu" } }),
+  );
+  expect(sshTargetKey({ ...target, executionSource: { type: "wsl", distro: "Ubuntu" } })).not.toBe(
+    sshTargetKey({ ...target, executionSource: { type: "wsl", distro: "Debian" } }),
+  );
+});
 
 function direct(id: string, httpBaseUrl: string): ConnectionRoute {
   return {

@@ -21,7 +21,6 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
@@ -1617,8 +1616,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     tunnels.set(input.key, tunnelEntry);
     yield* Scope.addFinalizer(
       entryScope,
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (tunnels.get(tunnelEntry.key) === tunnelEntry) tunnels.delete(tunnelEntry.key);
+        yield* tunnelEntry.process
+          .kill({ killSignal: "SIGTERM", forceKillAfter: TUNNEL_SHUTDOWN_TIMEOUT_MS })
+          .pipe(Effect.ignore);
       }),
     );
     yield* Effect.logDebug("ssh.environment.tunnel.create.succeeded", {

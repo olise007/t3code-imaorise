@@ -1,12 +1,63 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalTimers:off globalDateInEffect:off
 // This supervisor runs before the Effect server. Only its captured child can be stopped.
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import * as os from "node:os";
-import * as crypto from "node:crypto";
-import * as http from "node:http";
-import * as cp from "node:child_process";
-import * as sea from "node:sea";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import * as NodeOS from "node:os";
+import * as NodeCrypto from "node:crypto";
+import * as NodeHttp from "node:http";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeSea from "node:sea";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+
+export class SshManagedRuntimeError extends Schema.TaggedError<SshManagedRuntimeError>()(
+  "SshManagedRuntimeError",
+  {
+    detail: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message() {
+    return this.detail;
+  }
+}
+
+export class SshManagedRuntime extends Context.Service<
+  SshManagedRuntime,
+  {
+    readonly start: (
+      key: string,
+      version: string,
+    ) => Effect.Effect<
+      { remotePort: number | undefined; serverKind: string },
+      SshManagedRuntimeError
+    >;
+    readonly stop: (key: string) => Effect.Effect<void, SshManagedRuntimeError>;
+    readonly supervise: (
+      key: string,
+      version: string,
+    ) => Effect.Effect<void, SshManagedRuntimeError>;
+  }
+>()("t3/ssh/ManagedRuntime") {}
+
+const operation = <A>(run: () => Promise<A>) =>
+  Effect.tryPromise({
+    try: run,
+    catch: (cause) =>
+      new SshManagedRuntimeError({
+        detail: cause instanceof Error ? cause.message : "Managed SSH operation failed.",
+        cause,
+      }),
+  });
+export const layer = Layer.sync(SshManagedRuntime, () =>
+  SshManagedRuntime.of({
+    start: (key, version) => operation(() => startManagedSsh(key, version)),
+    stop: (key) => operation(() => stopManagedSsh(key)),
+    supervise: (key, version) => operation(() => superviseManagedSsh(key, version)),
+  }),
+);
 
 interface ManagedSshRecord {
   protocol: 1;
@@ -19,7 +70,7 @@ interface ManagedSshRecord {
 
 const recordPath = (key: string) => {
   if (!/^[a-f0-9]{16}$/.test(key)) throw new Error("Invalid managed SSH identity.");
-  return path.join(os.homedir(), ".t3-imaorise", "ssh-managed", key, "supervisor.json");
+  return NodePath.join(NodeOS.homedir(), ".t3-imaorise", "ssh-managed", key, "supervisor.json");
 };
 
 const processAlive = (pid: number) => {
@@ -33,7 +84,7 @@ const processAlive = (pid: number) => {
 
 async function readRecord(key: string): Promise<ManagedSshRecord | null> {
   try {
-    const record: unknown = JSON.parse(await fs.readFile(recordPath(key), "utf8"));
+    const record: unknown = JSON.parse(await NodeFSP.readFile(recordPath(key), "utf8"));
     if (typeof record !== "object" || record === null)
       throw new Error("Invalid supervisor record.");
     const value = record as ManagedSshRecord;
@@ -87,11 +138,11 @@ export async function stopManagedSsh(key: string) {
 
 export async function startManagedSsh(key: string, version: string) {
   const file = recordPath(key);
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await NodeFSP.mkdir(NodePath.dirname(file), { recursive: true, mode: 0o700 });
   const lock = `${file}.lock`;
   let handle;
   try {
-    handle = await fs.open(lock, "wx", 0o600);
+    handle = await NodeFSP.open(lock, "wx", 0o600);
   } catch {
     throw new Error(
       "Another SSH setup is in progress. Retry when it finishes; an abandoned lock requires inspection.",
@@ -109,23 +160,40 @@ export async function startManagedSsh(key: string, version: string) {
         return { remotePort: health.remotePort, serverKind: "managed" };
       } catch (error) {
         if (processAlive(existing.pid)) throw error;
-        await fs.unlink(file);
+        await NodeFSP.unlink(file);
       }
     }
-    const log = await fs.open(path.join(path.dirname(file), "server.log"), "a", 0o600);
+    const log = await NodeFSP.open(NodePath.join(NodePath.dirname(file), "server.log"), "a", 0o600);
     const args = [
-      ...(sea.isSea() ? [] : process.argv.slice(1, 2)),
+      ...(NodeSea.isSea() ? [] : process.argv.slice(1, 2)),
       "__ssh-helper",
       "supervise",
       key,
       version,
     ];
-    const supervisor = cp.spawn(process.execPath, args, {
-      detached: true,
-      windowsHide: true,
-      stdio: ["ignore", log.fd, log.fd],
-      env: { ...process.env, T3CODE_NO_BROWSER: "1" },
-    });
+    // Windows OpenSSH may reap the entire SSH job. WMI starts the supervisor
+    // outside that job without installing a service or requiring elevation.
+    const commandLine = [process.execPath, ...args]
+      .map((arg) => `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, "$1$1")}"`)
+      .join(" ");
+    const launchPowerShell = `$ErrorActionPreference='Stop'; $settings=New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{CreateFlags=[uint32]16778240;ShowWindow=[uint16]0;EnvironmentVariables=[string[]]@([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { $_.Key+'='+$_.Value })}; $r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ProcessStartupInformation=$settings;CommandLine='${commandLine.replaceAll("'", "''")}'}; if($r.ReturnValue -ne 0){throw 'Could not detach SSH supervisor'};`;
+    const supervisor = NodeChildProcess.spawn(
+      process.platform === "win32" ? "powershell.exe" : process.execPath,
+      process.platform === "win32"
+        ? [
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            Buffer.from(launchPowerShell, "utf16le").toString("base64"),
+          ]
+        : args,
+      {
+        detached: true,
+        windowsHide: true,
+        stdio: ["ignore", log.fd, log.fd],
+        env: { ...process.env, T3CODE_NO_BROWSER: "1" },
+      },
+    );
     // The child is owned by this spawn, but it must survive this SSH command.
     supervisor.unref();
     await log.close();
@@ -145,17 +213,17 @@ export async function startManagedSsh(key: string, version: string) {
     throw new Error("Remote server did not become ready. Inspect its SSH server log.");
   } finally {
     await handle.close();
-    await fs.unlink(lock).catch(() => {});
+    await NodeFSP.unlink(lock).catch(() => {});
   }
 }
 
 export async function superviseManagedSsh(key: string, version: string) {
   const file = recordPath(key);
   // Refuse another live server using the same state directory. Do not kill or adopt it.
-  const home = path.join(os.homedir(), ".t3-imaorise");
+  const home = NodePath.join(NodeOS.homedir(), ".t3-imaorise");
   try {
     const runtime = JSON.parse(
-      await fs.readFile(path.join(home, "userdata", "server-runtime.json"), "utf8"),
+      await NodeFSP.readFile(NodePath.join(home, "userdata", "server-runtime.json"), "utf8"),
     ) as { pid: number };
     if (Number.isInteger(runtime.pid) && processAlive(runtime.pid))
       throw new Error(
@@ -164,7 +232,7 @@ export async function superviseManagedSsh(key: string, version: string) {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  const listener = http.createServer();
+  const listener = NodeHttp.createServer();
   await new Promise<void>((resolve, reject) => {
     listener.once("error", reject);
     listener.listen(0, "127.0.0.1", resolve);
@@ -173,7 +241,7 @@ export async function superviseManagedSsh(key: string, version: string) {
   if (address === null || typeof address === "string")
     throw new Error("Could not allocate supervisor port.");
   const serverPort = await new Promise<number>((resolve, reject) => {
-    const socket = http.createServer();
+    const socket = NodeHttp.createServer();
     socket.once("error", reject);
     socket.listen(0, "127.0.0.1", () => {
       const value = socket.address();
@@ -184,10 +252,11 @@ export async function superviseManagedSsh(key: string, version: string) {
       socket.close(() => resolve(value.port));
     });
   });
-  const child = cp.spawn(
+  const log = await NodeFSP.open(NodePath.join(NodePath.dirname(file), "server.log"), "a", 0o600);
+  const child = NodeChildProcess.spawn(
     process.execPath,
     [
-      ...(sea.isSea() ? [] : process.argv.slice(1, 2)),
+      ...(NodeSea.isSea() ? [] : process.argv.slice(1, 2)),
       "serve",
       "--host",
       "127.0.0.1",
@@ -198,13 +267,14 @@ export async function superviseManagedSsh(key: string, version: string) {
     ],
     {
       windowsHide: true,
-      stdio: ["ignore", "inherit", "inherit"],
+      stdio: ["ignore", log.fd, log.fd],
       env: { ...process.env, T3CODE_NO_BROWSER: "1" },
     },
   );
+  await log.close();
   const record: ManagedSshRecord = {
     protocol: 1,
-    token: crypto.randomBytes(32).toString("hex"),
+    token: NodeCrypto.randomBytes(32).toString("hex"),
     controlPort: address.port,
     pid: process.pid,
     executable: process.execPath,
@@ -214,7 +284,7 @@ export async function superviseManagedSsh(key: string, version: string) {
   let stopping = false;
   const cleanup = async () => {
     const current = await readRecord(key).catch(() => null);
-    if (current?.token === record.token) await fs.unlink(file).catch(() => {});
+    if (current?.token === record.token) await NodeFSP.unlink(file).catch(() => {});
     listener.close();
   };
   child.once("error", () => {
@@ -237,11 +307,17 @@ export async function superviseManagedSsh(key: string, version: string) {
       return;
     }
     response.setHeader("Content-Type", "application/json");
-    response.end(JSON.stringify({ ...record, remotePort: serverPort, environmentId }));
     if (request.url === "/stop" && !stopping) {
       stopping = true;
+      child.once("exit", () => {
+        void cleanup().then(() =>
+          response.end(JSON.stringify({ ...record, remotePort: serverPort, environmentId })),
+        );
+      });
       child.kill("SIGTERM");
+      return;
     }
+    response.end(JSON.stringify({ ...record, remotePort: serverPort, environmentId }));
   });
   for (let attempt = 0; attempt < 250 && child.exitCode === null; attempt++) {
     try {
@@ -257,8 +333,8 @@ export async function superviseManagedSsh(key: string, version: string) {
           throw new Error("Remote server version differs from its runtime.");
         environmentId = descriptor.environmentId;
         const temporary = `${file}.${process.pid}.tmp`;
-        await fs.writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
-        await fs.rename(temporary, file);
+        await NodeFSP.writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
+        await NodeFSP.rename(temporary, file);
         await new Promise<void>((resolve) => child.once("exit", () => resolve()));
         return;
       }
