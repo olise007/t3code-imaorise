@@ -43,6 +43,15 @@ function publication(android: boolean, desktop: boolean, corrupt?: string, windo
   if (corrupt === "signature") write("signature.txt", "invalid certificate");
   if (corrupt === "version") write("package.txt", "versionCode='5215'");
   if (corrupt === "unexpected") write("unexpected.exe", "unexpected");
+  if (corrupt === "nested" || corrupt === "duplicate") {
+    const nested = NodePath.join(assets, "personal-windows");
+    NodeFS.mkdirSync(nested);
+    for (const name of NodeFS.readdirSync(assets).filter((name) => /\.(exe|yml|zip)$/.test(name))) {
+      if (corrupt === "duplicate")
+        NodeFS.copyFileSync(NodePath.join(assets, name), NodePath.join(nested, name));
+      else NodeFS.renameSync(NodePath.join(assets, name), NodePath.join(nested, name));
+    }
+  }
   // The subprocess can only reach this fake GitHub CLI; tests never publish.
   NodeFS.writeFileSync(
     NodePath.join(root, "gh"),
@@ -85,6 +94,16 @@ function publication(android: boolean, desktop: boolean, corrupt?: string, windo
 }
 
 describe("partial publication", () => {
+  it("collects nested Windows upload assets without losing their checksums", () => {
+    const { result, manifest } = publication(false, true, "nested", true);
+    expect(result.status, result.stderr).toBe(0);
+    expect(manifest.assets).toHaveLength(4);
+  });
+  it("refuses duplicate asset basenames from different upload directories", () => {
+    const { result } = publication(false, true, "duplicate", true);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Duplicate release asset");
+  });
   it("includes a matching Windows SSH runtime in the verified desktop manifest", () => {
     const { result, manifest } = publication(false, true, undefined, true);
     expect(result.status, result.stderr).toBe(0);

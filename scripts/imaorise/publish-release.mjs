@@ -22,7 +22,24 @@ if (
 )
   throw new Error("Invalid release reservation.");
 const dir = "release-assets";
-const files = NodeFS.readdirSync(dir);
+// Multi-path uploads retain their common ancestor, while single-path uploads
+// are flat. Normalize only our downloaded files and refuse ambiguous names.
+const flatten = (folder) => {
+  for (const entry of NodeFS.readdirSync(folder, { withFileTypes: true })) {
+    const source = NodePath.join(folder, entry.name);
+    if (entry.isDirectory()) flatten(source);
+    else if (!entry.isFile()) throw new Error("Unexpected release asset type.");
+    else if (folder !== dir) {
+      const destination = NodePath.join(dir, entry.name);
+      if (NodeFS.existsSync(destination)) throw new Error(`Duplicate release asset: ${entry.name}`);
+      NodeFS.renameSync(source, destination);
+    }
+  }
+};
+flatten(dir);
+const files = NodeFS.readdirSync(dir).filter((name) =>
+  NodeFS.statSync(NodePath.join(dir, name)).isFile(),
+);
 const exactly = (predicate, label) => {
   const matches = files.filter(predicate);
   if (matches.length !== 1) throw new Error(`Expected exactly one ${label}.`);

@@ -1,0 +1,68 @@
+name: Finalize an already built personal desktop draft
+on:
+  workflow_dispatch:
+    inputs:
+      source_run:
+        description: Personal release run whose Linux and Windows builds passed
+        required: true
+        type: string
+      release_tag:
+        description: Its existing unpublished beta draft tag
+        required: true
+        type: string
+permissions:
+  contents: write
+  actions: read
+jobs:
+  finalize:
+    if: github.repository == 'olise007/t3code-imaorise' && github.ref == 'refs/heads/imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_OPTIONS: --max-old-space-size=2048
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN: ${{ inputs.source_run }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - name: Verify original successful builds and draft provenance
+        run: |
+          node --input-type=module <<'JS'
+          import {execFileSync} from 'node:child_process';
+          import {appendFileSync} from 'node:fs';
+          const repo='olise007/t3code-imaorise';
+          const runId=process.env.SOURCE_RUN, tag=process.env.RELEASE_TAG;
+          if(!/^\d+$/.test(runId)||!/^v2\.\d+\.\d+-beta\.\d+$/.test(tag)) throw Error('Invalid recovery inputs.');
+          const gh=(...args)=>JSON.parse(execFileSync('gh',args,{encoding:'utf8'}));
+          const run=gh('api',`repos/${repo}/actions/runs/${runId}`);
+          const jobs=gh('api',`repos/${repo}/actions/runs/${runId}/jobs?per_page=100`).jobs;
+          const release=gh('release','view',tag,'--repo',repo,'--json','isDraft,body,assets');
+          const reservation=JSON.parse(release.body.split('\n')[0]);
+          if(run.path!=='.github/workflows/personal-release.yml'||run.head_branch!=='imaorise'||run.event!=='workflow_dispatch'||run.status!=='completed') throw Error('Not a completed personal release workflow.');
+          for(const name of ['linux','windows']) if(jobs.find(job=>job.name===name)?.conclusion!=='success') throw Error(`${name} build did not pass.`);
+          if(!release.isDraft||release.assets.length||reservation.runId!==runId||reservation.sourceRevision!==run.head_sha||reservation.version!==tag.slice(1)||reservation.targets?.android!==false||reservation.targets?.desktop!==true) throw Error('Draft does not match the original desktop-only reservation.');
+          execFileSync('git',['merge-base','--is-ancestor',run.head_sha,'HEAD']);
+          const changed=execFileSync('git',['diff','--name-only',run.head_sha,'HEAD'],{encoding:'utf8'}).trim().split('\n').filter(Boolean);
+          const allowed=new Set(['scripts/imaorise/publish-release.mjs','scripts/imaorise/publish-release.test.ts','.github/workflows/personal-desktop-draft-finalize.yml']);
+          if(changed.some(file=>!allowed.has(file))) throw Error('Application source differs from the built revision; build a new draft.');
+          appendFileSync(process.env.GITHUB_ENV,`SOURCE_REVISION=${run.head_sha}\nRELEASE_VERSION=${reservation.version}\nRELEASE_CHANNEL=beta\nVERSION_CODE=${reservation.versionCode}\n`);
+          JS
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.source_run }}
+          pattern: personal-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify artifacts and retain the unpublished draft
+        env:
+          INCLUDE_ANDROID: "false"
+          INCLUDE_DESKTOP: "true"
+          INCLUDE_WINDOWS_SSH_RUNTIME: "true"
+          PUBLISH_RELEASE: "false"
+        run: node scripts/imaorise/publish-release.mjs
