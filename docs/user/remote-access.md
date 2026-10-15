@@ -203,7 +203,8 @@ ssh user@example.com 'sh -lc "command -v claude codex"'
 Disconnecting, removing the saved connection, or closing T3 leaves remote agents
 running. Reconnect through the same SSH source to continue. To stop a verified
 T3-managed server and its agents, use **Stop remote server** in its connection
-menu. A running incompatible version requires an explicit stop before changing
+menu. Switch the connection on again to explicitly restart it; background reconnects
+respect the stop. A running incompatible version requires an explicit stop before changing
 runtime versions.
 
 For Antigravity's Google callback on a remote host, see

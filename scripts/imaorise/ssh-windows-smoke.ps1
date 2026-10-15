@@ -30,6 +30,8 @@ try {
     & icacls.exe $file /inheritance:r /grant:r "$($env:USERNAME):F" 'SYSTEM:F' 'Administrators:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not restrict SSH fixture key permissions.' }
   }
+  & icacls.exe $hostKey /remove:g "$env:USERNAME" /setowner '*S-1-5-18' | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Could not assign the fixture host key to SYSTEM.' }
   $serverConfig = Join-Path $fixtureRoot 'sshd_config'
   @"
 Port $port
@@ -71,16 +73,28 @@ Host t3-fixture
   function Invoke-Peer([string]$operation, [string]$keyValue) {
     $script = "`$env:HOME='$($homeDirectory.Replace("'","''"))'; `$env:USERPROFILE=`$env:HOME; & '$($node.Replace("'","''"))' '$($peer.Replace("'","''"))' '$operation' '$keyValue' '2.0.1-test'; if(`$LASTEXITCODE -ne 0){exit `$LASTEXITCODE}"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
-    $result = & "$sshRoot/ssh.exe" -F $clientConfig t3-fixture powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand $encoded
-    if ($LASTEXITCODE -ne 0) { throw "SSH peer $operation failed." }
-    return ($result -join "`n")
+    $startInfo = [Diagnostics.ProcessStartInfo]::new("$sshRoot/ssh.exe")
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in @('-F',$clientConfig,'-o','ConnectTimeout=10','t3-fixture','powershell.exe','-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$encoded)) { $startInfo.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::Start($startInfo)
+    try {
+      $stdout = $process.StandardOutput.ReadToEndAsync()
+      $stderr = $process.StandardError.ReadToEndAsync()
+      if (!$process.WaitForExit(90000)) { $process.Kill(); throw "SSH peer $operation exceeded its deadline." }
+      $result = $stdout.GetAwaiter().GetResult()
+      $errorText = $stderr.GetAwaiter().GetResult()
+      if ($process.ExitCode -ne 0) { throw "SSH peer $operation failed: $errorText" }
+      return $result
+    } finally { $process.Dispose() }
   }
   New-Item -Path $registryPath -Force | Out-Null
   foreach ($shell in @("$env:SystemRoot/System32/cmd.exe", "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe")) {
     Set-ItemProperty -Path $registryPath -Name DefaultShell -Value $shell
     $keyValue = if ($shell.EndsWith('cmd.exe')) { '1111111111111111' } else { '2222222222222222' }
     try {
-      $first = Invoke-Peer 'start' $keyValue | ConvertFrom-Json
+      $first = Invoke-Peer 'resume' $keyValue | ConvertFrom-Json
       $second = Invoke-Peer 'start' $keyValue | ConvertFrom-Json
       if ($first.remotePort -ne $second.remotePort) { throw 'SSH reconnect replaced the remote server.' }
       $descriptor = Invoke-RestMethod "http://127.0.0.1:$($first.remotePort)/.well-known/t3/environment"

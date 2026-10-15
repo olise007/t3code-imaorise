@@ -27,10 +27,15 @@ if (args[0] === "serve") {
   });
 } else {
   try {
-    if (args[0] === "start")
+    if (args[0] === "start" || args[0] === "resume")
       console.log(
         JSON.stringify(
-          await startManagedSsh(args[1]!, args[2]!, Effect.runSync(HostProcess.Platform)),
+          await startManagedSsh(
+            args[1]!,
+            args[2]!,
+            Effect.runSync(HostProcess.Platform),
+            args[0] === "resume",
+          ),
         ),
       );
     else if (args[0] === "stop") await stopManagedSsh(args[1]!);

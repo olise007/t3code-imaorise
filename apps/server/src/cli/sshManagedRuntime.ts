@@ -31,6 +31,7 @@ export class SshManagedRuntime extends Context.Service<
     readonly start: (
       key: string,
       version: string,
+      resume: boolean,
     ) => Effect.Effect<
       { remotePort: number | undefined; serverKind: string },
       SshManagedRuntimeError
@@ -54,9 +55,9 @@ const operation = <A>(run: () => Promise<A>) =>
   });
 export const layer = Layer.sync(SshManagedRuntime, () =>
   SshManagedRuntime.of({
-    start: (key, version) =>
+    start: (key, version, resume) =>
       Effect.flatMap(HostProcess.Platform, (platform) =>
-        operation(() => startManagedSsh(key, version, platform)),
+        operation(() => startManagedSsh(key, version, platform, resume)),
       ),
     stop: (key) => operation(() => stopManagedSsh(key)),
     supervise: (key, version) => operation(() => superviseManagedSsh(key, version)),
@@ -144,13 +145,20 @@ async function control(record: ManagedSshRecord, action: "health" | "stop") {
 }
 
 export async function stopManagedSsh(key: string) {
-  const record = await readRecord(key);
-  if (record === null) throw new Error("No verified T3-managed server exists for this connection.");
-  await control(record, "stop");
+  const release = await acquireManagedLock(recordPath(key));
+  try {
+    const record = await readRecord(key);
+    if (record === null)
+      throw new Error("No verified T3-managed server exists for this connection.");
+    await control(record, "health");
+    await NodeFSP.writeFile(`${recordPath(key)}.stopped`, "explicit stop\n", { mode: 0o600 });
+    await control(record, "stop");
+  } finally {
+    await release();
+  }
 }
 
-export async function startManagedSsh(key: string, version: string, platform: NodeJS.Platform) {
-  const file = recordPath(key);
+async function acquireManagedLock(file: string) {
   await NodeFSP.mkdir(NodePath.dirname(file), { recursive: true, mode: 0o700 });
   const lock = `${file}.lock`;
   let handle;
@@ -186,7 +194,34 @@ export async function startManagedSsh(key: string, version: string, platform: No
     }
   }
   await handle.writeFile(JSON.stringify({ pid: process.pid, nonce: NodeCrypto.randomUUID() }));
+  return async () => {
+    await handle.close();
+    await NodeFSP.unlink(lock).catch(() => {});
+  };
+}
+
+export async function startManagedSsh(
+  key: string,
+  version: string,
+  platform: NodeJS.Platform,
+  resume = false,
+) {
+  const file = recordPath(key);
+  const release = await acquireManagedLock(file);
   try {
+    if (resume) await NodeFSP.rm(`${file}.stopped`, { force: true });
+    else if (
+      await NodeFSP.stat(`${file}.stopped`).then(
+        () => true,
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        },
+      )
+    )
+      throw new Error(
+        "Remote server was explicitly stopped. Switch this connection on to start it again.",
+      );
     const existing = await readRecord(key);
     if (existing !== null) {
       try {
@@ -227,7 +262,7 @@ export async function startManagedSsh(key: string, version: string, platform: No
       const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
       await NodeFSP.writeFile(
         launchFile,
-        `\uFEFF$ErrorActionPreference='Stop'\n$env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath\n& ${quote(process.execPath)} ${args.map(quote).join(" ")} *>> ${quote(NodePath.join(NodePath.dirname(file), "server.log"))}\n`,
+        `\uFEFF$ErrorActionPreference='Stop'\n$env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath\n& ${quote(process.execPath)} ${args.map(quote).join(" ")} *>> ${quote(NodePath.join(NodePath.dirname(file), "supervisor.log"))}\n`,
         { mode: 0o600 },
       );
     }
@@ -289,30 +324,35 @@ export async function startManagedSsh(key: string, version: string, platform: No
     }
     throw new Error("Remote server did not become ready. Inspect its SSH server log.");
   } finally {
-    await handle.close();
-    await NodeFSP.unlink(lock).catch(() => {});
+    await release();
   }
 }
 
 async function providerSetupWarnings(platform: NodeJS.Platform) {
+  const commands = ["codex", "claude", "cursor-agent", "agent", "grok", "opencode", "antigravity"];
+  const guidance = [
+    "No provider CLI was found on the remote SSH session's PATH. Install and sign in to your provider on that machine, then check Settings → Providers.",
+  ];
+  if (platform === "win32") {
+    const found = await new Promise<boolean>((resolve) => {
+      NodeChildProcess.execFile(
+        NodePath.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "where.exe"),
+        commands,
+        { timeout: 1500, windowsHide: true },
+        (error, stdout) => resolve(!error && stdout.trim().length > 0),
+      );
+    });
+    return found ? [] : guidance;
+  }
   const directories = (process.env.PATH ?? "").split(NodePath.delimiter).filter(Boolean);
-  const extensions =
-    platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""];
-  for (const command of [
-    "codex",
-    "claude",
-    "cursor-agent",
-    "agent",
-    "grok",
-    "opencode",
-    "antigravity",
-  ]) {
+  const extensions = [""];
+  for (const command of commands) {
     for (const directory of directories) {
       for (const extension of extensions) {
         try {
           await NodeFSP.access(
             NodePath.join(directory, `${command}${extension}`),
-            platform === "win32" ? NodeFSP.constants.F_OK : NodeFSP.constants.X_OK,
+            NodeFSP.constants.X_OK,
           );
           if ((await NodeFSP.stat(NodePath.join(directory, `${command}${extension}`))).isFile())
             return [];
@@ -322,9 +362,7 @@ async function providerSetupWarnings(platform: NodeJS.Platform) {
       }
     }
   }
-  return [
-    "No provider CLI was found on the remote SSH session's PATH. Install and sign in to your provider on that machine, then check Settings → Providers.",
-  ];
+  return guidance;
 }
 
 export async function superviseManagedSsh(key: string, version: string) {

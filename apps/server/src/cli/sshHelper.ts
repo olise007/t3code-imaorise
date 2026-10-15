@@ -124,11 +124,12 @@ const runtimePort = Command.make("runtime-port", {
 const managedStart = Command.make("managed-start", {
   key: Argument.String("key"),
   version: Argument.String("version"),
+  resume: Argument.String("resume"),
 }).pipe(
-  Command.withHandler(({ key, version }) =>
+  Command.withHandler(({ key, version, resume }) =>
     Effect.gen(function* () {
       const service = yield* SshManagedRuntime.SshManagedRuntime;
-      const result = yield* service.start(key, version);
+      const result = yield* service.start(key, version, resume === "yes");
       yield* Effect.sync(() => {
         // @effect-diagnostics-next-line preferSchemaOverJson:off - Internal process-boundary helper prints its bounded result.
         process.stdout.write(JSON.stringify(result));

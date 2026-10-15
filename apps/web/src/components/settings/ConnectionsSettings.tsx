@@ -1475,7 +1475,7 @@ function NetworkAccessDescription({
 type SavedBackendListRowProps = {
   environment: EnvironmentPresentation;
   removingEnvironmentId: EnvironmentId | null;
-  onSetEnabled: (environmentId: EnvironmentId, enabled: boolean) => void;
+  onSetEnabled: (environmentId: EnvironmentId, enabled: boolean) => Promise<boolean>;
   onRemove: (environment: EnvironmentPresentation) => void;
   onAddRoute: (environment: EnvironmentPresentation) => void;
 };
@@ -1860,6 +1860,7 @@ function SavedBackendListRow({
                 );
                 if (confirmed !== true) return;
                 try {
+                  if (!(await onSetEnabled(environmentId, false))) return;
                   await desktopBridge.stopSshEnvironment?.(route.profile.value.target);
                 } catch (error) {
                   toastManager.add({
@@ -3128,6 +3129,39 @@ export function ConnectionsSettings() {
   const handleSetSavedBackendEnabled = useCallback(
     async (environmentId: EnvironmentId, enabled: boolean) => {
       setSavedBackendError(null);
+      if (enabled && window.desktopBridge?.ensureSshEnvironment) {
+        const environment = savedEnvironments.find(
+          (entry) => entry.environmentId === environmentId,
+        );
+        const route =
+          environment &&
+          connectionRoutes(environment.entry).find(
+            (candidate) =>
+              Option.isSome(candidate.profile) &&
+              candidate.profile.value._tag === "SshConnectionProfile",
+          );
+        if (
+          route &&
+          Option.isSome(route.profile) &&
+          route.profile.value._tag === "SshConnectionProfile"
+        ) {
+          try {
+            await window.desktopBridge.ensureSshEnvironment(route.profile.value.target, {
+              resumeStoppedServer: true,
+            });
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : "Could not start remote server.";
+            setSavedBackendError(message);
+            toastManager.add({
+              type: "error",
+              title: "Could not switch backend on",
+              description: message,
+            });
+            return false;
+          }
+        }
+      }
       const result = await setEnvironmentEnabled({ environmentId, enabled });
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         const error = squashAtomCommandFailure(result);
@@ -3144,8 +3178,9 @@ export function ConnectionsSettings() {
           }),
         );
       }
+      return result._tag === "Success";
     },
-    [setEnvironmentEnabled],
+    [savedEnvironments, setEnvironmentEnabled],
   );
 
   const removeSavedBackend = useCallback(

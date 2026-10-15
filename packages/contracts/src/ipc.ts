@@ -499,6 +499,7 @@ export const DesktopSshPasswordPromptCancelledResultSchema = Schema.Struct({
 
 export const DesktopSshEnvironmentEnsureOptionsSchema = Schema.Struct({
   issuePairingToken: Schema.optionalKey(Schema.Boolean),
+  resumeStoppedServer: Schema.optionalKey(Schema.Boolean),
 });
 
 export const DesktopSshEnvironmentEnsureInputSchema = Schema.Struct({
@@ -1274,7 +1275,7 @@ export interface DesktopBridge {
   acknowledgeSnapShot?: (id: string) => Promise<void>;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
-    options?: { issuePairingToken?: boolean },
+    options?: { issuePairingToken?: boolean; resumeStoppedServer?: boolean },
   ) => Promise<DesktopSshEnvironmentBootstrap>;
   disconnectSshEnvironment: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   stopSshEnvironment?: (target: DesktopSshEnvironmentTarget) => Promise<void>;

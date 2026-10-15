@@ -27,7 +27,7 @@ export const powershellArgs = (script: string) => [
   "-NonInteractive",
   "-EncodedCommand",
   Buffer.from(
-    `$env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; ${script}`,
+    `$env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; [Console]::InputEncoding=New-Object Text.UTF8Encoding($false); [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); $OutputEncoding=[Console]::OutputEncoding; ${script}`,
     "utf16le",
   ).toString("base64"),
 ];
@@ -70,6 +70,15 @@ export const detectRemotePlatform = Effect.fn("ssh.runtime.detect")(function* (
         stdout: "",
       });
     return "linux" as const;
+  }
+  if (
+    linux._tag === "Success" &&
+    !/^(MINGW|MSYS|CYGWIN)/.test(getLastNonEmptyOutputLine(linux.success.stdout) ?? "")
+  ) {
+    return yield* new SshLaunchError({
+      message: "Automatic SSH setup supports Linux x64 and Windows x64 only.",
+      stdout: "",
+    });
   }
   if (linux._tag === "Failure" && isSshAuthFailure(linux.failure)) return yield* linux.failure;
   const windows = yield* runSshCommand(target, {

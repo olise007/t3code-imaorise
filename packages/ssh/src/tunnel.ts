@@ -72,6 +72,7 @@ const REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS = 900_000;
 const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
 
 export interface RemoteT3RunnerOptions {
+  readonly resumeStoppedServer?: boolean;
   readonly bundles?: BundledSshArchives;
   readonly prepared?: PreparedSshRuntime;
   /**
@@ -167,7 +168,7 @@ export interface SshEnvironmentManagerShape {
   ) => Effect.Effect<void, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
   readonly ensureEnvironment: (
     target: DesktopSshEnvironmentTarget,
-    options?: { readonly issuePairingToken?: boolean },
+    options?: { readonly issuePairingToken?: boolean; resumeStoppedServer?: boolean },
   ) => Effect.Effect<
     DesktopSshEnvironmentBootstrap,
     SshEnvironmentEffectError,
@@ -905,6 +906,7 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
             "managed-start",
             stateKey,
             runner.prepared.version,
+            runner.resumeStoppedServer ? "yes" : "no",
           ])
         : {
             remoteCommandArgs: ["sh", "-l", "-s", "--", stateKey],
@@ -1698,7 +1700,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
 
   const ensureEnvironment = Effect.fn("ssh/tunnel.ensureEnvironment")(function* (
     target: DesktopSshEnvironmentTarget,
-    requestOptions?: { readonly issuePairingToken?: boolean },
+    requestOptions?: { readonly issuePairingToken?: boolean; resumeStoppedServer?: boolean },
   ): Effect.fn.Return<
     DesktopSshEnvironmentBootstrap,
     SshEnvironmentEffectError,
@@ -1731,6 +1733,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         const runner = configuredRunner?.bundles
           ? {
               ...configuredRunner,
+              resumeStoppedServer:
+                requestOptions?.resumeStoppedServer === true ||
+                requestOptions?.issuePairingToken === true,
               prepared: yield* runWithSshAuth({
                 key,
                 target: resolvedTarget,

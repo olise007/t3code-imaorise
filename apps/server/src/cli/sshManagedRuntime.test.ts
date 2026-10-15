@@ -15,7 +15,7 @@ it("reuses an authenticated supervisor after its launching command exits and sto
   const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-managed-ssh-"));
   const env = { ...process.env, HOME: home, USERPROFILE: home };
   const run = (...args: string[]) =>
-    exec(process.execPath, [fixture, ...args], { env, timeout: 20_000 });
+    exec(process.execPath, [fixture, ...args], { env, timeout: 70_000 });
   try {
     const first = JSON.parse((await run("start", key, "2.0.1-test")).stdout);
     const second = JSON.parse((await run("start", key, "2.0.1-test")).stdout);
@@ -41,19 +41,30 @@ it("reuses an authenticated supervisor after its launching command exits and sto
     await expect(run("start", key, "2.0.1-other")).rejects.toThrow("different managed runtime");
     await run("stop", key);
     await expect(NodeFSP.stat(file)).rejects.toThrow();
+    await expect(run("start", key, "2.0.1-test")).rejects.toThrow("explicitly stopped");
+    await expect(run("start", "ffffffffffffffff", "2.0.1-test")).rejects.toThrow(
+      "explicitly stopped",
+    );
+    const resumed = JSON.parse((await run("resume", key, "2.0.1-test")).stdout);
+    expect(resumed.remotePort).toBeGreaterThan(0);
+    await run("stop", key);
   } catch (error) {
     const log = await NodeFSP.readFile(
       NodePath.join(home, ".t3-imaorise", "ssh-managed", "server", "server.log"),
       "utf8",
     ).catch(() => "No supervisor log was written.");
+    const supervisorLog = await NodeFSP.readFile(
+      NodePath.join(home, ".t3-imaorise", "ssh-managed", "server", "supervisor.log"),
+      "utf8",
+    ).catch(() => "No detached launcher log was written.");
     throw new Error(
-      `${error instanceof Error ? error.message : "Supervisor fixture failed"}\n${log.slice(-5000)}`,
+      `${error instanceof Error ? error.message : "Supervisor fixture failed"}\n${log.slice(-5000)}\n${supervisorLog.slice(-5000)}`,
     );
   } finally {
     await run("stop", key).catch(() => {});
     await NodeFSP.rm(home, { recursive: true, force: true });
   }
-}, 30_000);
+}, 90_000);
 
 it("refuses malformed ownership records instead of signalling a saved PID", async () => {
   const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-managed-invalid-"));

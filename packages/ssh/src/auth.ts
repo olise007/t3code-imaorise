@@ -95,6 +95,7 @@ const ASKPASS_WINDOWS_SCRIPT = `# Invoked by ssh via SSH_ASKPASS (through ssh-as
 # ssh with a cached password from the renderer's in-app prompt. We never expose\r
 # a native dialog here - if T3_SSH_AUTH_SECRET is missing, that's a caller bug\r
 # and we fail loudly.\r
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)\r
 $promptText = $args -join ' '\r
 if ($env:T3_SSH_TRUST_PROMPT -and $promptText -eq $env:T3_SSH_TRUST_PROMPT) { [Console]::Out.WriteLine('yes'); exit 0 }\r
 if ($promptText.Contains('yes/no')) { [Console]::Error.WriteLine('T3_SSH_PROMPT:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($promptText))); exit 1 }\r
