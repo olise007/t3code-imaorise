@@ -26,13 +26,14 @@ jobs:
         run: >-
           timeout 900 vp test run --maxWorkers 1
           apps/server/src/process/externalLauncher.test.ts
-          apps/web/src/terminal/ghostty/surface.test.ts
           packages/client-runtime/src/connection/registry.test.ts
           packages/client-runtime/src/state/commandPermissions.test.ts
           apps/web/src/components/files/openDirectoryInTerminal.test.ts
           apps/web/src/components/settings/WslSettings.test.tsx
           apps/desktop/src/wsl/DesktopWslPairing.test.ts
           apps/desktop/src/window/trayWindowPolicy.test.ts
+      - name: Terminal resize with the web WASM asset configuration
+        run: timeout 600 vp test run --config apps/web/vite.config.ts --project unit --maxWorkers 1 apps/web/src/terminal/ghostty/surface.test.ts
       - name: Scoped lint
         run: >-
           vp lint apps/server/src/process/externalLauncher.ts apps/server/src/process/externalLauncher.test.ts
