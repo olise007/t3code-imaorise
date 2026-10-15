@@ -6,6 +6,7 @@ import * as NodeHttp from "node:http";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeOS from "node:os";
+import * as NodeChildProcess from "node:child_process";
 import { startManagedSsh, stopManagedSsh, superviseManagedSsh } from "../sshManagedRuntime.ts";
 
 const args = process.argv.slice(2);
@@ -14,6 +15,15 @@ if (args[0] === "serve") {
   const file = NodePath.join(NodeOS.homedir(), ".t3-imaorise/userdata/server-runtime.json");
   NodeFS.mkdirSync(NodePath.dirname(file), { recursive: true });
   NodeFS.writeFileSync(file, JSON.stringify({ pid: process.pid }));
+  const provider = NodeChildProcess.spawn(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 60000)"],
+    { stdio: "ignore" },
+  );
+  NodeFS.writeFileSync(
+    NodePath.join(NodePath.dirname(file), "fixture-provider.json"),
+    JSON.stringify({ pid: provider.pid }),
+  );
   const server = NodeHttp.createServer((_request, response) => {
     response.setHeader("Content-Type", "application/json");
     response.end(
@@ -23,6 +33,7 @@ if (args[0] === "serve") {
   server.listen(port, "127.0.0.1");
   process.on("SIGTERM", () => {
     NodeFS.rmSync(file, { force: true });
+    provider.kill("SIGTERM");
     server.close();
   });
 } else {
@@ -40,7 +51,7 @@ if (args[0] === "serve") {
       );
     else if (args[0] === "stop") await stopManagedSsh(args[1]!);
     else if (args[0] === "__ssh-helper" && args[1] === "supervise")
-      await superviseManagedSsh(args[2]!, args[3]!);
+      await superviseManagedSsh(args[2]!, args[3]!, Effect.runSync(HostProcess.Platform));
     else throw new Error("Unknown fixture operation");
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Fixture failed");

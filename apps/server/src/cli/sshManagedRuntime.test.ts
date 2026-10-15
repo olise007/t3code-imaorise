@@ -39,7 +39,14 @@ it("reuses an authenticated supervisor after its launching command exits and sto
       ).status,
     ).toBe(403);
     await expect(run("start", key, "2.0.1-other")).rejects.toThrow("different managed runtime");
+    const provider = JSON.parse(
+      await NodeFSP.readFile(
+        NodePath.join(home, ".t3-imaorise/userdata/fixture-provider.json"),
+        "utf8",
+      ),
+    ) as { pid: number };
     await run("stop", key);
+    expect(() => process.kill(provider.pid, 0)).toThrow();
     await expect(NodeFSP.stat(file)).rejects.toThrow();
     await expect(run("start", key, "2.0.1-test")).rejects.toThrow("explicitly stopped");
     await expect(run("start", "ffffffffffffffff", "2.0.1-test")).rejects.toThrow(

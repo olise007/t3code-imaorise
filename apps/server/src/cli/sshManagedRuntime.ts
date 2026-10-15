@@ -60,7 +60,10 @@ export const layer = Layer.sync(SshManagedRuntime, () =>
         operation(() => startManagedSsh(key, version, platform, resume)),
       ),
     stop: (key) => operation(() => stopManagedSsh(key)),
-    supervise: (key, version) => operation(() => superviseManagedSsh(key, version)),
+    supervise: (key, version) =>
+      Effect.flatMap(HostProcess.Platform, (platform) =>
+        operation(() => superviseManagedSsh(key, version, platform)),
+      ),
   }),
 );
 
@@ -125,7 +128,7 @@ async function control(record: ManagedSshRecord, action: "health" | "stop") {
   const response = await fetch(`http://127.0.0.1:${record.controlPort}/${action}`, {
     method: action === "stop" ? "POST" : "GET",
     headers: { Authorization: `Bearer ${record.token}` },
-    signal: AbortSignal.timeout(3000),
+    signal: AbortSignal.timeout(action === "stop" ? 15_000 : 3000),
   });
   if (!response.ok) throw new Error("Remote supervisor identity could not be verified.");
   const result = (await response.json()) as {
@@ -377,7 +380,7 @@ async function providerSetupWarnings(platform: NodeJS.Platform) {
   return guidance;
 }
 
-export async function superviseManagedSsh(key: string, version: string) {
+export async function superviseManagedSsh(key: string, version: string, platform: NodeJS.Platform) {
   const file = recordPath(key);
   // Refuse another live server using the same state directory. Do not kill or adopt it.
   const home = NodePath.join(NodeOS.homedir(), ".t3-imaorise");
@@ -432,6 +435,33 @@ export async function superviseManagedSsh(key: string, version: string) {
     },
   );
   await log.close();
+  const stopChild = async () => {
+    if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
+    if (platform === "win32") {
+      // Node's Windows SIGTERM terminates only the root process. This PID is
+      // captured from our spawn, never discovered from a saved record or name.
+      await new Promise<void>((resolve, reject) =>
+        NodeChildProcess.execFile(
+          NodePath.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
+          ["/PID", String(child.pid), "/T", "/F"],
+          { windowsHide: true, timeout: 10_000 },
+          (error) =>
+            error && child.exitCode === null && child.signalCode === null
+              ? reject(
+                  new Error("Could not stop the owned Windows server process tree.", {
+                    cause: error,
+                  }),
+                )
+              : resolve(),
+        ),
+      );
+    } else {
+      await new Promise<void>((resolve) => {
+        child.once("exit", () => resolve());
+        child.kill("SIGTERM");
+      });
+    }
+  };
   const record: ManagedSshRecord = {
     protocol: 1,
     token: NodeCrypto.randomBytes(32).toString("hex"),
@@ -469,12 +499,12 @@ export async function superviseManagedSsh(key: string, version: string) {
     response.setHeader("Content-Type", "application/json");
     if (request.url === "/stop" && !stopping) {
       stopping = true;
-      child.once("exit", () => {
-        void cleanup().then(() =>
+      void stopChild()
+        .then(() => cleanup())
+        .then(() =>
           response.end(JSON.stringify({ ...record, remotePort: serverPort, environmentId })),
-        );
-      });
-      child.kill("SIGTERM");
+        )
+        .catch(() => response.writeHead(500).end());
       return;
     }
     response.end(JSON.stringify({ ...record, remotePort: serverPort, environmentId }));
@@ -503,7 +533,7 @@ export async function superviseManagedSsh(key: string, version: string) {
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  child.kill("SIGTERM");
+  await stopChild();
   await cleanup();
   throw new Error("Remote server did not become ready.");
 }
