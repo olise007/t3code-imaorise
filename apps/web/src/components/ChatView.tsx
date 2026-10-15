@@ -147,6 +147,7 @@ import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import { truncate } from "@t3tools/shared/String";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
+import { openDirectoryInTerminal } from "./files/openDirectoryInTerminal";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
@@ -1584,6 +1585,10 @@ export default function ChatView(props: ChatViewProps) {
   } = props;
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
+  const canOpenDirectoryTerminal = useAtomValue(
+    terminalEnvironment.open.permissionAtom(environmentId),
+  );
+  const openDirectoryTerminal = useAtomCommand(terminalEnvironment.open, { reportFailure: false });
   const hasTerminalWriteAccess = useCallback(
     () => readEnvironmentScope(environmentId, AuthTerminalOperateScope),
     [environmentId],
@@ -4932,6 +4937,45 @@ export default function ChatView(props: ChatViewProps) {
     gitCwd,
     storeNewTerminal,
   ]);
+  const openFileBrowserDirectoryInTerminal = useCallback(
+    async (relativePath: string) => {
+      if (
+        !activeThreadRef ||
+        !activeWorkspaceRoot ||
+        !activeProject ||
+        currentRouteThreadKeyRef.current !== routeThreadKey
+      )
+        return;
+      await openDirectoryInTerminal({
+        threadRef: activeThreadRef,
+        workspaceRoot: activeWorkspaceRoot,
+        relativePath,
+        terminalId: nextTerminalId(allocatableActiveTerminalIds, randomUUID()),
+        worktreePath: activeThreadWorktreePath,
+        env: projectScriptRuntimeEnv({
+          project: { cwd: activeProject.workspaceRoot },
+          worktreePath: activeThreadWorktreePath,
+        }),
+        canOpen: () => hasTerminalWriteAccess() && activeEnvironmentConnectionPhase === "connected",
+        open: openDirectoryTerminal,
+        focus: () => {
+          if (currentRouteThreadKeyRef.current === routeThreadKey)
+            setTerminalFocusRequestId((value) => value + 1);
+        },
+      });
+    },
+    [
+      activeThreadRef,
+      activeWorkspaceRoot,
+      activeProject,
+      allocatableActiveTerminalIds,
+      activeThreadWorktreePath,
+      hasTerminalWriteAccess,
+      activeEnvironmentConnectionPhase,
+      openDirectoryTerminal,
+      routeThreadKey,
+    ],
+  );
   const closeTerminal = useCallback(
     (terminalId: string) => {
       if (!hasTerminalWriteAccess() || !activeThreadId || !activeThreadRef) return;
@@ -11266,6 +11310,11 @@ export default function ChatView(props: ChatViewProps) {
           environmentId={activeThread.environmentId}
           cwd={activeWorkspaceRoot ?? ""}
           projectName={activeProject?.title ?? ""}
+          onOpenDirectoryInTerminal={
+            canOpenDirectoryTerminal && activeEnvironmentConnectionPhase === "connected"
+              ? openFileBrowserDirectoryInTerminal
+              : undefined
+          }
           threadRef={activeThreadRef}
           composerDraftTarget={composerDraftTarget}
           keybindings={keybindings}

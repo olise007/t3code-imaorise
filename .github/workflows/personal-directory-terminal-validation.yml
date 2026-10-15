@@ -1,0 +1,43 @@
+name: Personal directory terminal validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Directory actions, paths, lifecycle and permissions
+        run: >-
+          timeout 900 vp test run --maxWorkers 1
+          apps/web/src/components/files/openDirectoryInTerminal.test.ts
+          apps/web/src/fileContextMenu.test.ts
+          apps/web/src/terminalUiStateStore.test.ts
+          packages/client-runtime/src/state/commandPermissions.test.ts
+          packages/client-runtime/src/state/terminalSession.test.ts
+      - name: Terminal host validates directory access
+        run: timeout 600 vp test run --maxWorkers 1 apps/server/src/terminal/Manager.test.ts --testNamePattern 'cwd|spawns lazily|reuses|environment'
+      - name: Scoped lint
+        run: >-
+          vp lint apps/web/src/components/files/openDirectoryInTerminal.ts
+          apps/web/src/components/files/openDirectoryInTerminal.test.ts
+          apps/web/src/components/files/FileBrowserPanel.tsx
+          apps/web/src/components/files/FilePreviewPanel.tsx
+          apps/web/src/components/ChatView.tsx
+      - name: Web types
+        run: timeout 600 vp run --filter @t3tools/web typecheck

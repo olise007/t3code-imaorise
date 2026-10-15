@@ -24,6 +24,7 @@ import { T3_PIERRE_ICONS } from "~/pierre-icons";
 import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
 
 import { createFileTreeDragMentionController } from "./fileTreeDragMention";
+import { directoryTerminalMenuItems } from "./openDirectoryInTerminal";
 import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "./fileTreeExpansion";
 import { buildFileTreePathUpdates } from "./fileTreePathReconciliation";
 import { useDirectoryEntries } from "./useDirectoryEntries";
@@ -38,6 +39,7 @@ interface FileBrowserPanelProps {
   /** Bumped when the same path should be revealed again (e.g. re-opened from search). */
   selectedPathRevealId: number;
   onOpenFile: (relativePath: string) => void;
+  onOpenDirectoryInTerminal?: (relativePath: string) => Promise<void>;
   onRefreshSelectedFile?: () => void;
   workspaceMutationId: string | null;
 }
@@ -102,6 +104,7 @@ export default function FileBrowserPanel({
   selectedPath,
   selectedPathRevealId,
   onOpenFile,
+  onOpenDirectoryInTerminal,
   onRefreshSelectedFile,
   workspaceMutationId,
 }: FileBrowserPanelProps) {
@@ -185,12 +188,33 @@ export default function FileBrowserPanel({
       const clicked = await api.contextMenu.show(
         [
           ...fileMenuItems,
+          ...directoryTerminalMenuItems(
+            entryKinds.get(relativePath),
+            onOpenDirectoryInTerminal !== undefined,
+          ),
           { id: "copy-mention", label: "Copy mention" },
           { id: "add-to-chat", label: "Add to chat" },
         ],
         position,
       );
       if (clicked === null) return;
+      if (clicked === "open-in-terminal") {
+        if (entryKindsRef.current.get(relativePath) !== "directory" || !onOpenDirectoryInTerminal)
+          return;
+        try {
+          await onOpenDirectoryInTerminal(relativePath);
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Could not open directory in terminal",
+            description:
+              error instanceof Error
+                ? error.message
+                : "Check the directory and environment connection, then retry.",
+          });
+        }
+        return;
+      }
       // "Open with" submenu selections report the child id ("editor:<id>"),
       // which is not present in the top-level item list.
       const isFileMenuAction =
