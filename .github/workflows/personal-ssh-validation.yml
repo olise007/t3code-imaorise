@@ -34,7 +34,10 @@ jobs:
         run: vp run --filter @t3tools/contracts --filter @t3tools/ssh typecheck
       - name: Client typechecks
         if: ${{ !cancelled() }}
-        run: vp run --filter @t3tools/client-runtime --filter @t3tools/web --filter @t3tools/desktop typecheck
+        run: |
+          vp run --filter @t3tools/client-runtime typecheck
+          vp run --filter @t3tools/web typecheck
+          vp run --filter @t3tools/desktop typecheck
       - name: Server typecheck
         if: ${{ !cancelled() }}
         run: vp run --filter t3 typecheck

@@ -63,9 +63,9 @@ it.effect("refreshes distinct sources without starting stopped distros and isola
     }).pipe(Layer.provide(Layer.merge(NodeServices.layer, DesktopConfig.layerTest({}))));
     const discover = (load?: string) =>
       discoverConnections(load).pipe(
-        Effect.provide(environment),
         Effect.provide(
-          Layer.merge(
+          Layer.mergeAll(
+            environment,
             NodeServices.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
           ),
