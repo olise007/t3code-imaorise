@@ -34,7 +34,9 @@ it.effect("refreshes distinct sources without starting stopped distros and isola
                 : "Ubuntu\r\nDebian\r\nBroken\r\n",
               "utf16le",
             )
-          : Buffer.from("ssh-config\tshared\nssh-config\tshared\n");
+          : Buffer.from(
+              "ssh-config\tshared\nssh-config\tshared\nknown-hosts\t[alternate.example]:2222\n",
+            );
         return ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(123),
           stdout: Stream.make(output),
@@ -76,6 +78,7 @@ it.effect("refreshes distinct sources without starting stopped distros and isola
       NodeFS.writeFileSync(NodePath.join(home, ".ssh/config"), "Host shared\n");
       const first = yield* discover();
       expect(first.hosts.filter((host) => host.alias === "shared")).toHaveLength(2);
+      expect(first.hosts.find((host) => host.hostname === "alternate.example")?.port).toBe(2222);
       expect(first.sources.find((source) => source.label.includes("Debian"))?.running).toBe(false);
       expect(first.sources.find((source) => source.label.includes("Broken"))?.error).toBeTruthy();
       expect(commands.some((args) => args[1] === "Debian")).toBe(false);

@@ -139,10 +139,18 @@ export const discoverConnections = Effect.fn("desktop.ssh.discovery")(function* 
     for (const line of result.success.split(/\r?\n/)) {
       const [source, raw] = line.split("\t");
       if (!raw || (source !== "ssh-config" && source !== "known-hosts")) continue;
-      const alias = raw.replace(/^\[([^\]]+)\]:\d+$/, "$1");
+      const endpoint = /^\[([^\]]+)\]:(\d+)$/.exec(raw);
+      const alias = endpoint?.[1] ?? raw;
       if (seen.has(alias)) continue;
       seen.add(alias);
-      hosts.push({ alias, hostname: alias, username: null, port: null, source, executionSource });
+      hosts.push({
+        alias,
+        hostname: alias,
+        username: null,
+        port: endpoint ? Number(endpoint[2]) : null,
+        source,
+        executionSource,
+      });
     }
   }
   return { hosts, sources };
