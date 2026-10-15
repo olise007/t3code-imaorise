@@ -109,6 +109,7 @@ jobs:
           mkdir -p /tmp/personal-runtime-smoke
           tar -xzf release-cli/*.tar.gz -C /tmp/personal-runtime-smoke
           python3 scripts/imaorise/smoke-background-runtime.py "/tmp/personal-runtime-smoke/t3-$RELEASE_VERSION-linux-x64/t3"
+          node scripts/imaorise/ssh-packaged-smoke.ts "/tmp/personal-runtime-smoke/t3-$RELEASE_VERSION-linux-x64/t3" "$RELEASE_VERSION"
       - uses: actions/upload-artifact@v4
         with:
           name: personal-wsl-runtime
@@ -144,6 +145,8 @@ jobs:
         run: |
           if (git status --porcelain) { throw 'Source must be clean before generating package metadata.' }
           node scripts/update-release-package-versions.ts $env:RELEASE_VERSION
+          vp run build:desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:VP_NODE_VERSION = '26.8.2'
           node apps/server/scripts/cli.ts build-exe --verbose
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -155,9 +158,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node scripts/smoke-cli-archive.ts --archive (Get-ChildItem release-cli/*.zip).FullName --expect-version $env:RELEASE_VERSION
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sshSmoke = Join-Path $env:RUNNER_TEMP 'packaged-ssh-smoke'
+          Expand-Archive -LiteralPath (Get-ChildItem release-cli/*.zip).FullName -DestinationPath $sshSmoke
+          node scripts/imaorise/ssh-packaged-smoke.ts (Get-ChildItem $sshSmoke -Recurse -Filter t3.exe).FullName $env:RELEASE_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:T3CODE_DESKTOP_SSH_WINDOWS_RUNTIME = (Get-ChildItem release-cli/*.zip).FullName
           $runtime = (Get-ChildItem "$env:RUNNER_TEMP/wsl-runtime/*.tar.gz").FullName
-          node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64 --build-version $env:RELEASE_VERSION --wsl-runtime $runtime --output-dir personal-windows --verbose
+          node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64 --build-version $env:RELEASE_VERSION --wsl-runtime $runtime --skip-build --output-dir personal-windows --verbose
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
