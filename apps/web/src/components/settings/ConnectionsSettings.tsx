@@ -49,6 +49,8 @@ import {
   type AdvertisedEndpoint,
   type DesktopDiscoveredSshHost,
   type DesktopSshEnvironmentTarget,
+  type DesktopSshExecutionSource,
+  type DesktopSshDiscoveryReport,
   type DesktopServerExposureState,
   type DesktopWslPairingState,
   type EnvironmentId,
@@ -1817,6 +1819,47 @@ function SavedBackendListRow({
             <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
           ) : null}
           <MenuSeparator />
+          {desktopBridge?.stopSshEnvironment &&
+          connectionRoutes(environment.entry).some(
+            (route) =>
+              Option.isSome(route.profile) && route.profile.value._tag === "SshConnectionProfile",
+          ) ? (
+            <MenuItem
+              variant="destructive"
+              onClick={async () => {
+                const route = connectionRoutes(environment.entry).find(
+                  (candidate) =>
+                    Option.isSome(candidate.profile) &&
+                    candidate.profile.value._tag === "SshConnectionProfile",
+                );
+                if (
+                  !route ||
+                  Option.isNone(route.profile) ||
+                  route.profile.value._tag !== "SshConnectionProfile"
+                )
+                  return;
+                const confirmed = await requestConfirmDialog(
+                  `Stop the T3-managed server on ${environment.label}? This stops its agents and tools. Disconnecting alone leaves them running.`,
+                  { variant: "destructive" },
+                );
+                if (confirmed !== true) return;
+                try {
+                  await desktopBridge.stopSshEnvironment?.(route.profile.value.target);
+                } catch (error) {
+                  toastManager.add({
+                    type: "error",
+                    title: "Could not stop remote server",
+                    description:
+                      error instanceof Error
+                        ? error.message
+                        : "Remote server ownership could not be verified.",
+                  });
+                }
+              }}
+            >
+              Stop remote server…
+            </MenuItem>
+          ) : null}
           <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
             {isRemoving ? "Removing…" : "Remove from this device…"}
           </MenuItem>
@@ -2477,6 +2520,23 @@ export function ConnectionsSettings() {
   const [savedBackendHost, setSavedBackendHost] = useState("");
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
+  const [sshSource, setSshSource] = useState<DesktopSshExecutionSource>({ type: "local" });
+  const [sshReport, setSshReport] = useState<DesktopSshDiscoveryReport | null>(null);
+  const sshDiscoverySequence = useRef(0);
+  const refreshSshConnections = useCallback(
+    async (loadDistro?: string) => {
+      if (!desktopBridge?.discoverSshConnections) return;
+      const sequence = ++sshDiscoverySequence.current;
+      try {
+        const report = await desktopBridge.discoverSshConnections(loadDistro);
+        if (sshDiscoverySequence.current === sequence) setSshReport(report);
+      } catch (error) {
+        if (sshDiscoverySequence.current === sequence)
+          setSavedBackendError(error instanceof Error ? error.message : "SSH discovery failed.");
+      }
+    },
+    [desktopBridge],
+  );
   const [savedBackendSshUsername, setSavedBackendSshUsername] = useState("");
   const [savedBackendSshPort, setSavedBackendSshPort] = useState("");
   const [sshHostSuggestionsOpen, setSshHostSuggestionsOpen] = useState(false);
@@ -2536,23 +2596,37 @@ export function ConnectionsSettings() {
   // each time the SSH tab is shown; stale hosts stay visible while it refreshes.
   const refreshDesktopSshHosts = desktopSshHosts.refresh;
   useEffect(() => {
-    if (isSshDiscoveryActive) refreshDesktopSshHosts();
-  }, [isSshDiscoveryActive, refreshDesktopSshHosts]);
+    if (isSshDiscoveryActive) {
+      refreshDesktopSshHosts();
+      void refreshSshConnections();
+    }
+    return () => {
+      sshDiscoverySequence.current++;
+    };
+  }, [isSshDiscoveryActive, refreshDesktopSshHosts, refreshSshConnections]);
   const desktopWsl = useEnvironmentQuery(
     canManageLocalBackend && desktopBridge ? desktopWslStateAtom : null,
   );
   const desktopWslState = desktopWsl.data;
-  const discoveredSshHosts = desktopSshHosts.data ?? EMPTY_DISCOVERED_SSH_HOSTS;
+  const discoveredSshHosts = sshReport?.hosts ?? desktopSshHosts.data ?? EMPTY_DISCOVERED_SSH_HOSTS;
   const unsavedDiscoveredSshHosts = useMemo(
     () =>
       discoveredSshHosts.filter((target) => {
+        if (
+          (target.executionSource?.type ?? "local") !== sshSource.type ||
+          (sshSource.type === "wsl" &&
+            (target.executionSource?.type !== "wsl" ||
+              target.executionSource.distro !== sshSource.distro))
+        )
+          return false;
         const address = formatDesktopSshTarget(target);
         return (
-          !savedDesktopSshEnvironmentKeys.has(target.alias) &&
-          !savedDesktopSshEnvironmentKeys.has(address)
+          (target.executionSource?.type === "wsl" ||
+            !savedDesktopSshEnvironmentKeys.has(target.alias)) &&
+          (target.executionSource?.type === "wsl" || !savedDesktopSshEnvironmentKeys.has(address))
         );
       }),
-    [discoveredSshHosts, savedDesktopSshEnvironmentKeys],
+    [discoveredSshHosts, savedDesktopSshEnvironmentKeys, sshSource],
   );
   const filteredDiscoveredSshHosts = useMemo(
     () => filterDiscoveredSshHosts(unsavedDiscoveredSshHosts, savedBackendSshHost),
@@ -2869,7 +2943,7 @@ export function ConnectionsSettings() {
         return;
       }
 
-      await connectSavedBackendSshTarget(target);
+      await connectSavedBackendSshTarget({ ...target, executionSource: sshSource });
       return;
     }
 
@@ -2944,6 +3018,7 @@ export function ConnectionsSettings() {
     savedBackendMode,
     savedBackendPairingCode,
     savedBackendSshHost,
+    sshSource,
     savedBackendSshPort,
     savedBackendSshUsername,
   ]);
@@ -2969,7 +3044,7 @@ export function ConnectionsSettings() {
       setSavedBackendSshHost(target.alias);
       let resolved: DesktopSshEnvironmentTarget;
       try {
-        resolved = await desktopBridge.resolveSshHost(target.alias);
+        resolved = await desktopBridge.resolveSshHost(target.alias, target.executionSource);
       } catch (error) {
         setSavedBackendError(formatDesktopSshConnectionError(error));
         setIsAddingSavedBackend(false);
@@ -3293,6 +3368,87 @@ export function ConnectionsSettings() {
   );
   const renderSshFields = () => (
     <div className="space-y-4">
+      <label className="block">
+        <span className="mb-1.5 block text-xs font-medium text-foreground">
+          SSH configuration source
+        </span>
+        <Select
+          value={sshSource.type === "wsl" ? `wsl:${sshSource.distro}` : "local"}
+          onValueChange={(value) => {
+            setSshSource(
+              typeof value === "string" && value.startsWith("wsl:")
+                ? { type: "wsl", distro: value.slice(4) }
+                : { type: "local" },
+            );
+            setSavedBackendSshUsername("");
+            setSavedBackendSshPort("");
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            {(
+              sshReport?.sources ?? [
+                {
+                  executionSource: { type: "local" as const },
+                  label: "This machine",
+                  running: true,
+                },
+              ]
+            ).map((source) => (
+              <SelectItem
+                key={source.label}
+                value={
+                  source.executionSource.type === "wsl"
+                    ? `wsl:${source.executionSource.distro}`
+                    : "local"
+                }
+              >
+                {source.label}
+                {!source.running ? " (stopped)" : ""}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      </label>
+      <div className="flex gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={isAddingSavedBackend}
+          onClick={() => void refreshSshConnections()}
+        >
+          Refresh hosts
+        </Button>
+        {sshSource.type === "wsl" ? (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isAddingSavedBackend}
+            onClick={() => void refreshSshConnections(sshSource.distro)}
+          >
+            Load hosts
+          </Button>
+        ) : null}
+      </div>
+      {sshReport?.sources
+        .filter(
+          (source) =>
+            source.error &&
+            (source.executionSource.type === "local"
+              ? sshSource.type === "local"
+              : sshSource.type === "wsl" && source.executionSource.distro === sshSource.distro),
+        )
+        .map((source) => (
+          <Alert key={source.label} variant="error">
+            <AlertDescription>{source.error}</AlertDescription>
+          </Alert>
+        ))}
+      <p className="text-xs text-muted-foreground">
+        Connect to Linux x64 or Windows x64. T3 uploads its matching server runtime; provider login
+        remains on the remote machine.
+      </p>
       <div className="space-y-3">
         <div className="block">
           <label
@@ -3341,7 +3497,7 @@ export function ConnectionsSettings() {
                         : null;
                       return (
                         <AutocompleteItem
-                          key={`${target.alias}:${target.hostname}:${target.port ?? ""}`}
+                          key={`${target.executionSource?.type === "wsl" ? target.executionSource.distro : "local"}:${target.alias}:${target.hostname}:${target.port ?? ""}`}
                           value={target}
                           className="h-8 min-h-8 whitespace-nowrap"
                         >
@@ -3978,7 +4134,7 @@ export function ConnectionsSettings() {
                             mode: "ssh",
                             title: "SSH",
                             description:
-                              "Use local SSH config, agent, and tunnels for the backend.",
+                              "Use Windows or WSL SSH configuration to set up a remote machine.",
                             icon: <TerminalIcon aria-hidden className="size-4" />,
                           })
                         : null}

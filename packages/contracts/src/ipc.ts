@@ -410,11 +410,39 @@ export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
   bootstrapToken: Schema.optionalKey(Schema.String),
 });
 
+export const DesktopSshExecutionSourceSchema = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("local") }),
+  Schema.Struct({ type: Schema.Literal("wsl"), distro: Schema.NonEmptyString }),
+]);
+export type DesktopSshExecutionSource = typeof DesktopSshExecutionSourceSchema.Type;
+export const DesktopSshDiscoveryReportSchema = Schema.Struct({
+  hosts: Schema.Array(
+    Schema.Struct({
+      alias: Schema.String,
+      hostname: Schema.String,
+      username: Schema.NullOr(Schema.String),
+      port: Schema.NullOr(Schema.Number),
+      source: Schema.Literals(["ssh-config", "known-hosts"]),
+      executionSource: Schema.optionalKey(DesktopSshExecutionSourceSchema),
+    }),
+  ),
+  sources: Schema.Array(
+    Schema.Struct({
+      executionSource: DesktopSshExecutionSourceSchema,
+      label: Schema.String,
+      running: Schema.Boolean,
+      error: Schema.optionalKey(Schema.String),
+    }),
+  ),
+});
+export type DesktopSshDiscoveryReport = typeof DesktopSshDiscoveryReportSchema.Type;
+
 export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
   alias: Schema.String,
   hostname: Schema.String,
   username: Schema.NullOr(Schema.String),
   port: Schema.NullOr(Schema.Number),
+  executionSource: Schema.optionalKey(DesktopSshExecutionSourceSchema),
 });
 export type DesktopSshEnvironmentTarget = typeof DesktopSshEnvironmentTargetSchema.Type;
 
@@ -431,6 +459,7 @@ export const DesktopDiscoveredSshHostSchema = Schema.Struct({
   username: Schema.NullOr(Schema.String),
   port: Schema.NullOr(Schema.Number),
   source: DesktopSshHostSourceSchema,
+  executionSource: Schema.optionalKey(DesktopSshExecutionSourceSchema),
 });
 
 export interface DesktopSshEnvironmentBootstrap {
@@ -1214,8 +1243,12 @@ export interface DesktopBridge {
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;
   clearConnectionCatalog?: () => Promise<void>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
+  discoverSshConnections?: (loadDistro?: string) => Promise<DesktopSshDiscoveryReport>;
   /** Resolves a suggested SSH alias before populating the connection form. */
-  resolveSshHost: (alias: string) => Promise<DesktopSshEnvironmentTarget>;
+  resolveSshHost: (
+    alias: string,
+    executionSource?: DesktopSshExecutionSource,
+  ) => Promise<DesktopSshEnvironmentTarget>;
   requestSnapShotPermissions?: (includeAccessibility: boolean) => Promise<void>;
   getSnapShotState?: () => Promise<DesktopSnapShotState>;
   setupSnapShot?: (action: DesktopSnapShotSetupAction) => Promise<void>;
@@ -1239,6 +1272,7 @@ export interface DesktopBridge {
     options?: { issuePairingToken?: boolean },
   ) => Promise<DesktopSshEnvironmentBootstrap>;
   disconnectSshEnvironment: (target: DesktopSshEnvironmentTarget) => Promise<void>;
+  stopSshEnvironment?: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   fetchSshEnvironmentDescriptor: (httpBaseUrl: string) => Promise<ExecutionEnvironmentDescriptor>;
   bootstrapSshBearerSession: (
     httpBaseUrl: string,

@@ -550,7 +550,7 @@ describe("ssh tunnel scripts", () => {
         assert.include(firstTunnelArgs, "ControlPath=none");
         assert.include(firstTunnelArgs, "ControlPersist=no");
 
-        const disconnected = yield* Effect.result(manager.disconnectEnvironment(target));
+        const disconnected = yield* Effect.result(manager.stopEnvironment(target));
         if (mode === "failed stop") {
           assert.isTrue(Result.isFailure(disconnected));
           if (Result.isFailure(disconnected)) {
@@ -567,7 +567,7 @@ describe("ssh tunnel scripts", () => {
         assert.equal(stopCommandCount, 1);
 
         if (mode === "failed stop") {
-          yield* manager.disconnectEnvironment(target);
+          yield* manager.stopEnvironment(target);
           assert.equal(tunnelKillCount, 1);
           assert.equal(stopCommandCount, 2);
         }
@@ -582,7 +582,7 @@ describe("ssh tunnel scripts", () => {
         Effect.andThen(
           Effect.sync(() => {
             assert.equal(tunnelKillCount, 2);
-            assert.equal(stopCommandCount, mode === "failed stop" ? 3 : 2);
+            assert.equal(stopCommandCount, mode === "failed stop" ? 2 : 1);
           }),
         ),
       );
@@ -660,7 +660,7 @@ describe("ssh tunnel scripts", () => {
         yield* Effect.gen(function* () {
           const manager = yield* SshTunnel.SshEnvironmentManager;
           yield* manager.ensureEnvironment(target);
-          const disconnect = yield* Effect.forkChild(manager.disconnectEnvironment(target));
+          const disconnect = yield* Effect.forkChild(manager.stopEnvironment(target));
           yield* Deferred.await(shutdownStarted);
           const firstReconnect = yield* Effect.forkChild(manager.ensureEnvironment(target));
           const secondReconnect = yield* Effect.forkChild(manager.ensureEnvironment(target));

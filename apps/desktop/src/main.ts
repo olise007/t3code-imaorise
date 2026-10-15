@@ -119,6 +119,25 @@ const resolveDesktopSshCliRunner = (
       nodeEngineRange: serverPackageJson.engines.node,
     };
   }
+  if (environment.platform === "win32") {
+    const archive = (name: string) => {
+      const archivePath = environment.path.join(environment.resourcesPath, name);
+      let sha256 = "";
+      try {
+        sha256 = NodeFS.readFileSync(`${archivePath}.sha256`, "utf8").trim().split(/\s+/)[0] ?? "";
+      } catch {
+        /* Setup reports missing artifacts without preventing desktop startup. */
+      }
+      return { path: archivePath, sha256 };
+    };
+    return {
+      bundles: {
+        version: environment.appVersion,
+        linux: archive("wsl-runtime.tar.gz"),
+        windows: archive("ssh-windows-runtime.zip"),
+      },
+    };
+  }
   return { archiveVersion: environment.appVersion };
 };
 

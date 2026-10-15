@@ -2,6 +2,7 @@ import type {
   DesktopDiscoveredSshHost,
   DesktopSshEnvironmentBootstrap,
   DesktopSshEnvironmentTarget,
+  DesktopSshExecutionSource,
 } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
 import * as SshAuth from "@t3tools/ssh/auth";
@@ -55,12 +56,16 @@ export class DesktopSshEnvironment extends Context.Service<
     }) => Effect.Effect<readonly DesktopDiscoveredSshHost[], DesktopSshEnvironmentDiscoverError>;
     readonly resolveHost: (
       alias: string,
+      executionSource?: DesktopSshExecutionSource,
     ) => Effect.Effect<DesktopSshEnvironmentTarget, SshCommandError | SshInvalidTargetError>;
     readonly ensureEnvironment: (
       target: DesktopSshEnvironmentTarget,
       options?: { readonly issuePairingToken?: boolean },
     ) => Effect.Effect<DesktopSshEnvironmentBootstrap, DesktopSshEnvironmentOperationError>;
     readonly disconnectEnvironment: (
+      target: DesktopSshEnvironmentTarget,
+    ) => Effect.Effect<void, DesktopSshEnvironmentOperationError>;
+    readonly stopEnvironment: (
       target: DesktopSshEnvironmentTarget,
     ) => Effect.Effect<void, DesktopSshEnvironmentOperationError>;
   }
@@ -138,8 +143,8 @@ export const make = Effect.gen(function* () {
         Effect.provide(runtimeContext),
         Effect.withSpan("desktop.ssh.discoverHosts"),
       ),
-    resolveHost: (alias) =>
-      resolveSshTarget(alias.trim()).pipe(
+    resolveHost: (alias, executionSource) =>
+      resolveSshTarget(alias.trim(), executionSource).pipe(
         Effect.provide(runtimeContext),
         Effect.withSpan("desktop.ssh.resolveHost"),
       ),
@@ -150,6 +155,13 @@ export const make = Effect.gen(function* () {
           Effect.provideService(SshAuth.SshPasswordPrompt, passwordPrompt),
           Effect.provide(runtimeContext),
           Effect.withSpan("desktop.ssh.ensureEnvironment"),
+        ),
+    stopEnvironment: (target) =>
+      manager
+        .stopEnvironment(target)
+        .pipe(
+          Effect.provideService(SshAuth.SshPasswordPrompt, passwordPrompt),
+          Effect.provide(runtimeContext),
         ),
     disconnectEnvironment: (target) =>
       manager

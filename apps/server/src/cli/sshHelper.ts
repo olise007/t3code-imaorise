@@ -9,6 +9,7 @@ import * as NodeNet from "node:net";
 
 import * as Effect from "effect/Effect";
 import { Argument, Command } from "effect/cli";
+import { startManagedSsh, stopManagedSsh, superviseManagedSsh } from "./sshManagedRuntime.ts";
 
 /**
  * Small helpers the SSH launch script needs on the remote host. The script
@@ -120,7 +121,29 @@ const runtimePort = Command.make("runtime-port", {
   ),
 );
 
+const managedStart = Command.make("managed-start", {
+  key: Argument.String("key"),
+  version: Argument.String("version"),
+}).pipe(
+  Command.withHandler(({ key, version }) =>
+    Effect.promise(async () => {
+      process.stdout.write(JSON.stringify(await startManagedSsh(key, version)));
+    }),
+  ),
+);
+const managedStop = Command.make("managed-stop", { key: Argument.String("key") }).pipe(
+  Command.withHandler(({ key }) => Effect.promise(() => stopManagedSsh(key))),
+);
+const supervise = Command.make("supervise", {
+  key: Argument.String("key"),
+  version: Argument.String("version"),
+}).pipe(
+  Command.withHandler(({ key, version }) =>
+    Effect.promise(() => superviseManagedSsh(key, version)),
+  ),
+);
+
 export const sshHelperCommand = Command.make("__ssh-helper").pipe(
   Command.unlisted,
-  Command.withSubcommands([pickPort, waitReady, runtimePort]),
+  Command.withSubcommands([pickPort, waitReady, runtimePort, managedStart, managedStop, supervise]),
 );

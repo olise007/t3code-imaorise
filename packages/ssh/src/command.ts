@@ -1,4 +1,4 @@
-import type { DesktopSshEnvironmentTarget } from "@t3tools/contracts";
+import type { DesktopSshEnvironmentTarget, DesktopSshExecutionSource } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
@@ -38,6 +38,7 @@ export interface RunSshCommandOptions extends SshAuthOptions {
   readonly preHostArgs?: ReadonlyArray<string>;
   readonly remoteCommandArgs?: ReadonlyArray<string>;
   readonly stdin?: string;
+  readonly stdinBytes?: Uint8Array;
   readonly timeoutMs?: number;
 }
 
@@ -69,8 +70,68 @@ export function parseSshResolveOutput(alias: string, stdout: string): DesktopSsh
 }
 
 export function targetConnectionKey(target: DesktopSshEnvironmentTarget): string {
-  return `${target.alias}\u0000${target.hostname}\u0000${target.username ?? ""}\u0000${target.port ?? ""}`;
+  const legacy = `${target.alias}\u0000${target.hostname}\u0000${target.username ?? ""}\u0000${target.port ?? ""}`;
+  return target.executionSource?.type === "wsl"
+    ? `wsl:${target.executionSource.distro}\u0000${legacy}`
+    : legacy;
 }
+
+// Authentication material travels on stdin, never through wsl.exe's arguments.
+// Keep the helper alive for the tunnel's lifetime and remove it on every exit.
+const WSL_SSH_WRAPPER = `set -eu
+IFS= read -r secret
+helper=""
+cleanup() { [ -z "$helper" ] || rm -rf "$helper"; }
+trap cleanup EXIT HUP INT TERM
+if [ -n "$secret" ]; then
+  umask 077
+  helper=$(mktemp -d)
+  printf '%s' "$secret" | base64 -d > "$helper/secret"
+  printf '#!/bin/sh\\ncat "$(dirname "$0")/secret"\\n' > "$helper/askpass"
+  chmod 700 "$helper/askpass"
+  export SSH_ASKPASS="$helper/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=t3code
+fi
+unset secret
+ssh "$@"
+`;
+
+export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function* (
+  target: DesktopSshEnvironmentTarget,
+  args: ReadonlyArray<string>,
+  input: SshAuthOptions & { readonly stdin?: Stream.Stream<Uint8Array> },
+) {
+  if (target.executionSource?.type === "wsl") {
+    if ((yield* HostProcess.Platform) !== "win32") {
+      return yield* new SshInvalidTargetError({
+        message: "This SSH connection requires Windows and its saved WSL distro.",
+      });
+    }
+    return {
+      command: "wsl.exe",
+      args: [
+        "--distribution",
+        target.executionSource.distro,
+        "--exec",
+        "sh",
+        "-lc",
+        WSL_SSH_WRAPPER,
+        "t3-ssh",
+        ...args,
+      ],
+      env: {},
+      stdin: Stream.concat(
+        Stream.make(encoder.encode(`${Buffer.from(input.authSecret ?? "").toString("base64")}\n`)),
+        input.stdin ?? Stream.empty,
+      ),
+    };
+  }
+  return {
+    command: yield* resolveSshCommand,
+    args: [...args],
+    env: yield* buildSshChildEnvironment(input),
+    stdin: input.stdin ?? Stream.empty,
+  };
+});
 
 /** Names the remote state directory for a target: the first 16 hex chars of its SHA-256 key. */
 export const remoteStateKey = Effect.fn("ssh/command.remoteStateKey")(function* (
@@ -183,9 +244,22 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > {
   const hostSpec = yield* buildSshHostSpecEffect(target);
-  const environment = yield* buildSshChildEnvironment({
+  const auth = {
     ...(input.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
     ...(input.authSecret === undefined ? {} : { authSecret: input.authSecret }),
+  };
+  const args = [
+    ...baseSshArgs(target, {
+      batchMode: input.batchMode ?? (input.interactiveAuth ? "no" : "yes"),
+    }),
+    ...(input.preHostArgs ?? []),
+    hostSpec,
+    ...(input.remoteCommandArgs ?? []),
+  ];
+  const prepared = yield* prepareSshSpawn(target, args, {
+    ...auth,
+    stdin:
+      input.stdinBytes === undefined ? stdinStream(input.stdin) : Stream.make(input.stdinBytes),
   }).pipe(
     Effect.mapError(
       (cause) =>
@@ -198,16 +272,8 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
         }),
     ),
   );
-  const args = [
-    ...baseSshArgs(target, {
-      batchMode: input.batchMode ?? (input.interactiveAuth ? "no" : "yes"),
-    }),
-    ...(input.preHostArgs ?? []),
-    hostSpec,
-    ...(input.remoteCommandArgs ?? []),
-  ];
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const sshCommand = yield* resolveSshCommand;
+  const sshCommand = prepared.command;
   yield* Effect.logDebug("ssh.command.start", {
     ...sshTargetLogFields(target),
     command: [sshCommand, ...args],
@@ -216,11 +282,11 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
   });
   const child = yield* spawner
     .spawn(
-      ChildProcess.make(sshCommand, args, {
-        env: environment,
+      ChildProcess.make(sshCommand, prepared.args, {
+        env: prepared.env,
         extendEnv: true,
         stdin: {
-          stream: stdinStream(input.stdin),
+          stream: prepared.stdin,
           endOnDone: true,
         },
       }),
@@ -330,6 +396,7 @@ export const runSshCommand = Effect.fn("ssh/command.runSshCommand")(function* (
 
 export const resolveSshTarget = Effect.fn("ssh/command.resolveSshTarget")(function* (
   alias: string,
+  executionSource?: DesktopSshExecutionSource,
 ): Effect.fn.Return<
   DesktopSshEnvironmentTarget,
   SshCommandError | SshInvalidTargetError,
@@ -347,10 +414,14 @@ export const resolveSshTarget = Effect.fn("ssh/command.resolveSshTarget")(functi
       hostname: trimmedAlias,
       username: null,
       port: null,
+      ...(executionSource === undefined ? {} : { executionSource }),
     },
     { preHostArgs: ["-G"] },
   ).pipe(
-    Effect.map((result) => parseSshResolveOutput(trimmedAlias, result.stdout)),
+    Effect.map((result) => ({
+      ...parseSshResolveOutput(trimmedAlias, result.stdout),
+      ...(executionSource === undefined ? {} : { executionSource }),
+    })),
     Effect.tap((target) =>
       Effect.logDebug("ssh.target.resolve.succeeded", sshTargetLogFields(target)),
     ),
@@ -361,6 +432,7 @@ export const resolveSshTarget = Effect.fn("ssh/command.resolveSshTarget")(functi
           hostname: trimmedAlias,
           username: null,
           port: null,
+          ...(executionSource === undefined ? {} : { executionSource }),
         }),
       ),
     ),

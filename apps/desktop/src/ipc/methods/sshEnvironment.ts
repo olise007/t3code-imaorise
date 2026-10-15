@@ -14,6 +14,8 @@ import {
   DesktopSshEnvironmentEnsureInputSchema,
   DesktopSshEnvironmentEnsureResultSchema,
   DesktopSshEnvironmentTargetSchema,
+  DesktopSshExecutionSourceSchema,
+  DesktopSshDiscoveryReportSchema,
   DesktopSshHttpBaseUrlInputSchema,
   DesktopSshPasswordPromptCancelledType,
   DesktopSshPasswordPromptResolutionInputSchema,
@@ -36,6 +38,7 @@ import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import * as DesktopSshEnvironment from "../../ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "../../ssh/DesktopSshPasswordPrompts.ts";
+import { discoverConnections } from "../../ssh/DesktopSshDiscovery.ts";
 
 type DesktopSshEnvironmentRequestOperation =
   | "fetch-environment-descriptor"
@@ -119,12 +122,38 @@ export const discoverSshHosts = DesktopIpc.makeIpcMethod({
 
 export const resolveSshHost = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.RESOLVE_SSH_HOST_CHANNEL,
-  payload: Schema.String,
+  payload: Schema.Union([
+    Schema.String,
+    Schema.Struct({
+      alias: Schema.String,
+      executionSource: Schema.optionalKey(DesktopSshExecutionSourceSchema),
+    }),
+  ]),
   result: DesktopSshEnvironmentTargetSchema,
   handler: Effect.fn("desktop.ipc.sshEnvironment.resolveHost")(function* (alias) {
     const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
-    return yield* sshEnvironment.resolveHost(alias);
+    return yield* sshEnvironment.resolveHost(
+      typeof alias === "string" ? alias : alias.alias,
+      typeof alias === "string" ? undefined : alias.executionSource,
+    );
   }),
+});
+
+export const discoverSshConnections = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.DISCOVER_SSH_CONNECTIONS_CHANNEL,
+  payload: Schema.optional(Schema.String),
+  result: DesktopSshDiscoveryReportSchema,
+  handler: (loadDistro) => discoverConnections(loadDistro),
+});
+
+export const stopSshEnvironment = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.STOP_SSH_ENVIRONMENT_CHANNEL,
+  payload: DesktopSshEnvironmentTargetSchema,
+  result: Schema.Void,
+  handler: (target) =>
+    Effect.flatMap(DesktopSshEnvironment.DesktopSshEnvironment, (service) =>
+      service.stopEnvironment(target),
+    ),
 });
 
 export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({

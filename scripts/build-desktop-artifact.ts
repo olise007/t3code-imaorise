@@ -2766,6 +2766,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // source file was never written fails the electron-builder step.
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
+  sshWindowsRuntimeBundled = false,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
@@ -2795,6 +2796,18 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
+      ...(platform === "win" && sshWindowsRuntimeBundled
+        ? [
+            {
+              from: "apps/desktop/prod-resources/ssh-windows-runtime.zip",
+              to: "ssh-windows-runtime.zip",
+            },
+            {
+              from: "apps/desktop/prod-resources/ssh-windows-runtime.zip.sha256",
+              to: "ssh-windows-runtime.zip.sha256",
+            },
+          ]
+        : []),
     ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
@@ -3886,6 +3899,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         : undefined,
       bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
       options.arch,
+      options.platform === "win" && Boolean(process.env.T3CODE_DESKTOP_SSH_WINDOWS_RUNTIME),
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -3957,6 +3971,17 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       sourceArchivePath: options.wslRuntime,
       archivePath: path.join(stageAppDir, WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE.from),
       hashPath: path.join(stageAppDir, WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE.from),
+    });
+  }
+
+  if (options.platform === "win" && process.env.T3CODE_DESKTOP_SSH_WINDOWS_RUNTIME) {
+    yield* stageWslRuntimeArchive({
+      sourceArchivePath: process.env.T3CODE_DESKTOP_SSH_WINDOWS_RUNTIME,
+      archivePath: path.join(stageAppDir, "apps/desktop/prod-resources/ssh-windows-runtime.zip"),
+      hashPath: path.join(
+        stageAppDir,
+        "apps/desktop/prod-resources/ssh-windows-runtime.zip.sha256",
+      ),
     });
   }
 

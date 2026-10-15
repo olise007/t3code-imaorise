@@ -48,7 +48,8 @@ export function environmentTransportLabel(
     Option.isSome(entry.profile) &&
     entry.profile.value._tag === "SshConnectionProfile"
   ) {
-    return `SSH ${formatDesktopSshTarget(entry.profile.value.target)}`;
+    const target = entry.profile.value.target;
+    return `SSH ${formatDesktopSshTarget(target)}${target.executionSource?.type === "wsl" ? ` via WSL · ${target.executionSource.distro}` : ""}`;
   }
   return environment.displayUrl ?? "Remote link";
 }

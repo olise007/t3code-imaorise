@@ -428,5 +428,10 @@ export function removedWithRelay(entry: ConnectionCatalogEntry): boolean {
 
 /** One SSH target, as desktop keys its tunnels: alias, host, user, and port. */
 export function sshTargetKey(target: DesktopSshEnvironmentTarget): string {
-  return JSON.stringify([target.alias, target.hostname, target.username, target.port]);
+  const legacy = [target.alias, target.hostname, target.username, target.port];
+  return JSON.stringify(
+    target.executionSource?.type === "wsl"
+      ? [...legacy, { wsl: target.executionSource.distro }]
+      : legacy,
+  );
 }
