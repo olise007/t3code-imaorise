@@ -26,7 +26,10 @@ export const powershellArgs = (script: string) => [
   "-NoProfile",
   "-NonInteractive",
   "-EncodedCommand",
-  Buffer.from(script, "utf16le").toString("base64"),
+  Buffer.from(
+    `$env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; ${script}`,
+    "utf16le",
+  ).toString("base64"),
 ];
 
 // The outer command is shell-independent ASCII. The actual script is transferred

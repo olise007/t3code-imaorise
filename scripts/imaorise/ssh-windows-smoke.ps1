@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandArgumentPassing = 'Standard'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') { throw 'This isolated SSH fixture runs only on a hosted Windows runner.' }
 $fixtureRoot = Join-Path $env:RUNNER_TEMP ('t3-ssh-' + [Guid]::NewGuid().ToString('N'))
 $taskName = 'T3SshFixture-' + [Guid]::NewGuid().ToString('N')
@@ -19,9 +20,9 @@ try {
   $sshRoot = Join-Path $fixtureRoot 'OpenSSH-Win64'
   $key = Join-Path $fixtureRoot 'identity'
   $hostKey = Join-Path $fixtureRoot 'hostkey'
-  & "$sshRoot/ssh-keygen.exe" -t ed25519 -N '""' -f $key -q
+  & "$sshRoot/ssh-keygen.exe" -t ed25519 -N '' -f $key -q
   if ($LASTEXITCODE -ne 0) { throw 'Client key generation failed.' }
-  & "$sshRoot/ssh-keygen.exe" -t ed25519 -N '""' -f $hostKey -q
+  & "$sshRoot/ssh-keygen.exe" -t ed25519 -N '' -f $hostKey -q
   if ($LASTEXITCODE -ne 0) { throw 'Host key generation failed.' }
   $authorized = Join-Path $fixtureRoot 'authorized_keys'
   Copy-Item "$key.pub" $authorized
@@ -55,7 +56,10 @@ Host t3-fixture
   StrictHostKeyChecking yes
   BatchMode yes
 "@ | Set-Content -LiteralPath $clientConfig -Encoding ascii
-  $action = New-ScheduledTaskAction -Execute "$sshRoot/sshd.exe" -Argument "-D -e -f `"$serverConfig`""
+  $daemonLog = Join-Path $fixtureRoot 'sshd.log'
+  $daemonScript = Join-Path $fixtureRoot 'start-sshd.ps1'
+  "& '$sshRoot/sshd.exe' -D -e -f '$serverConfig' 2>&1 | Out-File -LiteralPath '$daemonLog'" | Set-Content -LiteralPath $daemonScript -Encoding ascii
+  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$daemonScript`""
   Register-ScheduledTask -TaskName $taskName -Action $action -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
   Start-ScheduledTask -TaskName $taskName
   $ready = $false
@@ -63,7 +67,7 @@ Host t3-fixture
     $socket = [Net.Sockets.TcpClient]::new()
     try { $socket.Connect('127.0.0.1',$port); $ready=$true; break } catch { Start-Sleep -Milliseconds 100 } finally { $socket.Dispose() }
   }
-  if (!$ready) { throw 'The isolated Windows SSH server did not start.' }
+  if (!$ready) { if(Test-Path -LiteralPath $daemonLog){Get-Content -LiteralPath $daemonLog}; throw 'The isolated Windows SSH server did not start.' }
   function Invoke-Peer([string]$operation, [string]$keyValue) {
     $script = "`$env:HOME='$($homeDirectory.Replace("'","''"))'; `$env:USERPROFILE=`$env:HOME; & '$($node.Replace("'","''"))' '$($peer.Replace("'","''"))' '$operation' '$keyValue' '2.0.1-test'; if(`$LASTEXITCODE -ne 0){exit `$LASTEXITCODE}"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))

@@ -1,9 +1,11 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import {
   BearerConnectionProfile,
+  SshConnectionProfile,
   type ConnectionCatalogEntry,
   type ConnectionRoute,
 } from "./catalog.ts";
@@ -24,6 +26,26 @@ import {
 } from "./routes.ts";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
+
+it("loads legacy saved SSH profiles and retains a WSL source through serialization", () => {
+  const codec = Schema.fromJsonString(SshConnectionProfile);
+  const legacy = new SshConnectionProfile({
+    environmentId: ENVIRONMENT_ID,
+    connectionId: "saved-ssh",
+    label: "Dev",
+    target: { alias: "dev", hostname: "host", username: null, port: null },
+  });
+  const decoded = Schema.decodeSync(codec)(Schema.encodeSync(codec)(legacy));
+  expect(decoded.target.executionSource).toBeUndefined();
+  const wsl = new SshConnectionProfile({
+    ...legacy,
+    target: { ...legacy.target, executionSource: { type: "wsl", distro: "Ubuntu 26.04" } },
+  });
+  expect(Schema.decodeSync(codec)(Schema.encodeSync(codec)(wsl)).target.executionSource).toEqual({
+    type: "wsl",
+    distro: "Ubuntu 26.04",
+  });
+});
 
 it("preserves local SSH route IDs and separates equal aliases from WSL sources", () => {
   const target = { alias: "dev", hostname: "host", username: "user", port: 22 };

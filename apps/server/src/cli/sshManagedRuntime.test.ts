@@ -20,13 +20,15 @@ it("reuses an authenticated supervisor after its launching command exits and sto
     const first = JSON.parse((await run("start", key, "2.0.1-test")).stdout);
     const second = JSON.parse((await run("start", key, "2.0.1-test")).stdout);
     expect(second.remotePort).toBe(first.remotePort);
+    const alternate = JSON.parse((await run("start", "ffffffffffffffff", "2.0.1-test")).stdout);
+    expect(alternate.remotePort).toBe(first.remotePort);
     const descriptor = await fetch(
       `http://127.0.0.1:${first.remotePort}/.well-known/t3/environment`,
     );
     expect(((await descriptor.json()) as { environmentId: string }).environmentId).toBe(
       "fixture-environment",
     );
-    const file = NodePath.join(home, ".t3-imaorise", "ssh-managed", key, "supervisor.json");
+    const file = NodePath.join(home, ".t3-imaorise", "ssh-managed", "server", "supervisor.json");
     const record = JSON.parse(await NodeFSP.readFile(file, "utf8"));
     expect(
       (
@@ -39,6 +41,14 @@ it("reuses an authenticated supervisor after its launching command exits and sto
     await expect(run("start", key, "2.0.1-other")).rejects.toThrow("different managed runtime");
     await run("stop", key);
     await expect(NodeFSP.stat(file)).rejects.toThrow();
+  } catch (error) {
+    const log = await NodeFSP.readFile(
+      NodePath.join(home, ".t3-imaorise", "ssh-managed", "server", "server.log"),
+      "utf8",
+    ).catch(() => "No supervisor log was written.");
+    throw new Error(
+      `${error instanceof Error ? error.message : "Supervisor fixture failed"}\n${log.slice(-5000)}`,
+    );
   } finally {
     await run("stop", key).catch(() => {});
     await NodeFSP.rm(home, { recursive: true, force: true });
@@ -47,7 +57,7 @@ it("reuses an authenticated supervisor after its launching command exits and sto
 
 it("refuses malformed ownership records instead of signalling a saved PID", async () => {
   const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-managed-invalid-"));
-  const file = NodePath.join(home, ".t3-imaorise", "ssh-managed", key, "supervisor.json");
+  const file = NodePath.join(home, ".t3-imaorise", "ssh-managed", "server", "supervisor.json");
   try {
     await NodeFSP.mkdir(NodePath.dirname(file), { recursive: true });
     await NodeFSP.writeFile(

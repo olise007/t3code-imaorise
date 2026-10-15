@@ -19,6 +19,25 @@ function makeTempHomeDir() {
 }
 
 describe("ssh config", () => {
+  it.effect("discovers quoted Include paths with spaces and literal hash characters", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const homeDir = yield* makeTempHomeDir();
+      const directory = path.join(homeDir, ".ssh", "team #1");
+      yield* fs.makeDirectory(directory, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(homeDir, ".ssh", "config"),
+        'Include = "team #1/*.conf" # outside comment\n',
+      );
+      yield* fs.writeFileString(
+        path.join(directory, "dev.conf"),
+        "Host=quoted-dev\n HostName example.test\n",
+      );
+      const hosts = yield* discoverSshHosts({ homeDir });
+      assert.equal(hosts[0]?.alias, "quoted-dev");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("discovers ssh config hosts across included files", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

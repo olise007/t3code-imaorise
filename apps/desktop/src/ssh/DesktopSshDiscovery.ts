@@ -9,24 +9,43 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 // Run in the owning distro: absolute Include paths and ~ refer to its filesystem.
 // Never evaluate configuration as shell code. OpenSSH resolves each selected alias.
 export const WSL_DISCOVER_SCRIPT = String.raw`set -eu
-cd "$HOME/.ssh" 2>/dev/null || exit 0
+[ -d "$HOME/.ssh" ] || exit 0
+cd "$HOME/.ssh"
 visited="$(mktemp)"
 trap 'rm -f "$visited"' EXIT
-scan() {
-  [ -r "$1" ] || return 0
+scan() (
+  [ -e "$1" ] || return 0
+  [ -r "$1" ] || return 1
   canonical=$(readlink -f -- "$1")
   grep -Fxq -- "$canonical" "$visited" && return 0
   printf '%s\n' "$canonical" >> "$visited"
-  awk '{sub(/#.*/, ""); key=tolower($1); if(key=="host" || key=="include") {for(i=2;i<=NF;i++) print key "\t" $i}}' "$1" |
+  awk '
+    function emit() { if(n==0) key=tolower(token); else if(key=="host" || key=="include") print key "\t" token; n++; token="" }
+    { n=0; token=""; quoted=0;
+      for(i=1;i<=length($0);i++) {
+        c=substr($0,i,1);
+        if(c=="\\" && substr($0,i+1,1)=="\"") { token=token "\""; i++; continue }
+        if(c=="\"") { quoted=!quoted; continue }
+        if(!quoted && c=="#") break;
+        if(!quoted && c=="=" && n==1 && length(token)==0) continue;
+        if(!quoted && (c ~ /[ \t]/ || (c=="=" && n==0))) { if(length(token)) emit(); continue }
+        token=token c
+      }
+      if(length(token)) emit()
+    }' "$1" |
   while IFS="$(printf '\t')" read -r key value; do
     case "$key" in
       host) case "$value" in *'*'*|*'?'*|*'!'*) ;; *) printf 'ssh-config\t%s\n' "$value" ;; esac ;;
       include)
         case "$value" in '~/'*) value="$HOME/$(printf '%s' "$value" | cut -c 3-)" ;; esac
-        for included in $value; do scan "$included"; done ;;
+        oldIFS=$IFS
+        IFS='
+'
+        for included in $value; do scan "$included"; done
+        IFS=$oldIFS ;;
     esac
   done
-}
+)
 scan config
 if [ -r known_hosts ]; then
   awk '!/^#/ && $1 !~ /^\|/ {n=split($1,a,",");for(i=1;i<=n;i++) if(a[i] !~ /^@/) print "known-hosts\t" a[i]}' known_hosts

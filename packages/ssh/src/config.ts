@@ -11,23 +11,34 @@ import { SshHostDiscoveryError } from "./errors.ts";
 
 const NO_HOSTS: ReadonlyArray<string> = [] as const;
 
-function stripInlineComment(line: string): string {
-  const hashIndex = line.indexOf("#");
-  return (hashIndex >= 0 ? line.slice(0, hashIndex) : line).trim();
-}
-
-function splitDirectiveArgs(value: string): ReadonlyArray<string> {
-  const args: Array<string> = [];
-  for (const rawEntry of value
-    .replace(/=(?!=)/gu, " ")
-    .trim()
-    .split(/\s+/u)) {
-    const entry = rawEntry.trim();
-    if (entry.length > 0) {
-      args.push(entry);
+function splitDirectiveArgs(line: string): ReadonlyArray<string> {
+  const input = line.replace(/^(\s*[A-Za-z]+)\s*=\s*/u, "$1 ");
+  const result: string[] = [];
+  let value = "";
+  let quoted = false;
+  for (let index = 0; index < input.length; index++) {
+    const char = input[index]!;
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
     }
+    if (char === "\\" && input[index + 1] === '"') {
+      value += '"';
+      index++;
+      continue;
+    }
+    if (!quoted && char === "#") break;
+    if (!quoted && /\s/u.test(char)) {
+      if (value) {
+        result.push(value);
+        value = "";
+      }
+      continue;
+    }
+    value += char;
   }
-  return args;
+  if (value) result.push(value);
+  return result;
 }
 
 function expandHomePath(input: string, homeDir: string): string {
@@ -111,12 +122,7 @@ const collectSshConfigAliasesFromFile = Effect.fnUntraced(function* (
   const raw = yield* fs.readFileString(resolvedPath);
 
   for (const line of raw.split(/\r?\n/u)) {
-    const stripped = stripInlineComment(line);
-    if (stripped.length === 0) {
-      continue;
-    }
-
-    const [directive = "", ...rawArgs] = splitDirectiveArgs(stripped);
+    const [directive = "", ...rawArgs] = splitDirectiveArgs(line);
     const normalizedDirective = directive.toLowerCase();
     if (normalizedDirective === "include") {
       for (const includePattern of rawArgs) {

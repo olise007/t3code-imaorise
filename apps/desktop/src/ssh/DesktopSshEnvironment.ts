@@ -5,6 +5,7 @@ import type {
   DesktopSshExecutionSource,
 } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as SshAuth from "@t3tools/ssh/auth";
 import { resolveSshTarget } from "@t3tools/ssh/command";
 import { discoverSshHosts } from "@t3tools/ssh/config";
@@ -77,7 +78,9 @@ export interface DesktopSshEnvironmentLayerOptions {
 }
 
 function discoverDesktopSshHostsEffect(input?: { readonly homeDir?: string }) {
-  return discoverSshHosts(input ?? {});
+  return Effect.flatMap(HostProcess.HomeDirectory, (homeDir) =>
+    discoverSshHosts({ homeDir: input?.homeDir ?? homeDir }),
+  );
 }
 
 export function isDesktopSshPasswordPromptCancellation(

@@ -2520,6 +2520,7 @@ export function ConnectionsSettings() {
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [sshSource, setSshSource] = useState<DesktopSshExecutionSource>({ type: "local" });
+  const [isRefreshingSshHosts, setIsRefreshingSshHosts] = useState(false);
   const [sshProgress, setSshProgress] = useState<string | null>(null);
   const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
   const [sshReport, setSshReport] = useState<DesktopSshDiscoveryReport | null>(null);
@@ -2528,12 +2529,15 @@ export function ConnectionsSettings() {
     async (loadDistro?: string) => {
       if (!desktopBridge?.discoverSshConnections) return;
       const sequence = ++sshDiscoverySequence.current;
+      setIsRefreshingSshHosts(true);
       try {
         const report = await desktopBridge.discoverSshConnections(loadDistro);
         if (sshDiscoverySequence.current === sequence) setSshReport(report);
       } catch (error) {
         if (sshDiscoverySequence.current === sequence)
           setSavedBackendError(error instanceof Error ? error.message : "SSH discovery failed.");
+      } finally {
+        if (sshDiscoverySequence.current === sequence) setIsRefreshingSshHosts(false);
       }
     },
     [desktopBridge],
@@ -3433,16 +3437,16 @@ export function ConnectionsSettings() {
         <Button
           variant="outline"
           size="sm"
-          disabled={isAddingSavedBackend}
+          disabled={isAddingSavedBackend || isRefreshingSshHosts}
           onClick={() => void refreshSshConnections()}
         >
-          Refresh hosts
+          {isRefreshingSshHosts ? "Refreshing…" : "Refresh hosts"}
         </Button>
         {sshSource.type === "wsl" ? (
           <Button
             variant="outline"
             size="sm"
-            disabled={isAddingSavedBackend}
+            disabled={isAddingSavedBackend || isRefreshingSshHosts}
             onClick={() => void refreshSshConnections(sshSource.distro)}
           >
             Load hosts

@@ -6,7 +6,7 @@ import * as NodeChildProcess from "node:child_process";
 import { describe, expect, it } from "vite-plus/test";
 
 const script = NodePath.resolve("scripts/imaorise/publish-release.mjs");
-function publication(android: boolean, desktop: boolean, corrupt?: string) {
+function publication(android: boolean, desktop: boolean, corrupt?: string, windowsRuntime = false) {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-publish-test-"));
   const assets = NodePath.join(root, "release-assets");
   NodeFS.mkdirSync(assets);
@@ -17,6 +17,11 @@ function publication(android: boolean, desktop: boolean, corrupt?: string) {
   if (desktop) {
     write(`app-${version}.exe`, "installer");
     write(`t3-${version}-linux-x64.tar.gz`, "runtime");
+    if (windowsRuntime && corrupt !== "windowsMissing")
+      write(
+        `t3-${corrupt === "windowsVersion" ? "0.0.0" : version}-win32-x64.zip`,
+        "windows-runtime",
+      );
     write(
       "beta.yml",
       `version: ${version}\npath: app-${version}.exe\nsha512: ${NodeCrypto.createHash("sha512").update("installer").digest("base64")}\n`,
@@ -65,6 +70,7 @@ function publication(android: boolean, desktop: boolean, corrupt?: string) {
         VERSION_CODE: "5220",
         INCLUDE_ANDROID: String(android),
         INCLUDE_DESKTOP: String(desktop),
+        INCLUDE_WINDOWS_SSH_RUNTIME: String(windowsRuntime),
         PUBLISH_RELEASE: "false",
       },
     });
@@ -79,6 +85,21 @@ function publication(android: boolean, desktop: boolean, corrupt?: string) {
 }
 
 describe("partial publication", () => {
+  it("includes a matching Windows SSH runtime in the verified desktop manifest", () => {
+    const { result, manifest } = publication(false, true, undefined, true);
+    expect(result.status, result.stderr).toBe(0);
+    expect(
+      manifest.assets.some(
+        (asset: { name: string }) => asset.name === "t3-2.0.1-beta.7-win32-x64.zip",
+      ),
+    ).toBe(true);
+  });
+  it.each(["windowsMissing", "windowsVersion"])(
+    "rejects %s before releasing a desktop build",
+    (failure) => {
+      expect(publication(false, true, failure, true).result.status).not.toBe(0);
+    },
+  );
   it.each([
     [true, false],
     [false, true],

@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 // Isolated process-boundary fixtures intentionally exercise native files and processes.
+import * as Effect from "effect/Effect";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -14,7 +16,7 @@ import {
 } from "./bundledRuntime.ts";
 
 describe("bundled SSH runtime installation", () => {
-  it.skipIf(process.platform !== "win32")(
+  it.skipIf(Effect.runSync(HostProcess.Platform) !== "win32")(
     "installs and reuses a Windows server archive in a path containing spaces and apostrophes",
     () => {
       const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-windows-ssh's home-"));
@@ -58,7 +60,7 @@ describe("bundled SSH runtime installation", () => {
     },
     60_000,
   );
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(Effect.runSync(HostProcess.Platform) === "win32")(
     "installs a verified Linux archive atomically and reuses it",
     () => {
       const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-ssh-runtime-"));

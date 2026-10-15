@@ -74,7 +74,15 @@ interface ManagedSshRecord {
 
 const recordPath = (key: string) => {
   if (!/^[a-f0-9]{16}$/.test(key)) throw new Error("Invalid managed SSH identity.");
-  return NodePath.join(NodeOS.homedir(), ".t3-imaorise", "ssh-managed", key, "supervisor.json");
+  // One user home owns one server/database. Alternate aliases and Windows/WSL
+  // routes must attest and reuse that same server rather than launch a second.
+  return NodePath.join(
+    NodeOS.homedir(),
+    ".t3-imaorise",
+    "ssh-managed",
+    "server",
+    "supervisor.json",
+  );
 };
 
 const processAlive = (pid: number) => {
@@ -207,12 +215,36 @@ export async function startManagedSsh(key: string, version: string, platform: No
     ];
     // Windows OpenSSH may reap the entire SSH job. WMI starts the supervisor
     // outside that job without installing a service or requiring elevation.
-    const commandLine = [process.execPath, ...args]
+    const powershell = NodePath.join(
+      process.env.SystemRoot ?? "C:\\Windows",
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    const launchFile = NodePath.join(NodePath.dirname(file), "supervise.ps1");
+    if (platform === "win32") {
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+      await NodeFSP.writeFile(
+        launchFile,
+        `\uFEFF$ErrorActionPreference='Stop'\n$env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath\n& ${quote(process.execPath)} ${args.map(quote).join(" ")} *>> ${quote(NodePath.join(NodePath.dirname(file), "server.log"))}\n`,
+        { mode: 0o600 },
+      );
+    }
+    const commandLine = [
+      powershell,
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      launchFile,
+    ]
       .map((arg) => `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, "$1$1")}"`)
       .join(" ");
-    const launchPowerShell = `$ErrorActionPreference='Stop'; $settings=New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{CreateFlags=[uint32]16778240;ShowWindow=[uint16]0;EnvironmentVariables=[string[]]@([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { $_.Key+'='+$_.Value })}; $r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ProcessStartupInformation=$settings;CommandLine='${commandLine.replaceAll("'", "''")}'}; if($r.ReturnValue -ne 0){throw 'Could not detach SSH supervisor'};`;
+    const launchPowerShell = `$ErrorActionPreference='Stop'; $env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; $settings=New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{CreateFlags=[uint32]16778240;ShowWindow=[uint16]0;EnvironmentVariables=[string[]]@([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { $_.Key+'='+$_.Value })}; $r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ProcessStartupInformation=$settings;CommandLine='${commandLine.replaceAll("'", "''")}'}; if($r.ReturnValue -ne 0){throw 'Could not detach SSH supervisor'};`;
     const supervisor = NodeChildProcess.spawn(
-      platform === "win32" ? "powershell.exe" : process.execPath,
+      platform === "win32" ? powershell : process.execPath,
       platform === "win32"
         ? [
             "-NoProfile",
@@ -282,7 +314,8 @@ async function providerSetupWarnings(platform: NodeJS.Platform) {
             NodePath.join(directory, `${command}${extension}`),
             platform === "win32" ? NodeFSP.constants.F_OK : NodeFSP.constants.X_OK,
           );
-          return [];
+          if ((await NodeFSP.stat(NodePath.join(directory, `${command}${extension}`))).isFile())
+            return [];
         } catch {
           /* A missing candidate is normal. */
         }

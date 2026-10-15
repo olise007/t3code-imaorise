@@ -23,7 +23,12 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - name: Focused SSH tests
-        run: timeout 900 vp test run --maxWorkers 1 packages/ssh/src packages/client-runtime/src/connection/routes.test.ts packages/client-runtime/src/connection/resolver.test.ts apps/desktop/src/ssh apps/server/src/cli/sshManagedRuntime.test.ts apps/web/src/state/desktopSshHosts.test.ts apps/web/src/components/settings/ConnectionsSettings.logic.test.ts
+        run: timeout 900 vp test run --maxWorkers 1 packages/ssh/src packages/client-runtime/src/connection/routes.test.ts packages/client-runtime/src/connection/resolver.test.ts apps/desktop/src/ssh apps/server/src/cli/sshManagedRuntime.test.ts apps/web/src/state/desktopSshHosts.test.ts apps/web/src/components/settings/ConnectionsSettings.logic.test.ts scripts/imaorise/publish-release.test.ts
+      - name: Isolated Linux OpenSSH session survival
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends openssh-server
+          timeout 120 node scripts/imaorise/ssh-linux-smoke.ts
       - name: Contracts and SSH typechecks
         if: ${{ !cancelled() }}
         run: vp run --filter @t3tools/contracts --filter @t3tools/ssh typecheck
@@ -33,6 +38,9 @@ jobs:
       - name: Server typecheck
         if: ${{ !cancelled() }}
         run: vp run --filter t3 typecheck
+      - name: Mobile compatibility typecheck
+        if: ${{ !cancelled() }}
+        run: vp run --filter @t3tools/mobile typecheck
       - name: Scoped lint
         if: ${{ !cancelled() }}
         run: vp lint packages/ssh/src/command.ts packages/ssh/src/tunnel.ts packages/ssh/src/bundledRuntime.ts apps/desktop/src/ssh/DesktopSshDiscovery.ts apps/desktop/src/ssh/DesktopSshEnvironment.ts apps/desktop/src/ipc/methods/sshEnvironment.ts apps/desktop/src/main.ts apps/server/src/cli/sshHelper.ts apps/server/src/cli/sshManagedRuntime.ts apps/web/src/components/settings/ConnectionsSettings.tsx packages/contracts/src/ipc.ts packages/client-runtime/src/connection/routes.ts scripts/build-desktop-artifact.ts
@@ -53,5 +61,6 @@ jobs:
       - name: Native Windows supervisor and source tests
         run: vp test run --maxWorkers 1 packages/ssh/src/source.test.ts packages/ssh/src/bundledRuntime.test.ts apps/server/src/cli/sshManagedRuntime.test.ts
       - name: Isolated Windows OpenSSH default shells and reconnect
+        if: ${{ !cancelled() }}
         shell: pwsh
         run: ./scripts/imaorise/ssh-windows-smoke.ps1
