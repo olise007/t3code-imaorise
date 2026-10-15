@@ -11,54 +11,57 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
-import { expect, it } from "vite-plus/test";
+import { expect } from "vite-plus/test";
+import { it } from "@effect/vitest";
 import { discoverConnections, WSL_DISCOVER_SCRIPT } from "./DesktopSshDiscovery.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 
-it("refreshes distinct sources without starting stopped distros and isolates failures", async () => {
-  const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-ssh-sources-"));
-  const commands: string[][] = [];
-  const spawner = ChildProcessSpawner.make((command) =>
-    Effect.sync(() => {
-      const args = command._tag === "StandardCommand" ? [...command.args] : [];
-      commands.push(args);
-      const distro = args[1];
-      const listed = args[0] === "--list";
-      const output = listed
-        ? Buffer.from(
-            args.includes("--running") ? "Ubuntu\r\nBroken\r\n" : "Ubuntu\r\nDebian\r\nBroken\r\n",
-            "utf16le",
-          )
-        : Buffer.from("ssh-config\tshared\nssh-config\tshared\n");
-      return ChildProcessSpawner.makeHandle({
-        pid: ChildProcessSpawner.ProcessId(123),
-        stdout: Stream.make(output),
-        stderr: Stream.empty,
-        all: Stream.make(output),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(distro === "Broken" ? 1 : 0)),
-        isRunning: Effect.succeed(false),
-        kill: () => Effect.void,
-        stdin: Sink.drain,
-        getInputFd: () => Sink.drain,
-        getOutputFd: () => Stream.empty,
-        unref: Effect.succeed(Effect.void),
-      });
-    }),
-  );
-  const environment = DesktopEnvironment.layer({
-    dirname: home,
-    homeDirectory: home,
-    platform: "win32",
-    processArch: "x64",
-    appVersion: "2.0.1-test",
-    appPath: home,
-    isPackaged: true,
-    resourcesPath: home,
-    runningUnderArm64Translation: false,
-  }).pipe(Layer.provide(Layer.merge(NodeServices.layer, DesktopConfig.layerTest({}))));
-  const discover = (load?: string) =>
-    Effect.runPromise(
+it.effect("refreshes distinct sources without starting stopped distros and isolates failures", () =>
+  Effect.gen(function* () {
+    const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-ssh-sources-"));
+    const commands: string[][] = [];
+    const spawner = ChildProcessSpawner.make((command) =>
+      Effect.sync(() => {
+        const args = command._tag === "StandardCommand" ? [...command.args] : [];
+        commands.push(args);
+        const distro = args[1];
+        const listed = args[0] === "--list";
+        const output = listed
+          ? Buffer.from(
+              args.includes("--running")
+                ? "Ubuntu\r\nBroken\r\n"
+                : "Ubuntu\r\nDebian\r\nBroken\r\n",
+              "utf16le",
+            )
+          : Buffer.from("ssh-config\tshared\nssh-config\tshared\n");
+        return ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(123),
+          stdout: Stream.make(output),
+          stderr: Stream.empty,
+          all: Stream.make(output),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(distro === "Broken" ? 1 : 0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          stdin: Sink.drain,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void),
+        });
+      }),
+    );
+    const environment = DesktopEnvironment.layer({
+      dirname: home,
+      homeDirectory: home,
+      platform: "win32",
+      processArch: "x64",
+      appVersion: "2.0.1-test",
+      appPath: home,
+      isPackaged: true,
+      resourcesPath: home,
+      runningUnderArm64Translation: false,
+    }).pipe(Layer.provide(Layer.merge(NodeServices.layer, DesktopConfig.layerTest({}))));
+    const discover = (load?: string) =>
       discoverConnections(load).pipe(
         Effect.provide(environment),
         Effect.provide(
@@ -67,28 +70,28 @@ it("refreshes distinct sources without starting stopped distros and isolates fai
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
           ),
         ),
-      ),
-    );
-  try {
-    NodeFS.mkdirSync(NodePath.join(home, ".ssh"));
-    NodeFS.writeFileSync(NodePath.join(home, ".ssh/config"), "Host shared\n");
-    const first = await discover();
-    expect(first.hosts.filter((host) => host.alias === "shared")).toHaveLength(2);
-    expect(first.sources.find((source) => source.label.includes("Debian"))?.running).toBe(false);
-    expect(first.sources.find((source) => source.label.includes("Broken"))?.error).toBeTruthy();
-    expect(commands.some((args) => args[1] === "Debian")).toBe(false);
-    expect(await discover()).toEqual(first);
-    const loaded = await discover("Debian");
-    expect(loaded.hosts.filter((host) => host.alias === "shared")).toHaveLength(3);
-    expect(commands.some((args) => args[1] === "Debian")).toBe(true);
-  } finally {
-    NodeFS.rmSync(home, { recursive: true, force: true });
-  }
-});
+      );
+    try {
+      NodeFS.mkdirSync(NodePath.join(home, ".ssh"));
+      NodeFS.writeFileSync(NodePath.join(home, ".ssh/config"), "Host shared\n");
+      const first = yield* discover();
+      expect(first.hosts.filter((host) => host.alias === "shared")).toHaveLength(2);
+      expect(first.sources.find((source) => source.label.includes("Debian"))?.running).toBe(false);
+      expect(first.sources.find((source) => source.label.includes("Broken"))?.error).toBeTruthy();
+      expect(commands.some((args) => args[1] === "Debian")).toBe(false);
+      expect(yield* discover()).toEqual(first);
+      const loaded = yield* discover("Debian");
+      expect(loaded.hosts.filter((host) => host.alias === "shared")).toHaveLength(3);
+      expect(commands.some((args) => args[1] === "Debian")).toBe(true);
+    } finally {
+      NodeFS.rmSync(home, { recursive: true, force: true });
+    }
+  }),
+);
 
-it.skipIf(Effect.runSync(HostProcess.Platform) === "win32")(
-  "discovers aliases and recursive includes inside the owning Linux home",
-  () => {
+it.effect("discovers aliases and recursive includes inside the owning Linux home", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return;
     const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-ssh-discovery-"));
     try {
       const ssh = NodePath.join(home, ".ssh");
@@ -124,5 +127,5 @@ it.skipIf(Effect.runSync(HostProcess.Platform) === "win32")(
     } finally {
       NodeFS.rmSync(home, { recursive: true, force: true });
     }
-  },
+  }),
 );

@@ -7,7 +7,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeCrypto from "node:crypto";
 import * as NodeChildProcess from "node:child_process";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
+import { it } from "@effect/vitest";
 import {
   linuxInstallScript,
   remoteRuntimeInvocation,
@@ -16,53 +17,56 @@ import {
 } from "./bundledRuntime.ts";
 
 describe("bundled SSH runtime installation", () => {
-  it.skipIf(Effect.runSync(HostProcess.Platform) !== "win32")(
+  it.effect(
     "installs and reuses a Windows server archive in a path containing spaces and apostrophes",
-    () => {
-      const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-windows-ssh's home-"));
-      const run = (script: string) => {
-        const [command, ...args] = powershellArgs(script);
-        return NodeChildProcess.spawnSync(command!, args, {
-          encoding: "utf8",
-          env: { ...process.env, T3_TEST_REMOTE_HOME: home },
-        });
-      };
-      try {
-        const payload = NodePath.join(home, "payload", "runtime");
-        NodeFS.mkdirSync(payload, { recursive: true });
-        NodeFS.copyFileSync(process.execPath, NodePath.join(payload, "t3.exe"));
-        const compressed = run(
-          "Compress-Archive -LiteralPath (Join-Path $env:T3_TEST_REMOTE_HOME 'payload/runtime') -DestinationPath (Join-Path $env:T3_TEST_REMOTE_HOME 'runtime.zip')",
-        );
-        expect(compressed.status, compressed.stderr).toBe(0);
-        const bytes = NodeFS.readFileSync(NodePath.join(home, "runtime.zip"));
-        const hash = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
-        const parent = NodePath.join(home, ".t3-imaorise", "runtime");
-        NodeFS.mkdirSync(parent, { recursive: true });
-        NodeFS.writeFileSync(NodePath.join(parent, `upload-${hash}.zip`), bytes);
-        const result = run(
-          windowsInstallScript(hash).replaceAll("$HOME", "$env:T3_TEST_REMOTE_HOME"),
-        );
-        expect(result.status, result.stderr).toBe(0);
-        expect(NodeFS.existsSync(NodePath.join(parent, `sha256-${hash}`, "t3.exe"))).toBe(true);
-        expect(
-          run(windowsInstallScript(hash).replaceAll("$HOME", "$env:T3_TEST_REMOTE_HOME")).status,
-        ).toBe(0);
-        const invalid = "b".repeat(64);
-        NodeFS.writeFileSync(NodePath.join(parent, `upload-${invalid}.zip`), bytes);
-        expect(
-          run(windowsInstallScript(invalid).replaceAll("$HOME", "$env:T3_TEST_REMOTE_HOME")).status,
-        ).not.toBe(0);
-        expect(NodeFS.existsSync(NodePath.join(parent, `sha256-${invalid}`))).toBe(false);
-      } finally {
-        NodeFS.rmSync(home, { recursive: true, force: true });
-      }
-    },
+    () =>
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) !== "win32") return;
+        const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-windows-ssh's home-"));
+        const run = (script: string) => {
+          const [command, ...args] = powershellArgs(script);
+          return NodeChildProcess.spawnSync(command!, args, {
+            encoding: "utf8",
+            env: { ...process.env, T3_TEST_REMOTE_HOME: home },
+          });
+        };
+        try {
+          const payload = NodePath.join(home, "payload", "runtime");
+          NodeFS.mkdirSync(payload, { recursive: true });
+          NodeFS.copyFileSync(process.execPath, NodePath.join(payload, "t3.exe"));
+          const compressed = run(
+            "Compress-Archive -LiteralPath (Join-Path $env:T3_TEST_REMOTE_HOME 'payload/runtime') -DestinationPath (Join-Path $env:T3_TEST_REMOTE_HOME 'runtime.zip')",
+          );
+          expect(compressed.status, compressed.stderr).toBe(0);
+          const bytes = NodeFS.readFileSync(NodePath.join(home, "runtime.zip"));
+          const hash = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+          const parent = NodePath.join(home, ".t3-imaorise", "runtime");
+          NodeFS.mkdirSync(parent, { recursive: true });
+          NodeFS.writeFileSync(NodePath.join(parent, `upload-${hash}.zip`), bytes);
+          const result = run(
+            windowsInstallScript(hash).replaceAll("$HOME", "$env:T3_TEST_REMOTE_HOME"),
+          );
+          expect(result.status, result.stderr).toBe(0);
+          expect(NodeFS.existsSync(NodePath.join(parent, `sha256-${hash}`, "t3.exe"))).toBe(true);
+          expect(
+            run(windowsInstallScript(hash).replaceAll("$HOME", "$env:T3_TEST_REMOTE_HOME")).status,
+          ).toBe(0);
+          const invalid = "b".repeat(64);
+          NodeFS.writeFileSync(NodePath.join(parent, `upload-${invalid}.zip`), bytes);
+          expect(
+            run(windowsInstallScript(invalid).replaceAll("$HOME", "$env:T3_TEST_REMOTE_HOME"))
+              .status,
+          ).not.toBe(0);
+          expect(NodeFS.existsSync(NodePath.join(parent, `sha256-${invalid}`))).toBe(false);
+        } finally {
+          NodeFS.rmSync(home, { recursive: true, force: true });
+        }
+      }),
     60_000,
   );
-  it.skipIf(Effect.runSync(HostProcess.Platform) === "win32")(
-    "installs a verified Linux archive atomically and reuses it",
-    () => {
+  it.effect("installs a verified Linux archive atomically and reuses it", () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return;
       const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-ssh-runtime-"));
       try {
         const payload = NodePath.join(home, "payload", "runtime");
@@ -115,7 +119,7 @@ describe("bundled SSH runtime installation", () => {
       } finally {
         NodeFS.rmSync(home, { recursive: true, force: true });
       }
-    },
+    }),
   );
 
   it("rejects interpolated arguments on both remote shell paths", () => {

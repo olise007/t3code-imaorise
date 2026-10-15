@@ -277,37 +277,49 @@ export async function startManagedSsh(
     ]
       .map((arg) => `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, "$1$1")}"`)
       .join(" ");
-    const launchPowerShell = `$ErrorActionPreference='Stop'; $env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; $settings=New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{CreateFlags=[uint32]16778240;ShowWindow=[uint16]0;EnvironmentVariables=[string[]]@([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { $_.Key+'='+$_.Value })}; $r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ProcessStartupInformation=$settings;CommandLine='${commandLine.replaceAll("'", "''")}'}; if($r.ReturnValue -ne 0){throw 'Could not detach SSH supervisor'};`;
-    const supervisor = NodeChildProcess.spawn(
-      platform === "win32" ? powershell : process.execPath,
-      platform === "win32"
-        ? [
+    const launchPowerShell = `$ErrorActionPreference='Stop'; $env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; $settings=New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{CreateFlags=[uint32]16778240;ShowWindow=[uint16]0;EnvironmentVariables=[string[]]@([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { $_.Key+'='+$_.Value })}; $r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ProcessStartupInformation=$settings;CommandLine='${commandLine.replaceAll("'", "''")}'}; if($r.ReturnValue -ne 0){throw ('Could not detach SSH supervisor: '+$r.ReturnValue)}; Write-Output ('Detached supervisor PID '+$r.ProcessId);`;
+    let spawnError: Error | undefined;
+    if (platform === "win32") {
+      await new Promise<void>((resolve, reject) => {
+        NodeChildProcess.execFile(
+          powershell,
+          [
             "-NoProfile",
             "-NonInteractive",
             "-EncodedCommand",
             Buffer.from(launchPowerShell, "utf16le").toString("base64"),
-          ]
-        : args,
-      {
+          ],
+          {
+            windowsHide: true,
+            timeout: 15_000,
+            env: { ...process.env, T3CODE_NO_BROWSER: "1" },
+          },
+          (error, stdout, stderr) => {
+            void log.appendFile(`${stdout}${stderr}`).then(() => {
+              if (error)
+                reject(
+                  new Error(
+                    `Could not detach remote Windows server: ${stderr.slice(-1000) || error.message}`,
+                    { cause: error },
+                  ),
+                );
+              else resolve();
+            }, reject);
+          },
+        );
+      }).finally(() => log.close());
+    } else {
+      const supervisor = NodeChildProcess.spawn(process.execPath, args, {
         detached: true,
-        windowsHide: true,
         stdio: ["ignore", log.fd, log.fd],
         env: { ...process.env, T3CODE_NO_BROWSER: "1" },
-      },
-    );
-    // The child is owned by this spawn, but it must survive this SSH command.
-    supervisor.unref();
-    await log.close();
-    let spawnError: Error | undefined;
-    supervisor.once("exit", (code) => {
-      if (platform === "win32" && code !== 0)
-        spawnError = new Error(
-          "The remote Windows account could not detach the SSH supervisor. Inspect its server log.",
-        );
-    });
-    supervisor.once("error", (error) => {
-      spawnError = error;
-    });
+      });
+      supervisor.once("error", (error) => {
+        spawnError = error;
+      });
+      supervisor.unref();
+      await log.close();
+    }
     for (let attempt = 0; attempt < 300; attempt++) {
       if (spawnError) throw spawnError;
       const current = await readRecord(key);

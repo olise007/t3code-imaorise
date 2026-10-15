@@ -30,7 +30,9 @@ try {
     & icacls.exe $file /inheritance:r /grant:r "$($env:USERNAME):F" 'SYSTEM:F' 'Administrators:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not restrict SSH fixture key permissions.' }
   }
-  & icacls.exe $hostKey /remove:g "$env:USERNAME" /setowner '*S-1-5-18' | Out-Null
+  & icacls.exe $hostKey /remove:g "$env:USERNAME" | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Could not remove the host key user grant.' }
+  & icacls.exe $hostKey /setowner '*S-1-5-18' | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Could not assign the fixture host key to SYSTEM.' }
   $serverConfig = Join-Path $fixtureRoot 'sshd_config'
   @"
