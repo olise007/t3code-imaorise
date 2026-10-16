@@ -16,14 +16,16 @@ import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/process";
 import { withCodexAppServerClient } from "./CodexProvider.ts";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { withChatGptSessionLock } from "./CodexChatGptSessionLock.ts";
+import { CodexNativeSelection as Selection } from "./CodexAuthSelection.ts";
 import { materializeCodexShadowHome, type CodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
 
-const Selection = Schema.Struct({
-  mode: Schema.Literals(["native", "existing", "disconnected"]),
-  homePath: Schema.String,
-});
-const encodeSelection = Schema.encodeEffect(Schema.fromJsonString(Selection));
-const decodeSelection = Schema.decodeUnknownEffect(Schema.fromJsonString(Selection));
+const Metadata = Schema.Struct({ nativeAuthSelection: Schema.optionalKey(Selection) });
+const decodeMetadata = Schema.decodeUnknownEffect(Schema.fromJsonString(Metadata));
+const OpaqueRecord = Schema.Record(Schema.String, Schema.Unknown);
+const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(OpaqueRecord));
+const decodeRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(OpaqueRecord));
 const isSetupError = Schema.is(ProviderSetupError);
 export const nativeCodexMethods = [
   {
@@ -59,7 +61,7 @@ export function forwardNativeCodexCallback(
         "Could not deliver this sign-in response to Codex. Check the redirect URL or start again.",
     });
   return Effect.try({
-    try: () => codexCallbackUrl(value, request.redirectUri, request.state),
+    try: () => codexCallbackUrl(value, request.redirectUri, request.state, request.clientId),
     catch: failure,
   }).pipe(
     Effect.flatMap((callback) =>
@@ -71,6 +73,7 @@ export function forwardNativeCodexCallback(
             path: `${callback.pathname}${callback.search}`,
             method: "GET",
             agent: false,
+            headers: { host: new URL(request.redirectUri).host },
           },
           (incoming) => {
             incoming.on("error", () => resume(Effect.fail(failure())));
@@ -108,17 +111,47 @@ export const makeCodexNativeAuth = Effect.fn("makeCodexNativeAuth")(function* (o
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const selection = yield* ProviderCredentialStore.make("codex-auth-selection", options.instanceId);
+  const selection = yield* ProviderCredentialStore.make("codex-chatgpt", options.instanceId);
+  const secrets = yield* ServerSecretStore.ServerSecretStore;
   const fail = (operation: string, detail: string) =>
     new ProviderSetupError({ instanceId: options.instanceId, operation, detail });
   const read = selection.get.pipe(
     Effect.flatMap((bytes) =>
       Option.isNone(bytes)
         ? Effect.succeed(Option.none<typeof Selection.Type>())
-        : decodeSelection(new TextDecoder().decode(bytes.value)).pipe(Effect.map(Option.some)),
+        : decodeMetadata(new TextDecoder().decode(bytes.value)).pipe(
+            Effect.map((saved) => Option.fromUndefinedOr(saved.nativeAuthSelection)),
+          ),
     ),
     Effect.mapError(() => fail("auth", "Could not read the selected Codex sign-in method.")),
   );
+  const saveSelection = (value: typeof Selection.Type) =>
+    withChatGptSessionLock(
+      secrets.directory,
+      selection.binding.key,
+      options.instanceId,
+      Effect.gen(function* () {
+        const previous = yield* selection.get;
+        const record = Option.isSome(previous)
+          ? yield* decodeRecord(new TextDecoder().decode(previous.value))
+          : {};
+        const sessions =
+          "sessions" in record
+            ? record
+            : typeof record.clientId === "string"
+              ? { activeClientId: record.clientId, sessions: [record] }
+              : { activeClientId: null, sessions: [] };
+        const json = yield* encodeRecord({ ...sessions, nativeAuthSelection: value });
+        yield* selection.set(new TextEncoder().encode(json));
+      }),
+    ).pipe(
+      Effect.mapError(() =>
+        fail(
+          "auth",
+          "Could not save the selected Codex sign-in method. The previous selection is unchanged.",
+        ),
+      ),
+    );
   const nativeEnvironment = (homePath: string) => {
     const environment: NodeJS.ProcessEnv = { ...options.environment, CODEX_HOME: homePath };
     delete environment.ACCESS_TOKEN;
@@ -232,8 +265,7 @@ export const makeCodexNativeAuth = Effect.fn("makeCodexNativeAuth")(function* (o
             ? "The configured Codex home has no verified ChatGPT account. Sign in with Codex first, or choose browser or device-code login."
             : "Codex could not verify the new ChatGPT account.",
         );
-      const metadata = yield* encodeSelection({ mode: existing ? "existing" : "native", homePath });
-      yield* selection.set(new TextEncoder().encode(metadata));
+      yield* saveSelection({ mode: existing ? "existing" : "native", homePath });
       activated = true;
     }).pipe(
       Effect.scoped,
@@ -262,16 +294,9 @@ export const makeCodexNativeAuth = Effect.fn("makeCodexNativeAuth")(function* (o
               ),
         ),
       ),
-    clearSelection: selection.remove.pipe(
-      Effect.mapError(() => fail("auth", "Could not change the selected sign-in method.")),
-    ),
     logout: Effect.gen(function* () {
       if (Option.isNone(yield* read)) return false;
-      yield* selection
-        .set(
-          new TextEncoder().encode(yield* encodeSelection({ mode: "disconnected", homePath: "" })),
-        )
-        .pipe(Effect.mapError(() => fail("logout", "Could not disconnect native Codex.")));
+      yield* saveSelection({ mode: "disconnected", homePath: "" });
       return true;
     }).pipe(Effect.mapError(() => fail("logout", "Could not disconnect native Codex."))),
     nativeEnvironment,

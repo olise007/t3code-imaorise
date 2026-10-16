@@ -181,9 +181,14 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
                   detail:
                     "Environment saved, but selected provider setup did not complete. Open this environment's provider settings to review and retry. Sign-in is separate.",
                 });
+              for (const provider of result.value)
+                sshSetupProgress.append(
+                  progressId,
+                  `${provider.driver}: ${sanitizeSetupOutput(provider.message)}`,
+                );
               sshSetupProgress.append(
                 progressId,
-                "Selected provider installation complete. Sign in under this environment's provider settings.",
+                "Provider setup finished. Review the results above; account sign-in is separate.",
               );
             }),
         });

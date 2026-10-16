@@ -46,6 +46,7 @@ export async function receiveCodexAuthCallback(
         new URL(incoming.url ?? "/", request.redirectUri).toString(),
         request.redirectUri,
         request.state,
+        request.nativeClientId,
       ).toString();
       const returnUrl = destination?.(url);
       response.setHeader("cache-control", "no-store");

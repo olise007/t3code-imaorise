@@ -27,6 +27,7 @@ import { withChatGptSessionLock } from "./CodexChatGptSessionLock.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { CodexNativeSelection } from "./CodexAuthSelection.ts";
 
 const isSetupError = Schema.is(ProviderSetupError);
 const RESOURCE = "https://api.openai.com/v1";
@@ -57,6 +58,7 @@ export type CodexChatGptCredentials = typeof Record.Type;
 const Sessions = Schema.Struct({
   activeClientId: Schema.NullOr(Schema.String),
   sessions: Schema.Array(Record),
+  nativeAuthSelection: Schema.optionalKey(CodexNativeSelection),
 });
 const sessionLocks = new WeakMap<
   typeof ServerSecretStore.ServerSecretStore.Service,
@@ -112,7 +114,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       method: string,
       context: ProviderAuthFlowContext,
     ) => Effect.Effect<void, ProviderSetupError, import("effect/Scope").Scope>;
-    readonly selectTokenSharing: Effect.Effect<void, ProviderSetupError>;
     readonly logout: Effect.Effect<boolean, ProviderSetupError>;
   };
 }) {
@@ -216,7 +217,7 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       Option.isNone(bytes)
         ? Effect.succeed<typeof Sessions.Type>({ activeClientId: null, sessions: [] })
         : decodeSessions(new TextDecoder().decode(bytes.value)).pipe(
-            Effect.map((saved) =>
+            Effect.map((saved): typeof Sessions.Type =>
               "sessions" in saved ? saved : { activeClientId: saved.clientId, sessions: [saved] },
             ),
             Effect.mapError(() =>
@@ -227,9 +228,11 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   );
   const read = readSessions.pipe(
     Effect.map((saved) =>
-      Option.fromUndefinedOr(
-        saved.sessions.find((session) => session.clientId === saved.activeClientId),
-      ),
+      saved.nativeAuthSelection
+        ? Option.none<CodexChatGptCredentials>()
+        : Option.fromUndefinedOr(
+            saved.sessions.find((session) => session.clientId === saved.activeClientId),
+          ),
     ),
   );
   const writeSessions = (saved: typeof Sessions.Type) =>
@@ -344,6 +347,9 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   const save = Effect.fnUntraced(function* (record: CodexChatGptCredentials, activate = true) {
     const saved = yield* readSessions;
     yield* writeSessions({
+      ...(!activate && saved.nativeAuthSelection
+        ? { nativeAuthSelection: saved.nativeAuthSelection }
+        : {}),
       activeClientId: activate ? record.clientId : saved.activeClientId,
       sessions: [
         ...saved.sessions.filter((session) => session.clientId !== record.clientId),
@@ -354,7 +360,12 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   const clearTokens = Effect.gen(function* () {
     const saved = yield* readSessions;
     const sessions = saved.sessions.filter((session) => session.clientId !== saved.activeClientId);
-    if (sessions.length) yield* writeSessions({ activeClientId: null, sessions });
+    if (sessions.length || saved.nativeAuthSelection)
+      yield* writeSessions({
+        activeClientId: null,
+        sessions,
+        ...(saved.nativeAuthSelection ? { nativeAuthSelection: saved.nativeAuthSelection } : {}),
+      });
     else
       yield* store.remove.pipe(
         Effect.mapError(() =>
@@ -691,7 +702,8 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
               scopes,
               ...identity,
             },
-            scopes.includes(REQUIRED_SCOPE) || Option.isNone(yield* read),
+            scopes.includes(REQUIRED_SCOPE) ||
+              (Option.isNone(yield* read) && !(yield* readSessions).nativeAuthSelection),
           );
         }),
       );
@@ -783,7 +795,7 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
             earliestRefreshAt: earliest(tokens.earliest_refresh_at),
             scopes: tokens.scope.split(/\s+/).filter(Boolean),
           };
-          yield* save(record);
+          yield* save(record, false);
           if (!record.scopes.includes(REQUIRED_SCOPE))
             return yield* failure(
               "sharing",
@@ -891,9 +903,7 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
           },
           options.native?.methods.some((item) => item.id === method)
             ? options.native.authenticate(method, context)
-            : authenticate(method, context).pipe(
-                Effect.andThen(options.native?.selectTokenSharing ?? Effect.void),
-              ),
+            : authenticate(method, context),
           context.expiresAt,
         ),
       ),
@@ -988,7 +998,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
         );
       yield* saveRegistration(registration);
       yield* save(profile.credentials, true);
-      if (options.native) yield* options.native.selectTokenSharing;
     });
     return lock.withPermit(
       track(

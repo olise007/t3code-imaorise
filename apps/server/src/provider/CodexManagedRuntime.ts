@@ -76,7 +76,6 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
     native: {
       methods: nativeCodexMethods,
       authenticate: native.authenticate,
-      selectTokenSharing: native.clearSelection,
       logout: native.logout,
     },
   });

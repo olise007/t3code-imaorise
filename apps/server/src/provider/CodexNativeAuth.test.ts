@@ -8,11 +8,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
+import * as Schema from "effect/Schema";
 import { makeCodexNativeAuth } from "./CodexNativeAuth.ts";
 
 let verified = true;
 let calls: string[] = [];
 let complete: (event: { loginId: string; success: boolean }) => Effect.Effect<void>;
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 vi.mock("./CodexProvider.ts", () => ({
   withCodexAppServerClient: () =>
     Effect.succeed({
@@ -61,13 +64,23 @@ it.effect.each(["codex-browser", "codex-device", "codex-existing"])(
       const home = path.join(root, "shared");
       yield* fs.makeDirectory(home);
       const values = new Map<string, Uint8Array>();
+      let rejectWrites = false;
       const secrets = ServerSecretStore.ServerSecretStore.of({
         directory: root,
         get: (key) => Effect.sync(() => Option.fromNullishOr(values.get(key))),
         set: (key, value) =>
-          Effect.sync(() => {
-            values.set(key, value);
-          }),
+          Effect.suspend(() =>
+            rejectWrites
+              ? Effect.fail(
+                  new ServerSecretStore.SecretStorePersistError({
+                    resource: "fixture",
+                    cause: new Error("Fixture storage unavailable"),
+                  }),
+                )
+              : Effect.sync(() => {
+                  values.set(key, value);
+                }),
+          ),
         remove: (key) =>
           Effect.sync(() => {
             values.delete(key);
@@ -75,6 +88,28 @@ it.effect.each(["codex-browser", "codex-device", "codex-existing"])(
         create: () => Effect.die("unused"),
         getOrCreateRandom: () => Effect.die("unused"),
       });
+      const profiles = yield* ProviderCredentialStore.make("codex-chatgpt", "codex-fixture").pipe(
+        Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+      );
+      yield* profiles.set(
+        new TextEncoder().encode(
+          yield* encodeJson({
+            activeClientId: "previous-profile",
+            sessions: [
+              {
+                clientId: "previous-profile",
+                accessToken: "fixture-token",
+                refreshToken: null,
+                expiresAt: 9999999999999,
+                earliestRefreshAt: null,
+                scopes: ["chatgpt.tokens.use.direct"],
+                subject: "fixture",
+                email: null,
+              },
+            ],
+          }),
+        ),
+      );
       const native = yield* makeCodexNativeAuth({
         instanceId: ProviderInstanceId.make("codex-fixture"),
         stateDir: root,
@@ -103,6 +138,10 @@ it.effect.each(["codex-browser", "codex-device", "codex-existing"])(
       };
       yield* native.authenticate(method, context);
       const selected = yield* native.read;
+      assert.include(
+        new TextDecoder().decode(Option.getOrThrow(yield* profiles.get)),
+        "previous-profile",
+      );
       assert.isTrue(Option.isSome(selected));
       assert.include(calls, "account/read:");
       if (method === "codex-existing")
@@ -115,6 +154,11 @@ it.effect.each(["codex-browser", "codex-device", "codex-existing"])(
       verified = false;
       yield* native.authenticate(method, context).pipe(Effect.flip);
       assert.deepEqual(yield* native.read, selected);
+      verified = true;
+      rejectWrites = true;
+      yield* native.authenticate(method, context).pipe(Effect.flip);
+      assert.deepEqual(yield* native.read, selected);
+      rejectWrites = false;
       yield* native.logout;
       const disconnected = yield* native.read;
       assert.isTrue(Option.isSome(disconnected) && disconnected.value.mode === "disconnected");

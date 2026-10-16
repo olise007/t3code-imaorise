@@ -6,13 +6,13 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NetService from "@t3tools/shared/Net";
-import * as SshAuth from "@t3tools/ssh/auth";
-import * as SshTunnel from "@t3tools/ssh/tunnel";
+import * as SshAuth from "../../packages/ssh/src/auth.ts";
+import * as SshTunnel from "../../packages/ssh/src/tunnel.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { DesktopSshEnvironmentTarget } from "@t3tools/contracts";
+import type { DesktopSshEnvironmentTarget } from "../../packages/contracts/src/ipc.ts";
 
-if (process.env.GITHUB_ACTIONS !== "true" || process.platform !== "win32")
+if (process.env.GITHUB_ACTIONS !== "true" || process.env.RUNNER_OS !== "Windows")
   throw new Error("Hosted Windows fixture only.");
 // Secrets are generated for this disposable runner and supplied over stdin.
 const chunks: Buffer[] = [];
@@ -105,7 +105,7 @@ const program = Effect.gen(function* () {
   NodeAssert.ok(
     (yield* Effect.promise(() => NodeFSP.readFile(trust, "utf8"))).includes(input.differentHostKey),
   );
-  console.log(
+  yield* Effect.logInfo(
     "Passed native Windows host trust, password retry, encrypted key, cancellation, and changed-host rejection.",
   );
 }).pipe(

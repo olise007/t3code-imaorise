@@ -62,7 +62,11 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
     const binary = command
       ? yield* resolveCommandPath(command, {
           env: yield* mergeProviderInstanceEnvironment(instance.environment),
-        }).pipe(Effect.orElseSucceed(() => null))
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+          Effect.orElseSucceed(() => null),
+        )
       : null;
     if (!binary) return null;
     const real = yield* fs.realPath(binary).pipe(Effect.option);
@@ -195,6 +199,17 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
               })
               .pipe(Effect.asVoid);
           const verifySettings = Effect.gen(function* () {
+            const checked = yield* catalog.resolve(input.provider, input.targetVersion!);
+            if (
+              !checked.release.available ||
+              checked.release.integrity !== input.expectedIntegrity ||
+              (checked.release.compatibility === "unknown" && !input.allowUnknownCompatibility)
+            )
+              return yield* new ServerProviderUpdateError({
+                provider: input.provider,
+                reason:
+                  "The official artifact or compatibility information changed during download. Nothing was activated; review this version again.",
+              });
             const current = yield* settings.getSettings;
             if (!Equal.equals(current.providerInstances, initial.current.providerInstances))
               return yield* new ServerProviderUpdateError({

@@ -84,17 +84,24 @@ export function codexNativeAuthorizationRequest(value: string) {
     !/^[\w-]{16,128}$/.test(state)
   )
     throw new Error("Invalid native Codex sign-in request.");
-  return { authorizationUrl: url.toString(), redirectUri, state };
+  return { authorizationUrl: url.toString(), redirectUri, state, clientId: single("client_id") };
 }
 
 export function codexSignInAuthorizationRequest(value: string) {
-  return new URL(value).pathname === "/oauth/authorize"
-    ? codexNativeAuthorizationRequest(value)
-    : codexAuthorizationRequest(value);
+  if (new URL(value).pathname === "/oauth/authorize") {
+    const request = codexNativeAuthorizationRequest(value);
+    return { ...request, nativeClientId: request.clientId };
+  }
+  return { ...codexAuthorizationRequest(value), nativeClientId: undefined };
 }
 
 /** Validation is shared by the desktop listener and the environment receiving the code. */
-export function codexCallbackUrl(value: string, redirectUri: string, state: string) {
+export function codexCallbackUrl(
+  value: string,
+  redirectUri: string,
+  state: string,
+  nativeClientId?: string,
+) {
   const callback = new URL(value);
   const expected = new URL(redirectUri);
   const states = callback.searchParams.getAll("state");
@@ -111,7 +118,9 @@ export function codexCallbackUrl(value: string, redirectUri: string, state: stri
     states.length !== 1 ||
     states[0] !== state ||
     clients.length > 1 ||
-    (clients.length === 1 && !/^oaiapp_[\w-]+$/u.test(clients[0]!)) ||
+    (nativeClientId !== undefined && !/^app_[\w-]+$/.test(nativeClientId)) ||
+    (clients.length === 1 &&
+      (nativeClientId ? clients[0] !== nativeClientId : !/^oaiapp_[\w-]+$/u.test(clients[0]!))) ||
     !(
       (codes.length === 1 && Boolean(codes[0]) && errors.length === 0) ||
       (errors.length === 1 && Boolean(errors[0]) && codes.length === 0)
@@ -153,7 +162,7 @@ export function readCodexAuthHandoff(value: string, development: boolean) {
 /** Codes travel in a fragment, never in hosted web requests or a token store on the helper. */
 export function codexAuthDeliveryUrl(input: CodexAuthHandoff, callbackUrl: string) {
   const request = codexSignInAuthorizationRequest(input.authorizationUrl);
-  codexCallbackUrl(callbackUrl, request.redirectUri, request.state);
+  codexCallbackUrl(callbackUrl, request.redirectUri, request.state, request.nativeClientId);
   const destination = providerAuthReturnUrl(input.returnUrl);
   if (!destination) throw new Error("Invalid T3 Code return address.");
   const url = new URL(destination);
