@@ -434,7 +434,7 @@ export const layerWithOptions = (
         readonly providerSessionId: ProviderSessionId;
         readonly threadId: ThreadId;
       }) => `${input.providerSessionId}\u0000${input.threadId}`;
-      const installationWaiters = new Set<ProviderInstanceId>();
+      const installationWaiters = new Map<ProviderInstanceId, number>();
       const processingEvents = new Set<ProviderAdapter.ProviderAdapterV2SessionRuntime>();
       const idleTimeoutMs = Math.max(1, options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS);
       const maxIdlePinMs = Math.max(0, options.maxIdlePinMs ?? DEFAULT_MAX_IDLE_PIN_MS);
@@ -2326,11 +2326,16 @@ export const layerWithOptions = (
             });
             yield* Effect.acquireRelease(
               Effect.sync(() => {
-                for (const id of instanceIds) installationWaiters.add(id);
+                for (const id of instanceIds)
+                  installationWaiters.set(id, (installationWaiters.get(id) ?? 0) + 1);
               }),
               () =>
                 Effect.sync(() => {
-                  for (const id of instanceIds) installationWaiters.delete(id);
+                  for (const id of instanceIds) {
+                    const remaining = (installationWaiters.get(id) ?? 1) - 1;
+                    if (remaining > 0) installationWaiters.set(id, remaining);
+                    else installationWaiters.delete(id);
+                  }
                 }).pipe(Effect.andThen(reschedule)),
             );
             // Root completion follows provider terminal ingestion and checkpointing.

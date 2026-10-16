@@ -197,6 +197,9 @@ it.layer(NodeServices.layer)("provider version activation", (it) => {
         );
         yield* Deferred.await(fixture.ready);
         expect(fixture.activations()).toBe(0);
+        const duplicate = yield* fixture.manager.update(input).pipe(Effect.flip);
+        expect(duplicate.reason).toContain("already running");
+        expect(fixture.preparations()).toBe(1);
         yield* Fiber.interrupt(request);
         expect(fixture.current()).toEqual(fixture.original);
         yield* Deferred.succeed(finish, undefined);

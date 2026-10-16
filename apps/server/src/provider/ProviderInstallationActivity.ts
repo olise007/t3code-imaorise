@@ -6,7 +6,7 @@ import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 // Process-local leases cover actual runtime scopes, including custom paths into
 // managed installations. No process-name guessing or provider interruption.
 const counts = new Map<string, number>();
-const blocked = new Set<string>();
+const blocked = new Map<string, number>();
 const listeners = new Set<() => void>();
 const changed = () => {
   for (const listener of [...listeners]) listener();
@@ -53,11 +53,15 @@ export const reserveProviderInstallationIdle = <E = never, R = never>(
 ) =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      for (const id of ids) blocked.add(id);
+      for (const id of ids) blocked.set(id, (blocked.get(id) ?? 0) + 1);
     }),
     () =>
       Effect.sync(() => {
-        for (const id of ids) blocked.delete(id);
+        for (const id of ids) {
+          const remaining = (blocked.get(id) ?? 1) - 1;
+          if (remaining > 0) blocked.set(id, remaining);
+          else blocked.delete(id);
+        }
         changed();
       }),
   ).pipe(Effect.andThen(prepare), Effect.andThen(wait(() => ids.every((id) => !counts.has(id)))));
