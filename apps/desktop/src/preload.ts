@@ -12,6 +12,7 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
 import { mergeLegacyLocalStorage } from "./legacyLocalStorageMerge.ts";
+import { sshHostRequest } from "./ssh/sshHostRequest.ts";
 
 const SNAP_SHOT_EVENT_TYPES = new Set([
   "requested",
@@ -142,7 +143,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   clearConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.CLEAR_CONNECTION_CATALOG_CHANNEL),
   discoverSshHosts: () => ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_HOSTS_CHANNEL),
   resolveSshHost: (alias, executionSource) =>
-    ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_HOST_CHANNEL, { alias, executionSource }),
+    ipcRenderer.invoke(
+      IpcChannels.RESOLVE_SSH_HOST_CHANNEL,
+      sshHostRequest(alias, executionSource),
+    ),
   discoverSshConnections: (loadDistro) =>
     ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_CONNECTIONS_CHANNEL, loadDistro),
   onSshConnectionProgress: (listener) => {

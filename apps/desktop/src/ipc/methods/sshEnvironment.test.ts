@@ -6,10 +6,14 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import type { DesktopSshExecutionSource } from "@t3tools/contracts";
+import { DesktopSshEnvironment } from "../../ssh/DesktopSshEnvironment.ts";
+import { sshHostRequest } from "../../ssh/sshHostRequest.ts";
 
 import {
   DesktopSshEnvironmentRequestError,
   fetchSshEnvironmentDescriptor,
+  resolveSshHost,
 } from "./sshEnvironment.ts";
 
 function jsonResponse(request: HttpClientRequest.HttpClientRequest, body: unknown, status = 200) {
@@ -34,6 +38,91 @@ function layerHttpClient(
 }
 
 describe("SSH environment IPC", () => {
+  const resolverLayer = (
+    calls: { alias: string; source: DesktopSshExecutionSource | undefined }[],
+  ) =>
+    Layer.succeed(
+      DesktopSshEnvironment,
+      DesktopSshEnvironment.of({
+        discoverHosts: () => Effect.die("unexpected discovery"),
+        resolveHost: (alias, source) =>
+          Effect.sync(() => {
+            calls.push({ alias, source });
+            return {
+              alias,
+              hostname: "resolved.example",
+              username: "developer",
+              port: 2222,
+              executionSource: source ?? { type: "local" as const },
+            };
+          }),
+        ensureEnvironment: () => Effect.die("unexpected remote setup"),
+        disconnectEnvironment: () => Effect.die("unexpected disconnect"),
+        stopEnvironment: () => Effect.die("unexpected stop"),
+      }),
+    );
+
+  it.effect(
+    "decodes preload and legacy local requests before resolving the selected source",
+    () => {
+      const calls: { alias: string; source: DesktopSshExecutionSource | undefined }[] = [];
+      return Effect.gen(function* () {
+        const discovered = sshHostRequest("SKA_DEV_ERP_SERVER");
+        assert.equal(Object.hasOwn(discovered, "executionSource"), false);
+        const cases = [
+          { input: discovered, alias: "SKA_DEV_ERP_SERVER", source: { type: "local" } },
+          { input: "legacy-alias", alias: "legacy-alias", source: { type: "local" } },
+          {
+            input: { alias: "old-preload", executionSource: undefined },
+            alias: "old-preload",
+            source: { type: "local" },
+          },
+          {
+            input: sshHostRequest("192.0.2.10", { type: "local" }),
+            alias: "192.0.2.10",
+            source: { type: "local" },
+          },
+          {
+            input: sshHostRequest("shared", { type: "wsl", distro: "Ubuntu 26.04" }),
+            alias: "shared",
+            source: { type: "wsl", distro: "Ubuntu 26.04" },
+          },
+          {
+            input: sshHostRequest("shared", { type: "wsl", distro: "Debian" }),
+            alias: "shared",
+            source: { type: "wsl", distro: "Debian" },
+          },
+        ];
+        for (const expected of cases) {
+          const result = yield* resolveSshHost.handler(expected.input);
+          assert.deepEqual(calls.at(-1), { alias: expected.alias, source: expected.source });
+          assert.deepEqual(result.executionSource, expected.source);
+        }
+        assert.equal(calls.length, cases.length);
+      }).pipe(Effect.provide(resolverLayer(calls)));
+    },
+  );
+
+  it.effect("rejects malformed sources before resolving or contacting a host", () => {
+    const calls: { alias: string; source: DesktopSshExecutionSource | undefined }[] = [];
+    return Effect.gen(function* () {
+      for (const executionSource of [
+        null,
+        "local",
+        {},
+        { type: "unknown" },
+        { type: "wsl" },
+        { type: "wsl", distro: "" },
+      ]) {
+        const result = yield* Effect.result(
+          resolveSshHost.handler({ alias: "shared", executionSource }),
+        );
+        assert.equal(result._tag, "Failure");
+      }
+      assert.equal(calls.length, 0);
+    }).pipe(Effect.provide(resolverLayer(calls)));
+  });
+
   it.effect("fetches and decodes the remote environment descriptor", () => {
     const requestUrls: string[] = [];
     const layer = layerHttpClient((request) =>

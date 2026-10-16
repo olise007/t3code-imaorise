@@ -3441,14 +3441,21 @@ export function ConnectionsSettings() {
           }}
         >
           <SelectTrigger>
-            <SelectValue />
+            <SelectValue>
+              {sshSource.type === "wsl"
+                ? `WSL · ${sshSource.distro}`
+                : desktopBridge?.getClientPlatform?.() === "win32"
+                  ? "Windows"
+                  : "This machine"}
+            </SelectValue>
           </SelectTrigger>
           <SelectPopup>
             {(
               sshReport?.sources ?? [
                 {
                   executionSource: { type: "local" as const },
-                  label: "This machine",
+                  label:
+                    desktopBridge?.getClientPlatform?.() === "win32" ? "Windows" : "This machine",
                   running: true,
                 },
               ]

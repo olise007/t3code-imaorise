@@ -126,7 +126,7 @@ export const resolveSshHost = DesktopIpc.makeIpcMethod({
     Schema.String,
     Schema.Struct({
       alias: Schema.String,
-      executionSource: Schema.optionalKey(DesktopSshExecutionSourceSchema),
+      executionSource: Schema.optional(DesktopSshExecutionSourceSchema),
     }),
   ]),
   result: DesktopSshEnvironmentTargetSchema,
@@ -134,7 +134,7 @@ export const resolveSshHost = DesktopIpc.makeIpcMethod({
     const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
     return yield* sshEnvironment.resolveHost(
       typeof alias === "string" ? alias : alias.alias,
-      typeof alias === "string" ? undefined : alias.executionSource,
+      typeof alias === "string" ? { type: "local" } : (alias.executionSource ?? { type: "local" }),
     );
   }),
 });
