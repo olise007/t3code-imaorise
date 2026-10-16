@@ -59,17 +59,19 @@ const operation = <A>(run: () => Promise<A>) =>
   });
 export const layer = Layer.sync(SshManagedRuntime, () =>
   SshManagedRuntime.of({
-    verifyRuntime: Effect.flatMap(HostProcess.Platform, (platform) =>
-      operation(async () => {
+    verifyRuntime: Effect.gen(function* () {
+      const platform = yield* HostProcess.Platform;
+      const architecture = yield* HostProcess.Architecture;
+      return yield* operation(async () => {
         const root = NodePath.dirname(process.execPath);
         const require = NodeModule.createRequire(NodePath.join(root, "runtime.cjs"));
         for (const name of ["node-pty", "@ff-labs/fff-node"]) require(name);
         const { DatabaseSync } = await import("node:sqlite");
         const database = new DatabaseSync(":memory:");
         database.close();
-        await verifyBundledResourceMonitor(root, platform, process.arch);
-      }),
-    ),
+        await verifyBundledResourceMonitor(root, platform, architecture);
+      });
+    }),
     start: (key, version, resume) =>
       Effect.flatMap(HostProcess.Platform, (platform) =>
         operation(() => startManagedSsh(key, version, platform, resume)),

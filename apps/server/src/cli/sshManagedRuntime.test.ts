@@ -7,19 +7,22 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import { expect, it } from "vite-plus/test";
 import { verifyBundledResourceMonitor } from "./sshManagedRuntime.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
 const fixture = NodePath.join(import.meta.dirname, "testFixtures/sshManagedPeer.ts");
 const key = "a1b2c3d4e5f60708";
+const hostPlatform = HostProcess.Platform.defaultValue();
+const hostArchitecture = HostProcess.Architecture.defaultValue();
 
 it.each(["platform", "flat"])(
   "verifies the %s archive monitor and completes its shutdown handshake",
   async (layout) => {
-    if (process.platform === "win32") return;
+    if (hostPlatform === "win32") return;
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-native check-"));
     const directory =
       layout === "platform"
-        ? NodePath.join(root, "resource-monitor", `linux-${process.arch}`)
+        ? NodePath.join(root, "resource-monitor", `linux-${hostArchitecture}`)
         : NodePath.join(root, "resource-monitor");
     try {
       await NodeFSP.mkdir(directory, { recursive: true });
@@ -29,9 +32,9 @@ it.each(["platform", "flat"])(
         `#!/bin/sh\nprintf '%s\\n' '{"type":"hello"}'\nIFS= read -r command || exit 2\n[ "$command" = '{"version":1,"type":"shutdown"}' ] || exit 3\n`,
         { mode: 0o700 },
       );
-      await verifyBundledResourceMonitor(root, "linux", process.arch);
+      await verifyBundledResourceMonitor(root, "linux", hostArchitecture);
       await NodeFSP.writeFile(monitor, "#!/bin/sh\nexit 0\n");
-      await expect(verifyBundledResourceMonitor(root, "linux", process.arch)).rejects.toThrow(
+      await expect(verifyBundledResourceMonitor(root, "linux", hostArchitecture)).rejects.toThrow(
         "could not start",
       );
     } finally {
@@ -44,7 +47,7 @@ it("reports an absent native monitor before runtime activation", async () => {
   const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-native-missing-"));
   try {
     await expect(
-      verifyBundledResourceMonitor(root, process.platform, process.arch),
+      verifyBundledResourceMonitor(NodePath.join(root, "runtime"), hostPlatform, hostArchitecture),
     ).rejects.toThrow("missing");
   } finally {
     await NodeFSP.rm(root, { recursive: true, force: true });
