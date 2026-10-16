@@ -99,6 +99,21 @@ function resourceMonitorPlatformKey(
   return `${platform}-${architecture}`;
 }
 
+/** Shared by the normal resolver and the archive's pre-activation native check. */
+export function bundledResourceMonitorPaths(
+  platform: NodeJS.Platform,
+  architecture: NodeJS.Architecture,
+) {
+  const key = resourceMonitorPlatformKey(platform, architecture);
+  return key === undefined
+    ? []
+    : [
+        ["resource-monitor", key, binaryName(platform)],
+        ["resource-monitor", binaryName(platform)],
+        ["..", "resource-monitor", binaryName(platform)],
+      ];
+}
+
 function resourceMonitorRustTarget(
   platform: NodeJS.Platform,
   architecture: NodeJS.Architecture,
@@ -150,9 +165,9 @@ export const make = Effect.fn("resourceTelemetry.resourceMonitorBinary.make")(fu
     platformKey === undefined || rustTarget === undefined
       ? []
       : [
-          path.resolve(import.meta.dirname, "resource-monitor", platformKey, executableName),
-          path.resolve(import.meta.dirname, "resource-monitor", executableName),
-          path.resolve(import.meta.dirname, "../resource-monitor", executableName),
+          ...bundledResourceMonitorPaths(platform, architecture).map((segments) =>
+            path.resolve(import.meta.dirname, ...segments),
+          ),
           path.resolve(
             import.meta.dirname,
             "../../../../native/resource-monitor/target",

@@ -6,10 +6,50 @@ import * as NodeOS from "node:os";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import { expect, it } from "vite-plus/test";
+import { verifyBundledResourceMonitor } from "./sshManagedRuntime.ts";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
 const fixture = NodePath.join(import.meta.dirname, "testFixtures/sshManagedPeer.ts");
 const key = "a1b2c3d4e5f60708";
+
+it.each(["platform", "flat"])(
+  "verifies the %s archive monitor and completes its shutdown handshake",
+  async (layout) => {
+    if (process.platform === "win32") return;
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-native check-"));
+    const directory =
+      layout === "platform"
+        ? NodePath.join(root, "resource-monitor", `linux-${process.arch}`)
+        : NodePath.join(root, "resource-monitor");
+    try {
+      await NodeFSP.mkdir(directory, { recursive: true });
+      const monitor = NodePath.join(directory, "t3-resource-monitor");
+      await NodeFSP.writeFile(
+        monitor,
+        `#!/bin/sh\nprintf '%s\\n' '{"type":"hello"}'\nIFS= read -r command || exit 2\n[ "$command" = '{"version":1,"type":"shutdown"}' ] || exit 3\n`,
+        { mode: 0o700 },
+      );
+      await verifyBundledResourceMonitor(root, "linux", process.arch);
+      await NodeFSP.writeFile(monitor, "#!/bin/sh\nexit 0\n");
+      await expect(verifyBundledResourceMonitor(root, "linux", process.arch)).rejects.toThrow(
+        "could not start",
+      );
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+it("reports an absent native monitor before runtime activation", async () => {
+  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-native-missing-"));
+  try {
+    await expect(
+      verifyBundledResourceMonitor(root, process.platform, process.arch),
+    ).rejects.toThrow("missing");
+  } finally {
+    await NodeFSP.rm(root, { recursive: true, force: true });
+  }
+});
 
 it("reuses an authenticated supervisor after its launching command exits and stops only its child", async () => {
   const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-managed-ssh-"));

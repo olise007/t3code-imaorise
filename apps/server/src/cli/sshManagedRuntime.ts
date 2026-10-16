@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { PROVIDER_RECIPE_CATALOG } from "@t3tools/shared/providerInstallRecipes";
+import { bundledResourceMonitorPaths } from "../resourceTelemetry/ResourceMonitorBinary.ts";
 
 export class SshManagedRuntimeError extends Schema.TaggedError<SshManagedRuntimeError>()(
   "SshManagedRuntimeError",
@@ -66,35 +67,7 @@ export const layer = Layer.sync(SshManagedRuntime, () =>
         const { DatabaseSync } = await import("node:sqlite");
         const database = new DatabaseSync(":memory:");
         database.close();
-        const monitor = NodePath.join(
-          root,
-          "resource-monitor",
-          platform === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor",
-        );
-        await new Promise<void>((resolve, reject) => {
-          const child = NodeChildProcess.spawn(monitor, [], { stdio: ["pipe", "pipe", "ignore"] });
-          const timer = setTimeout(() => {
-            child.kill();
-            reject(new Error("The resource monitor readiness check timed out."));
-          }, 10_000);
-          let hello = false;
-          let greeting = "";
-          child.stdout.on("data", (bytes: Buffer) => {
-            greeting = (greeting + bytes.toString()).slice(-4096);
-            if (greeting.includes('"type":"hello"')) hello = true;
-          });
-          child.once("error", (error) => {
-            clearTimeout(timer);
-            reject(error);
-          });
-          child.once("exit", (code) => {
-            clearTimeout(timer);
-            if (code === 0 && hello) resolve();
-            else reject(new Error("The resource monitor could not start on this platform."));
-          });
-          child.stdin.on("error", () => {});
-          child.stdin.end('{"version":1,"type":"shutdown"}\n');
-        });
+        await verifyBundledResourceMonitor(root, platform, process.arch);
       }),
     ),
     start: (key, version, resume) =>
@@ -108,6 +81,45 @@ export const layer = Layer.sync(SshManagedRuntime, () =>
       ),
   }),
 );
+
+export async function verifyBundledResourceMonitor(
+  root: string,
+  platform: NodeJS.Platform,
+  architecture: NodeJS.Architecture,
+) {
+  const candidates = bundledResourceMonitorPaths(platform, architecture).map((segments) =>
+    NodePath.resolve(root, ...segments),
+  );
+  for (const monitor of candidates) {
+    if (!(await NodeFSP.stat(monitor).catch(() => null))?.isFile()) continue;
+    await new Promise<void>((resolve, reject) => {
+      const child = NodeChildProcess.spawn(monitor, [], { stdio: ["pipe", "pipe", "ignore"] });
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error("The resource monitor readiness check timed out."));
+      }, 10_000);
+      let hello = false;
+      let greeting = "";
+      child.stdout.on("data", (bytes: Buffer) => {
+        greeting = (greeting + bytes.toString()).slice(-4096);
+        if (greeting.includes('"type":"hello"')) hello = true;
+      });
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        if (code === 0 && hello) resolve();
+        else reject(new Error("The resource monitor could not start on this platform."));
+      });
+      child.stdin.on("error", () => {});
+      child.stdin.end('{"version":1,"type":"shutdown"}\n');
+    });
+    return;
+  }
+  throw new Error("The bundled resource monitor is missing for this platform and architecture.");
+}
 
 interface ManagedSshRecord {
   protocol: 1;
