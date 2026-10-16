@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off multipleEffectProvide:off - Hosted fixture only, without real SSH configuration or live state.
+// @effect-diagnostics nodeBuiltinImport:off multipleEffectProvide:off globalTimers:off globalFetch:off - Native hosted process readiness and HTTP probes use wall time, without real SSH configuration or live state.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -123,7 +123,9 @@ try {
       Effect.provideService(HostProcess.HomeDirectory, home),
     ),
   );
-  console.log("Passed native SFTP archive transfer with a literal special-character path.");
+  process.stdout.write(
+    "Passed native SFTP archive transfer with a literal special-character path.\n",
+  );
   const first = JSON.parse((await run("start")).stdout);
   const second = JSON.parse((await run("start")).stdout);
   if (first.remotePort !== second.remotePort)
@@ -131,7 +133,9 @@ try {
   const descriptor = await fetch(`http://127.0.0.1:${first.remotePort}/.well-known/t3/environment`);
   if (!descriptor.ok) throw new Error("Remote server did not survive SSH session exit.");
   await run("stop");
-  console.log("Passed Linux OpenSSH session survival, source configuration and reconnect.");
+  process.stdout.write(
+    "Passed Linux OpenSSH session survival, source configuration and reconnect.\n",
+  );
 } finally {
   await run("stop").catch(() => {});
   if (daemon.exitCode === null) {

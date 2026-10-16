@@ -212,6 +212,13 @@ Fedora/RHEL hosts can install missing system packages through their package mana
 Windows uses verified installers; missing system components require an elevated
 SSH session. Other unsupported requirements receive manual instructions.
 
+Runtime uploads require an OpenSSH `scp` client with SFTP support in the selected
+source and an enabled SFTP subsystem on the remote SSH server. Runtimes live under
+the connected user's home directory in `.t3-imaorise/runtime`. Setup checks the
+filesystem containing that destination for enough space before uploading; Linux
+also checks available file entries (inodes). If storage is exhausted, free space
+on that filesystem and retry setup.
+
 The control server needs no separate Node or desktop installation. A provider
 that requires Node can install a verified private copy with your approval. Existing
 and custom provider installations are preserved. After connection, finish provider

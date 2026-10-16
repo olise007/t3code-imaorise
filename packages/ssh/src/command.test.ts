@@ -102,6 +102,8 @@ describe("ssh command", () => {
         if (command._tag !== "StandardCommand") return;
         assert.equal(command.command, source === "wsl" ? "wsl.exe" : "scp.exe");
         assert.include(command.args, source === "wsl" ? "scp" : "-s");
+        assert.include(command.args, "-S");
+        assert.include(command.args, source === "wsl" ? "ssh" : "ssh.exe");
         assert.include(command.args, "-P");
         assert.include(command.args, "2222");
         assert.equal(command.args.at(-2), "C:/runtime's files/[archive].zip");

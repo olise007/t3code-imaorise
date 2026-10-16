@@ -385,9 +385,12 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     : target.alias.trim() || target.hostname.trim();
   const bracketedHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
   const transferHost = target.username ? `${target.username}@${bracketedHost}` : bracketedHost;
+  const sourceSsh = target.executionSource?.type === "wsl" ? "ssh" : yield* resolveSshCommand;
   const args = input.upload
     ? [
         "-s",
+        "-S",
+        sourceSsh,
         "-o",
         `BatchMode=${input.batchMode ?? (input.interactiveAuth ? "no" : "yes")}`,
         "-o",
