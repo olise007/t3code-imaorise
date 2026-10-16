@@ -3,7 +3,7 @@ import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type ProviderReplayTranscript } from "@t3tools/contracts";
 import * as CodexClient from "effect-codex-app-server/client";
-import type * as CodexError from "effect-codex-app-server/errors";
+import * as CodexError from "effect-codex-app-server/errors";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -52,6 +52,16 @@ export function withCodexReplayChildMetadata(
   ) => Effect.Effect<unknown, CodexError.CodexAppServerError> = (threadId) =>
     Effect.succeed({ thread: { id: threadId }, model: null }),
 ): CodexClient.CodexAppServerClient["Service"] {
+  // Older transcripts predate terminal inspection. Keep them on the legacy
+  // method-not-found path; roster reconciliation tests supply actual wire frames.
+  const hasTerminalInspection = transcript.entries.some(
+    (entry) =>
+      entry.type === "expect_outbound" &&
+      Predicate.isObject(entry.frame) &&
+      entry.frame.method === "thread/backgroundTerminals/list" &&
+      Predicate.isObject(entry.frame.params) &&
+      entry.frame.params.cursor === null,
+  );
   const childThreadIds = new Set(
     transcript.entries.flatMap((entry) => {
       if (entry.type !== "emit_inbound" || !Predicate.isObject(entry.frame)) return [];
@@ -71,13 +81,26 @@ export function withCodexReplayChildMetadata(
     raw: {
       ...client.raw,
       request: (method, params) =>
-        (method === "thread/read" || method === "thread/resume") &&
+        method === "thread/backgroundTerminals/list" &&
         Predicate.isObject(params) &&
-        (method === "thread/read" ? params.includeTurns === false : params.excludeTurns === true) &&
-        typeof params.threadId === "string" &&
-        childThreadIds.has(params.threadId)
-          ? readMetadata(params.threadId, method)
-          : client.raw.request(method, params),
+        params.cursor === null &&
+        !hasTerminalInspection
+          ? Effect.fail(
+              new CodexError.CodexAppServerRequestError({
+                code: -32601,
+                errorMessage: "Terminal inspection is unavailable in this legacy transcript.",
+                method,
+              }),
+            )
+          : (method === "thread/read" || method === "thread/resume") &&
+              Predicate.isObject(params) &&
+              (method === "thread/read"
+                ? params.includeTurns === false
+                : params.excludeTurns === true) &&
+              typeof params.threadId === "string" &&
+              childThreadIds.has(params.threadId)
+            ? readMetadata(params.threadId, method)
+            : client.raw.request(method, params),
     },
   };
 }

@@ -7,6 +7,7 @@ on:
       - packages/effect-codex-app-server/**
       - apps/server/src/orchestration-v2/Adapters/CodexAdapterV2*
       - scripts/imaorise/supervised-build*
+      - packages/shared/src/orchestrationV2PendingBackgroundWork.test.ts
   workflow_dispatch:
 permissions:
   contents: read
@@ -35,7 +36,7 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - name: Focused recovery and build supervision tests
-        run: timeout 1500 vp test run --maxWorkers 1 scripts/imaorise/supervised-build.test.ts packages/effect-codex-app-server/src/client.test.ts packages/effect-codex-app-server/src/notificationFailure.test.ts packages/effect-codex-app-server/src/protocol.test.ts packages/effect-codex-app-server/src/_internal/stdio.test.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts apps/server/src/orchestration-v2/ProviderSessionManager.test.ts apps/server/src/orchestration-v2/RunExecutionService.test.ts
+        run: timeout 1500 vp test run --maxWorkers 1 scripts/imaorise/supervised-build.test.ts packages/effect-codex-app-server/src/client.test.ts packages/effect-codex-app-server/src/notificationFailure.test.ts packages/effect-codex-app-server/src/protocol.test.ts packages/effect-codex-app-server/src/_internal/stdio.test.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts apps/server/src/orchestration-v2/ProviderSessionManager.test.ts apps/server/src/orchestration-v2/RunExecutionService.test.ts packages/shared/src/orchestrationV2PendingBackgroundWork.test.ts
       - name: Notification failure lint
         run: vp lint packages/effect-codex-app-server/src/notificationFailure.test.ts
       - name: Codex transport typecheck
@@ -45,4 +46,4 @@ jobs:
       - name: Server typecheck
         run: vp run --filter t3 typecheck
       - name: Scoped lint
-        run: vp lint packages/effect-codex-app-server/src/client.ts packages/effect-codex-app-server/src/client.test.ts packages/effect-codex-app-server/src/_internal/stdio.ts packages/effect-codex-app-server/src/protocol.ts packages/effect-codex-app-server/src/protocol.test.ts packages/effect-codex-app-server/src/errors.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts apps/server/src/orchestration-v2/RunExecutionService.ts apps/mobile/src/features/threads/InterruptedRunRecoveryCard.tsx scripts/imaorise/supervised-build.mjs scripts/imaorise/supervised-build.test.ts
+        run: vp lint packages/effect-codex-app-server/src/client.ts packages/effect-codex-app-server/src/client.test.ts packages/effect-codex-app-server/src/_internal/stdio.ts packages/effect-codex-app-server/src/protocol.ts packages/effect-codex-app-server/src/protocol.test.ts packages/effect-codex-app-server/src/errors.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.testkit.ts packages/shared/src/orchestrationV2PendingBackgroundWork.test.ts apps/server/src/orchestration-v2/RunExecutionService.ts apps/mobile/src/features/threads/InterruptedRunRecoveryCard.tsx scripts/imaorise/supervised-build.mjs scripts/imaorise/supervised-build.test.ts

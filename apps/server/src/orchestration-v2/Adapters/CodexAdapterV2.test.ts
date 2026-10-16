@@ -4270,6 +4270,185 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ],
   });
 
+  it.effect.each([
+    "missing",
+    "live",
+    "paged-live",
+    "unsupported",
+    "timeout",
+    "invalid",
+    "repeated-cursor",
+    "late-completion",
+    "no-process-empty",
+    "no-process-live",
+  ] as const)("reconciles an omitted command against a %s terminal roster", (scenario) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const paged = scenario === "paged-live" || scenario === "repeated-cursor";
+        const missing = scenario === "missing" || scenario === "no-process-empty";
+        const started = {
+          ...backgroundCommandItem("inProgress"),
+          aggregatedOutput: "Preserved output\n",
+          ...(scenario.startsWith("no-process") ? { processId: null } : {}),
+        };
+        const transcript = makeCodexReplayTranscript({
+          scenario: `codex-reconcile-roster-${scenario}`,
+          entries: [
+            ...codexReplayPreamble({
+              nativeThreadId: BG_NATIVE_THREAD,
+              nativeTurnId: BG_NATIVE_TURN,
+              prompt: BG_PROMPT,
+            }),
+            {
+              type: "emit_inbound",
+              frame: {
+                method: "item/started",
+                params: {
+                  threadId: BG_NATIVE_THREAD,
+                  turnId: BG_NATIVE_TURN,
+                  startedAtMs: 1782622440500,
+                  item: started,
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: BG_NATIVE_THREAD,
+                  turn: makeCodexReplayTurn({ id: BG_NATIVE_TURN, status: "completed" }),
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              label: "inspect-roster",
+              frame: {
+                id: 4,
+                method: "thread/backgroundTerminals/list",
+                params: { threadId: BG_NATIVE_THREAD, cursor: null },
+              },
+            },
+            ...(scenario === "late-completion"
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    frame: {
+                      method: "item/completed",
+                      params: {
+                        threadId: BG_NATIVE_THREAD,
+                        turnId: BG_NATIVE_TURN,
+                        completedAtMs: 1782622465500,
+                        item: backgroundCommandItem("completed"),
+                      },
+                    },
+                  },
+                ]
+              : []),
+            {
+              type: "emit_inbound",
+              ...(scenario === "timeout" ? { afterMs: 3000 } : {}),
+              frame:
+                scenario === "unsupported"
+                  ? { id: 4, error: { code: -32601, message: "Method unavailable" } }
+                  : {
+                      id: 4,
+                      result:
+                        scenario === "invalid"
+                          ? { data: "invalid" }
+                          : {
+                              data:
+                                missing || paged || scenario === "late-completion"
+                                  ? []
+                                  : [{ processId: "4242" }],
+                              nextCursor: paged ? "page-2" : null,
+                            },
+                    },
+            },
+            ...(paged
+              ? [
+                  {
+                    type: "expect_outbound" as const,
+                    frame: {
+                      id: 5,
+                      method: "thread/backgroundTerminals/list",
+                      params: { threadId: BG_NATIVE_THREAD, cursor: "page-2" },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    frame: {
+                      id: 5,
+                      result: {
+                        data: scenario === "paged-live" ? [{ processId: "4242" }] : [],
+                        nextCursor: scenario === "repeated-cursor" ? "page-2" : null,
+                      },
+                    },
+                  },
+                ]
+              : []),
+          ],
+        });
+        const reconciled = yield* Deferred.make<void>();
+        const harness = yield* makeCodexReplayHarness(transcript, (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "command_execution" &&
+          event.turnItem.status === (missing ? "interrupted" : "completed")
+            ? Deferred.succeed(reconciled, undefined)
+            : Effect.void,
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make(`attempt-roster-${scenario}`),
+            text: BG_PROMPT,
+          }),
+        );
+        yield* harness.firstTerminal;
+        if (missing || scenario === "late-completion") yield* Deferred.await(reconciled);
+        if (scenario === "timeout") {
+          yield* TestClock.adjust("2 seconds");
+          yield* TestClock.adjust("1 second");
+        }
+        // Flush runnable replay/client fibers without advancing the inspection deadline.
+        yield* TestClock.adjust(0);
+        const updates = harness.events.filter(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "command_execution",
+        );
+        const last = updates.at(-1);
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+        assert.equal(
+          yield* harness.hasPendingBackgroundWork,
+          !missing && scenario !== "late-completion",
+        );
+        if (last?.type !== "turn_item.updated" || last.turnItem.type !== "command_execution")
+          return yield* Effect.die("Expected the command projection.");
+        assert.equal(
+          last.turnItem.status,
+          missing ? "interrupted" : scenario === "late-completion" ? "completed" : "running",
+        );
+        if (missing) {
+          assert.equal(last.turnItem.output, "Preserved output\n");
+          assert.isUndefined(last.turnItem.exitCode);
+          assert.equal(last.turnItem.title, "Command ended; exit status unavailable");
+          assert.lengthOf(harness.continuationRequests, 0);
+        }
+        if (scenario === "late-completion") {
+          assert.equal(last.turnItem.exitCode, 0);
+          assert.equal(last.turnItem.output, "CODEX_BG_WAKE_DONE\n");
+        }
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
   it.effect.each(["completed", "failed", "inProgress", "absent"] as const)(
     "reconciles a %s command snapshot without a completion notification",
     (snapshotStatus) =>

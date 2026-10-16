@@ -41,6 +41,33 @@ describe("backgroundWorkHoldsCompletion", () => {
 });
 
 describe("derivePendingBackgroundWork", () => {
+  it("removes a reconciled command from the post-turn roster without an invented exit code", () => {
+    const input = {
+      latestRun: { id: "run-1" as never, ordinal: 1, status: "completed" as const },
+      providerThreads: [],
+      turnItems: [
+        {
+          id: "command-1",
+          type: "command_execution" as const,
+          status: "running" as const,
+          title: null,
+          input: "docker exec app tail -15 /var/log/apache2/error.log",
+          nativeItemRef: { nativeId: "exec-1" },
+        },
+      ],
+    };
+    expect(derivePendingBackgroundWork(input)).toHaveLength(1);
+    expect(
+      derivePendingBackgroundWork({
+        ...input,
+        turnItems: input.turnItems.map((item) => ({
+          ...item,
+          status: "interrupted" as const,
+          title: "Command ended; exit status unavailable",
+        })),
+      }),
+    ).toEqual([]);
+  });
   it("returns empty while the latest run is not settled", () => {
     const tasks = derivePendingBackgroundWork({
       latestRun: { id: "run-1" as never, ordinal: 1, status: "running" },
