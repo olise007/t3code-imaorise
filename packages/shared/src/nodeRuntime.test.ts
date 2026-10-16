@@ -7,6 +7,7 @@ import * as Result from "effect/Result";
 
 import * as HostProcess from "./HostProcess.ts";
 import { resolveNodeExecutable, resolveSelfInvocation, selfInvocationArgs } from "./nodeRuntime.ts";
+import { NODE_PROVIDER_RUNTIME } from "./providerInstallRecipes.ts";
 import { symlinksSupported } from "./testing/symlinks.ts";
 
 describe("Self invocation", () => {
@@ -106,6 +107,41 @@ describe("Node runtime selection", () => {
       Effect.provideService(HostProcess.IsExecutable, true),
       Effect.provide(NodeServices.layer),
     ),
+  );
+
+  it.effect(
+    "uses verified private Node for Antigravity while preserving other runtime choices",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.makeTempDirectoryScoped();
+        const platform = yield* HostProcess.Platform;
+        const recipe = NODE_PROVIDER_RUNTIME[platform === "win32" ? "windows" : "linux"];
+        const root = path.join(home, ".t3-imaorise", "tools", "node", recipe.version);
+        const privateNode = path.join(root, platform === "win32" ? "node.exe" : "bin/node");
+        const installed = path.join(home, platform === "win32" ? "node.exe" : "node");
+        yield* fs.makeDirectory(path.dirname(privateNode), { recursive: true });
+        for (const executable of [privateNode, installed]) {
+          yield* fs.copyFile(process.execPath, executable);
+          yield* fs.chmod(executable, 0o755);
+        }
+        const resolve = (feature: "Antigravity" | "Local device support") =>
+          resolveNodeExecutable(feature, { PATH: home }).pipe(
+            Effect.provideService(HostProcess.HomeDirectory, home),
+          );
+        expect(yield* resolve("Antigravity")).toBe(installed);
+        yield* fs.writeFileString(path.join(root, ".recipe-integrity"), recipe.integrity);
+        expect(yield* resolve("Antigravity")).toBe(privateNode);
+        expect(yield* resolve("Local device support")).toBe(installed);
+        yield* fs.writeFileString(path.join(root, ".recipe-integrity"), "invalid");
+        expect(yield* resolve("Antigravity")).toBe(installed);
+      }).pipe(
+        Effect.scoped,
+        Effect.provideService(HostProcess.ExecutablePath, "/packaged/t3"),
+        Effect.provideService(HostProcess.IsExecutable, true),
+        Effect.provide(NodeServices.layer),
+      ),
   );
 
   it.effect("uses node.exe even when Windows batch wrappers appear first on PATH", () =>

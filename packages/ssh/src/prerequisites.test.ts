@@ -63,6 +63,19 @@ const review = (patch: Record<string, string> = {}) =>
 beforeEach(() => vi.mocked(runSshCommand).mockReset());
 
 describe("SSH prerequisite inspection and review", () => {
+  it("reviews a private Node only when the selected provider lacks a compatible runtime", () => {
+    const choice = (version: string) =>
+      buildProviderChoices("linux", new Map([["nodeVersion", version]])).find(
+        (provider) => provider.driver === "antigravity",
+      )!;
+    expect(choice("v16.20.0").dependencies.join(" ")).toContain("Install private Node 26.8.2");
+    expect(choice("v24.10.0").dependencies.join(" ")).toContain("Reuse compatible Node");
+    expect(choice("").dependencies.join(" ")).toContain("npm is not installed");
+    expect(
+      buildProviderChoices("linux", new Map()).find((provider) => provider.driver === "claudeAgent")
+        ?.dependencies,
+    ).toEqual([]);
+  });
   it("checks Windows provider shell dependencies without replacing a custom Git", () => {
     const choices = (values: Record<string, string>) =>
       buildProviderChoices("windows", new Map(Object.entries(values)));

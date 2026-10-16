@@ -351,9 +351,21 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     options.validate ??
     Effect.fn("AntigravityInstallation.validate")(
       function* (executable: AntigravityExecutable, expectedVersion: string) {
-        const profileDirectory = yield* fs.makeTempDirectoryScoped({
-          prefix: "t3-antigravity-validate-",
-        });
+        const profileDirectory = yield* Effect.acquireRelease(
+          fs.makeTempDirectory({ prefix: "t3-antigravity-validate-" }),
+          (directory) =>
+            platform === "win32"
+              ? // PyInstaller DLLs and virus scanners can briefly retain Windows handles.
+                Effect.promise(() =>
+                  NodeFSP.rm(directory, {
+                    recursive: true,
+                    force: true,
+                    maxRetries: 15,
+                    retryDelay: 100,
+                  }),
+                )
+              : fs.remove(directory, { recursive: true, force: true }).pipe(Effect.orDie),
+        );
         const profile = yield* prepareAntigravityProfile({
           profileDirectory,
           platform,
@@ -371,6 +383,8 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
           }),
           cwd: profileDirectory,
           childProcessSpawner: spawner,
+          // PyInstaller's child must exit before its extracted DLLs are removed.
+          ownDetachedProcessGroup: platform === "win32",
           clientInfo: { name: "t3-code", version: "0.0.0" },
         });
         const initialized = yield* runtime.initialize();

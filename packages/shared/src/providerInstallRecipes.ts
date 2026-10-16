@@ -26,6 +26,7 @@ const npm = (
 });
 
 export const PROVIDER_RECIPE_REVISION = 1;
+export const NODE_PROVIDER_ENGINE_RANGE = "^22.16 || ^23.11 || >=24.10";
 export const PROVIDER_RECIPE_CATALOG = [
   {
     driver: "codex",

@@ -19,7 +19,7 @@ import {
 } from "@t3tools/shared/providerInstallRecipes";
 
 const harness = Effect.fn("test.managedArchives")(function* (
-  options: { badHash?: boolean; body?: Stream.Stream<Uint8Array> } = {},
+  options: { badHash?: boolean; body?: Stream.Stream<Uint8Array>; nodeVersion?: string } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-recipe-" });
@@ -36,6 +36,10 @@ const harness = Effect.fn("test.managedArchives")(function* (
   ]);
   expect(created.status).toBe(0);
   const bytes = yield* fs.readFile(`${root}/fixture.tar.gz`);
+  if (options.nodeVersion)
+    yield* fs.writeFileString(`${root}/node`, `#!/bin/sh\nprintf '${options.nodeVersion}\\n'\n`, {
+      mode: 0o700,
+    });
   let downloads = 0;
   const service = yield* makeManagedProviderArchives({
     resolveRecipe: () => ({
@@ -51,6 +55,8 @@ const harness = Effect.fn("test.managedArchives")(function* (
     Effect.provideService(HostProcess.HomeDirectory, root),
     Effect.provideService(HostProcess.Platform, "linux"),
     Effect.provideService(HostProcess.Architecture, "x64"),
+    Effect.provideService(HostProcess.IsExecutable, true),
+    Effect.provideService(HostProcess.Environment, { PATH: `${root}:/usr/bin:/bin` }),
     Effect.provideService(
       HttpClient.HttpClient,
       HttpClient.make((request) =>
@@ -102,6 +108,25 @@ it.effect("verifies, activates, and reuses an isolated managed executable", () =
     yield* h.service.start("claude");
     expect((yield* finished(h.service)).phase).toBe("succeeded");
     expect(h.downloads()).toBe(1);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+it.effect("reuses compatible Node without downloading or replacing it", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return;
+    const h = yield* harness({ nodeVersion: "v24.10.0" });
+    expect(yield* h.service.ensureCompatibleNode).toBe(`${h.root}/node`);
+    expect(h.downloads()).toBe(0);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+it.effect("does not accept old Node and verifies the private dependency before activation", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return;
+    const h = yield* harness({ nodeVersion: "v16.20.0" });
+    const outcome = yield* h.service.ensureCompatibleNode.pipe(Effect.result);
+    expect(outcome._tag).toBe("Failure");
+    expect(h.downloads()).toBe(1);
+    expect(yield* h.fs.readFileString(`${h.root}/node`)).toContain("v16.20.0");
+    expect(yield* h.fs.exists(`${h.root}/.t3-imaorise/tools/node/26.8.2`)).toBe(false);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 it.effect("rejects integrity failures before activation and cleans staging", () =>

@@ -77,22 +77,33 @@ export const resolveNodeExecutable = Effect.fn("nodeRuntime.resolveNodeExecutabl
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const env = environment ?? (yield* HostProcess.Environment);
-  const nodePath = yield* resolveCommandPath(platform === "win32" ? "node.exe" : "node", {
-    // Batch wrappers require a shell; helper callers launch the runtime directly.
-    env: platform === "win32" ? { ...env, PATHEXT: ".EXE" } : env,
-  }).pipe(
-    // Refresh immediately after the user installs Node and retries setup.
-    Effect.provideService(CommandResolutionCache, new Map()),
-    Effect.catch(() =>
-      Effect.gen(function* () {
-        const home = yield* HostProcess.HomeDirectory;
-        const recipe = NODE_PROVIDER_RUNTIME[platform === "win32" ? "windows" : "linux"];
-        const root = path.join(home, ".t3-imaorise", "tools", "node", recipe.version);
-        if ((yield* fs.readFileString(path.join(root, ".recipe-integrity"))) !== recipe.integrity)
-          return yield* new NodeRuntimeUnavailableError({ feature });
-        return path.join(root, platform === "win32" ? "node.exe" : "bin/node");
-      }),
+  const home = yield* HostProcess.HomeDirectory;
+  const recipe = NODE_PROVIDER_RUNTIME[platform === "win32" ? "windows" : "linux"];
+  const managedRoot = path.join(home, ".t3-imaorise", "tools", "node", recipe.version);
+  const managedNode = yield* fs.readFileString(path.join(managedRoot, ".recipe-integrity")).pipe(
+    Effect.map((integrity) =>
+      integrity === recipe.integrity
+        ? path.join(managedRoot, platform === "win32" ? "node.exe" : "bin/node")
+        : null,
     ),
+    Effect.orElseSucceed(() => null),
+  );
+  const preferred =
+    managedNode !== null && feature.startsWith("Antigravity")
+      ? Effect.succeed(managedNode)
+      : resolveCommandPath(platform === "win32" ? "node.exe" : "node", {
+          // Batch wrappers require a shell; helper callers launch the runtime directly.
+          env: platform === "win32" ? { ...env, PATHEXT: ".EXE" } : env,
+        }).pipe(
+          // Refresh immediately after the user installs Node and retries setup.
+          Effect.provideService(CommandResolutionCache, new Map()),
+          Effect.catch(() =>
+            managedNode === null
+              ? Effect.fail(new NodeRuntimeUnavailableError({ feature }))
+              : Effect.succeed(managedNode),
+          ),
+        );
+  const nodePath = yield* preferred.pipe(
     Effect.map((commandPath) => path.resolve(commandPath)),
     Effect.mapError((cause) => new NodeRuntimeUnavailableError({ feature, cause })),
   );

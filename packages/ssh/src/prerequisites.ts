@@ -15,7 +15,9 @@ import {
   PROVIDER_RECIPE_CATALOG,
   providerArchiveRecipe,
   NODE_PROVIDER_RUNTIME,
+  NODE_PROVIDER_ENGINE_RANGE,
 } from "@t3tools/shared/providerInstallRecipes";
+import { satisfiesSemverRange } from "@t3tools/shared/semver";
 
 // This fallback also serves old archives. New archives carry measured ABI floors.
 export const runtimeRequirements = (
@@ -61,6 +63,7 @@ done
 for tool in tar gzip sha256sum shasum git sudo node npm codex claude agent grok opencode antigravity pi muse; do
  printf 'tool.%s=%s\\n' "$tool" "$(command -v "$tool" 2>/dev/null || true)"
 done
+printf 'nodeVersion=%s\\n' "$(node --version 2>/dev/null || true)"
 `;
 
 export const windowsInspectionScript = `$ErrorActionPreference='Stop'
@@ -76,6 +79,7 @@ Write-Output 'manager=windows'
 if($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){Write-Output 'elevation=administrator'}else{Write-Output 'elevation=unavailable'}
 foreach($lib in @('VCRUNTIME140.dll','MSVCP140.dll')){Write-Output ($lib+'='+[string](Test-Path -LiteralPath (Join-Path $env:WINDIR ('System32/'+$lib))))}
 foreach($tool in @('git','node','npm','codex','claude','agent','grok','opencode','antigravity','pi','muse','winget.exe')){ $c=Get-Command $tool -ErrorAction SilentlyContinue; Write-Output ('tool.'+$tool+'='+$(if($c){$c.Source}else{''})) }
+try { $nodeVersion=(& node --version 2>$null); Write-Output ('nodeVersion='+$nodeVersion) } catch { Write-Output 'nodeVersion=' }
 $git=Get-Command git -ErrorAction SilentlyContinue
 $bash=$env:CLAUDE_CODE_GIT_BASH_PATH
 if(!$bash -and $git){$bash=Join-Path (Split-Path (Split-Path $git.Source -Parent) -Parent) 'bin/bash.exe'}
@@ -131,7 +135,11 @@ export function buildProviderChoices(
             : "No pinned, verified automatic installation recipe is available. Install using the vendor instructions, then refresh providers.",
       dependencies:
         entry.driver === "antigravity"
-          ? [`${entry.dependency}: ${node.url}; ${node.integrity}`]
+          ? [
+              satisfiesSemverRange(values.get("nodeVersion") ?? "", NODE_PROVIDER_ENGINE_RANGE)
+                ? `Reuse compatible Node ${values.get("nodeVersion")}; no Node/npm installation.`
+                : `Compatible Node (${NODE_PROVIDER_ENGINE_RANGE}) missing. Install private Node ${node.version}: ${node.url}; ${node.integrity}; existing Node is preserved; npm is not installed.`,
+            ]
           : entry.dependency && platform === "windows"
             ? [entry.dependency]
             : [],

@@ -8,9 +8,12 @@ import {
 import {
   NODE_PROVIDER_RUNTIME,
   providerArchiveRecipe,
+  NODE_PROVIDER_ENGINE_RANGE,
   type ProviderArchiveRecipe,
 } from "@t3tools/shared/providerInstallRecipes";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { resolveNodeExecutable } from "@t3tools/shared/nodeRuntime";
+import { satisfiesSemverRange } from "@t3tools/shared/semver";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -53,6 +56,7 @@ export class ManagedProviderArchives extends Context.Service<
     readonly cancel: (driver: string, operationId: string) => Effect.Effect<ProviderInstallState>;
     readonly changes: (driver: string) => Stream.Stream<ProviderInstallState>;
     readonly ensureNode: Effect.Effect<string, ProviderSetupError>;
+    readonly ensureCompatibleNode: Effect.Effect<string, ProviderSetupError>;
   }
 >()("t3/provider/ManagedProviderArchives") {}
 
@@ -66,6 +70,8 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
   const arch = yield* HostProcess.Architecture;
   const home = yield* HostProcess.HomeDirectory;
   const environment = yield* HostProcess.Environment;
+  const executablePath = yield* HostProcess.ExecutablePath;
+  const isExecutable = yield* HostProcess.IsExecutable;
   const http = HttpClient.followRedirects(yield* HttpClient.HttpClient, 5);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const scope = yield* Effect.scope;
@@ -281,8 +287,29 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
     ),
   );
   const ensureNode = gate.withPermit(install(NODE_PROVIDER_RUNTIME[host], true));
+  const ensureCompatibleNode = Effect.gen(function* () {
+    const existing = yield* resolveNodeExecutable("Antigravity", environment).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(HostProcess.Platform, platform),
+      Effect.provideService(HostProcess.HomeDirectory, home),
+      Effect.provideService(HostProcess.ExecutablePath, executablePath),
+      Effect.provideService(HostProcess.IsExecutable, isExecutable),
+      Effect.result,
+    );
+    if (existing._tag === "Success") {
+      const version = yield* Effect.result(run(existing.success, ["--version"]));
+      if (
+        version._tag === "Success" &&
+        satisfiesSemverRange(version.success.trim().replace(/^v/u, ""), NODE_PROVIDER_ENGINE_RANGE)
+      )
+        return existing.success;
+    }
+    return yield* ensureNode;
+  });
   return ManagedProviderArchives.of({
     ensureNode,
+    ensureCompatibleNode,
     changes: (driver) =>
       SubscriptionRef.changes(states).pipe(
         Stream.map((all) => all.get(driver) ?? idle(driver)),

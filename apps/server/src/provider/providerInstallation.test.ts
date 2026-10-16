@@ -71,7 +71,10 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
   const router = yield* makeProviderInstallation().pipe(
     Effect.provide(
       Layer.mergeAll(
-        Layer.mock(ManagedProviderArchives.ManagedProviderArchives)(input.archives ?? {}),
+        Layer.mock(ManagedProviderArchives.ManagedProviderArchives)({
+          ensureCompatibleNode: Effect.succeed("/fixture/node"),
+          ...input.archives,
+        }),
         ServerSettings.layerTest(input.settings),
         Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
           getInstance: (id) =>

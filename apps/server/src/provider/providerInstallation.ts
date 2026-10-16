@@ -26,7 +26,6 @@ import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydra
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
-import { resolveNodeExecutable } from "@t3tools/shared/nodeRuntime";
 
 const ANTIGRAVITY = ProviderDriverKind.make("antigravity");
 const hasBinaryPath = Schema.is(Schema.Struct({ binaryPath: Schema.String }));
@@ -205,8 +204,7 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
       let installed;
       if (driver === "codex" || driver === "antigravity") {
         if (driver === "antigravity") {
-          const existingNode = yield* Effect.result(resolveNodeExecutable("Antigravity"));
-          if (existingNode._tag === "Failure") yield* archives.ensureNode;
+          yield* archives.ensureCompatibleNode;
         }
         const installation = driver === "codex" ? codexInstallation : antigravityInstallation;
         installed = yield* Effect.acquireUseRelease(
@@ -227,9 +225,9 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
               : Effect.void,
         );
         if (installed?.phase === "succeeded") {
-          const executable = yield* installation
-            .resolve()
-            .pipe(Effect.mapError(failure(instanceId)));
+          const executable = yield* driver === "codex"
+            ? codexInstallation.resolve().pipe(Effect.mapError(failure(instanceId)))
+            : antigravityInstallation.resolve().pipe(Effect.mapError(failure(instanceId)));
           installed = {
             ...installed,
             executablePath: executable.executablePath,
