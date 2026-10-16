@@ -2978,12 +2978,20 @@ export function ConnectionsSettings() {
         editingSshRoute &&
         editingSshRoute !== `ssh:${routeTarget.environmentId}:${sshTargetKey(target)}`
       ) {
-        if (editingSshOriginalTarget)
-          await window.desktopBridge?.forgetSshCredentials?.(editingSshOriginalTarget);
-        await removeEditedSshRoute({
-          environmentId: routeTarget.environmentId,
-          routeId: editingSshRoute,
-        });
+        try {
+          if (editingSshOriginalTarget)
+            await window.desktopBridge?.forgetSshCredentials?.(editingSshOriginalTarget);
+          await removeEditedSshRoute({
+            environmentId: routeTarget.environmentId,
+            routeId: editingSshRoute,
+          });
+        } catch {
+          setSavedBackendError(
+            "The edited connection succeeded, but the old profile could not be removed. Retry removing it from Connections.",
+          );
+          setIsAddingSavedBackend(false);
+          return;
+        }
       }
       setEditingSshRoute(null);
       setEditingSshOriginalTarget(null);

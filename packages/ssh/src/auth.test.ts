@@ -55,7 +55,7 @@ describe("ssh auth", () => {
     ),
   );
 
-  it.effect("builds a windows askpass launcher pair", () =>
+  it.effect("builds a native Windows askpass helper descriptor", () =>
     Effect.gen(function* () {
       const descriptor = yield* buildSshAskpassHelperDescriptor({
         directory: "C:\\temp\\t3code-ssh-askpass",
@@ -65,10 +65,10 @@ describe("ssh auth", () => {
         ),
       );
 
-      assert.equal(descriptor.launcherPath, "C:\\temp\\t3code-ssh-askpass\\ssh-askpass.cmd");
+      assert.equal(descriptor.launcherPath, "C:\\temp\\t3code-ssh-askpass\\ssh-askpass.exe");
       assert.deepEqual(
         descriptor.files.map((file) => file.path.split("\\").at(-1)),
-        ["ssh-askpass.cmd", "ssh-askpass.ps1"],
+        ["ssh-askpass.cs"],
       );
     }),
   );

@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - Windows askpass must be a native executable to preserve multiline OpenSSH arguments.
+import * as NodeChildProcess from "node:child_process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -94,24 +96,22 @@ printf 'T3_SSH_AUTH_PROMPT:%s\\n' "$(printf '%s' "$*" | base64 | tr -d '\\n')" >
 exit 1
 `;
 
-const ASKPASS_WINDOWS_LAUNCHER_SCRIPT = `@echo off\r
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ssh-askpass.ps1" %*\r
-`;
-
-const ASKPASS_WINDOWS_SCRIPT = `# Invoked by ssh via SSH_ASKPASS (through ssh-askpass.cmd) when T3 Code re-runs\r
-# ssh with a cached password from the renderer's in-app prompt. We never expose\r
-# a native dialog here - if T3_SSH_AUTH_SECRET is missing, that's a caller bug\r
-# and we fail loudly.\r
-[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)\r
-$promptText = $args -join ' '\r
-if ($env:T3_SSH_TRUST_PROMPT -and $promptText -eq $env:T3_SSH_TRUST_PROMPT) { [Console]::Out.WriteLine('yes'); exit 0 }\r
-if ($env:SSH_ASKPASS_PROMPT -eq 'confirm' -or $promptText.Contains('yes/no') -or $promptText.Contains('SHA256:')) { [Console]::Error.WriteLine('T3_SSH_PROMPT:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($promptText))); exit 1 }\r
-if ($null -ne $env:T3_SSH_AUTH_SECRET) {\r
-  [Console]::Out.WriteLine($env:T3_SSH_AUTH_SECRET)\r
-  exit 0\r
-}\r
-[Console]::Error.WriteLine('T3_SSH_AUTH_PROMPT:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($promptText)))\r
-exit 1\r
+const ASKPASS_WINDOWS_SOURCE = `using System;
+using System.Text;
+public static class T3SshAskpass {
+  public static int Main(string[] args) {
+    Console.OutputEncoding = new UTF8Encoding(false);
+    string prompt = String.Join(" ", args);
+    string trusted = Environment.GetEnvironmentVariable("T3_SSH_TRUST_PROMPT");
+    if (!String.IsNullOrEmpty(trusted) && String.Equals(prompt, trusted, StringComparison.Ordinal)) { Console.WriteLine("yes"); return 0; }
+    bool confirm = Environment.GetEnvironmentVariable("SSH_ASKPASS_PROMPT") == "confirm" || prompt.Contains("yes/no") || prompt.Contains("SHA256:");
+    if (confirm) { Console.Error.WriteLine("T3_SSH_PROMPT:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(prompt))); return 1; }
+    string secret = Environment.GetEnvironmentVariable("T3_SSH_AUTH_SECRET");
+    if (secret != null) { Console.WriteLine(secret); return 0; }
+    Console.Error.WriteLine("T3_SSH_AUTH_PROMPT:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(prompt)));
+    return 1;
+  }
+}
 `;
 
 const getDefaultSshAskpassDirectory = Effect.fn("ssh/auth.getDefaultSshAskpassDirectory")(
@@ -133,17 +133,12 @@ export const buildSshAskpassHelperDescriptor = Effect.fn(
   const directory = input.directory;
 
   if (platform === "win32") {
-    const powershellPath = joinSshAskpassPath(directory, "ssh-askpass.ps1", platform);
     return {
-      launcherPath: joinSshAskpassPath(directory, "ssh-askpass.cmd", platform),
+      launcherPath: joinSshAskpassPath(directory, "ssh-askpass.exe", platform),
       files: [
         {
-          path: joinSshAskpassPath(directory, "ssh-askpass.cmd", platform),
-          contents: ASKPASS_WINDOWS_LAUNCHER_SCRIPT,
-        },
-        {
-          path: powershellPath,
-          contents: ASKPASS_WINDOWS_SCRIPT,
+          path: joinSshAskpassPath(directory, "ssh-askpass.cs", platform),
+          contents: ASKPASS_WINDOWS_SOURCE,
         },
       ],
     };
@@ -182,6 +177,45 @@ const ensureSshAskpassHelpers = Effect.fn("ssh/auth.ensureSshAskpassHelpers")(fu
     }
   }
 
+  if (platform === "win32" && !(yield* fs.exists(descriptor.launcherPath))) {
+    // Windows PowerShell compiles a small .NET Framework console executable.
+    // No prompt or credential is passed through cmd.exe or the compiler.
+    yield* Effect.tryPromise({
+      try: (signal) =>
+        new Promise<void>((resolve, reject) => {
+          NodeChildProcess.execFile(
+            "powershell.exe",
+            [
+              "-NoLogo",
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              "$ErrorActionPreference='Stop'; Add-Type -Path $env:T3_SSH_HELPER_SOURCE -OutputAssembly $env:T3_SSH_HELPER_OUTPUT -OutputType ConsoleApplication",
+            ],
+            {
+              signal,
+              timeout: 20_000,
+              windowsHide: true,
+              env: {
+                ...process.env,
+                T3_SSH_HELPER_SOURCE: descriptor.files[0]!.path,
+                T3_SSH_HELPER_OUTPUT: descriptor.launcherPath,
+              },
+            },
+            (error) => (error ? reject(error) : resolve()),
+          );
+        }),
+      catch: (cause) =>
+        PlatformError.systemError({
+          _tag: "Unknown",
+          module: "SshAskpass",
+          method: "compile",
+          description:
+            "Could not prepare the Windows authentication helper. Windows PowerShell and .NET Framework are required.",
+          cause,
+        }),
+    });
+  }
   return descriptor.launcherPath;
 });
 
