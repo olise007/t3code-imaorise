@@ -226,6 +226,16 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
               ? installation.cancel(started.operationId).pipe(Effect.ignore)
               : Effect.void,
         );
+        if (installed?.phase === "succeeded") {
+          const executable = yield* installation
+            .resolve()
+            .pipe(Effect.mapError(failure(instanceId)));
+          installed = {
+            ...installed,
+            executablePath: executable.executablePath,
+            source: executable.source === "managed" ? "managed" : "local",
+          };
+        }
       } else {
         installed = yield* Effect.acquireUseRelease(
           archives.start(driver),

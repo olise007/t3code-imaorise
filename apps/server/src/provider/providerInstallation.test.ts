@@ -62,6 +62,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
     instance?: ProviderInstance;
     settings?: Parameters<typeof ServerSettings.layerTest>[0];
     archives?: Partial<ManagedProviderArchives.ManagedProviderArchives["Service"]>;
+    antigravity?: Partial<AntigravityInstallation.AntigravityInstallation["Service"]>;
   } = {},
 ) {
   const calls: string[] = [];
@@ -121,6 +122,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
               protectedPaths = paths ?? [];
               calls.push("remove");
             }),
+          ...input.antigravity,
         }),
       ),
     ),
@@ -129,6 +131,37 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
 });
 
 describe("provider installation routing", () => {
+  it.effect(
+    "resolves a successful Antigravity install when progress omits its executable path",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness({
+          antigravity: {
+            start: Effect.succeed({ ...state, phase: "succeeded", installedVersion: "1.3.0" }),
+            resolve: () =>
+              Effect.succeed({
+                executablePath: "/managed/agy",
+                harnessPath: "/managed/harness",
+                source: "managed",
+                version: "1.3.0",
+                managedVersionDirectory: "/managed",
+              }),
+          },
+        });
+        const result = yield* h.router.selected({
+          recipeRevision: 1,
+          operationId: "antigravity-selection",
+          drivers: [driver],
+        });
+        assert.include(result[0]!.message, "Installed and discovered");
+        assert.deepEqual(h.calls, ["refresh"]);
+      }).pipe(
+        Effect.provideService(HostProcess.Environment, { PATH: "" }),
+        Effect.scoped,
+        Effect.provide(NodeServices.layer),
+      ),
+  );
+
   it.effect("preserves custom provider executables and keeps authentication separate", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness({

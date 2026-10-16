@@ -75,6 +75,10 @@ const report: SshSetupReview = {
   ],
 };
 beforeEach(async () => {
+  Object.defineProperty(Element.prototype, "getAnimations", {
+    configurable: true,
+    value: () => [],
+  });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal(
     "ResizeObserver",

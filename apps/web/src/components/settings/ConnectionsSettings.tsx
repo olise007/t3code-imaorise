@@ -3637,7 +3637,7 @@ export function ConnectionsSettings() {
           <PlusIcon className="size-3.5" />
           {isAddingSavedBackend ? "Adding…" : routeTarget ? "Add route" : "Add environment"}
         </Button>
-        {isAddingSavedBackend ? (
+        {isAddingSavedBackend && desktopBridge?.cancelSshSetup ? (
           <Button
             variant="outline"
             onClick={() => {

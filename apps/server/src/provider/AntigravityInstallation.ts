@@ -114,7 +114,7 @@ export class AntigravityInstallation extends Context.Service<
 
 export interface AntigravityInstallationOptions {
   readonly baseDir: string;
-  /** Isolated acceptance can inspect failures without exposing native output in client state. */
+  /** Hosted acceptance supplies bounded diagnostics; client state never includes native output. */
   readonly onFailure?: (cause: Cause.Cause<AntigravityInstallationError>) => Effect.Effect<void>;
   readonly releaseAsset?: AntigravityReleaseAsset | null;
   readonly validate?: (

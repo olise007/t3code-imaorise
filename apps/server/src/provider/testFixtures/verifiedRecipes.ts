@@ -79,13 +79,15 @@ await Effect.runPromise(
     const antigravity = yield* AntigravityInstallation.makeAntigravityInstallation({
       baseDir: root,
       onFailure: (cause) =>
-        Effect.sync(() =>
-          process.stderr.write(
-            Cause.pretty(cause)
-              .slice(0, 1800)
-              .replace(/https?:\/\/\S+/gu, "<vendor-url>") + "\n",
-          ),
-        ),
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.void
+          : Effect.sync(() =>
+              process.stderr.write(
+                Cause.pretty(cause)
+                  .slice(0, 1800)
+                  .replace(/https?:\/\/\S+/gu, "<vendor-url>") + "\n",
+              ),
+            ),
     }).pipe(Effect.provideService(HostProcess.Environment, environment));
     for (const { driver, installation } of [
       { driver: "codex", installation: codex },
@@ -99,7 +101,7 @@ await Effect.runPromise(
         ),
       );
       NodeAssert.equal(done.phase, "succeeded", `${driver}: ${done.message}`);
-      NodeAssert.equal(done.source, "managed");
+      NodeAssert.equal((yield* installation.resolve()).source, "managed");
       process.stdout.write(
         `${driver}: existing managed installer verified its pinned vendor runtime. No sign-in requested.\n`,
       );
