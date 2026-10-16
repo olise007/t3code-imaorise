@@ -8,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
@@ -211,7 +212,10 @@ export const remoteStateKey = Effect.fn("ssh/command.remoteStateKey")(function* 
   // reconnect to its existing managed server. Local tunnel and credential keys
   // still use the full target identity; remote state belongs to the stable profile.
   const identity = target.manual
-    ? JSON.stringify(["manual", target.manual.profileId])
+    ? yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Schema.String)))([
+        "manual",
+        target.manual.profileId,
+      ]).pipe(Effect.orDie)
     : targetConnectionKey(target);
   const digest = yield* crypto.digest("SHA-256", encoder.encode(identity)).pipe(Effect.orDie);
   return Hex.encode(digest).slice(0, 16);
