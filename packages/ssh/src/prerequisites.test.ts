@@ -7,6 +7,7 @@ import { runSshCommand } from "./command.ts";
 import { SshCommandError } from "./errors.ts";
 import {
   buildSetupReview,
+  buildProviderChoices,
   inspectAndPrepare,
   linuxPackageInstallScript,
   parseInspection,
@@ -62,6 +63,27 @@ const review = (patch: Record<string, string> = {}) =>
 beforeEach(() => vi.mocked(runSshCommand).mockReset());
 
 describe("SSH prerequisite inspection and review", () => {
+  it("checks Windows provider shell dependencies without replacing a custom Git", () => {
+    const choices = (values: Record<string, string>) =>
+      buildProviderChoices("windows", new Map(Object.entries(values)));
+    expect(
+      choices({ "tool.git": "C:\\custom\\git.exe" }).find((p) => p.driver === "claudeAgent")
+        ?.available,
+    ).toBe(false);
+    expect(
+      choices({ "tool.git": "C:\\Git\\cmd\\git.exe", gitbash: "True" }).find(
+        (p) => p.driver === "claudeAgent",
+      )?.available,
+    ).toBe(true);
+    // Missing Git is already included in the reviewed Git-for-Windows installation.
+    expect(choices({}).find((p) => p.driver === "claudeAgent")?.available).toBe(true);
+    expect(
+      choices({ "tool.git": "custom", "tool.claude": "custom" }).find(
+        (p) => p.driver === "claudeAgent",
+      )?.installed,
+    ).toBe(true);
+    expect(choices({}).find((p) => p.driver === "cursor")?.reason).toContain("No pinned");
+  });
   it("detects libatomic and proposes the distribution's package without replacing glibc", () => {
     const report = review({ "libatomic.so.1": "" });
     expect(report.items.filter((i) => !i.installed).map((i) => i.id)).toEqual(["libatomic.so.1"]);

@@ -2,6 +2,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -77,6 +78,14 @@ await Effect.runPromise(
     );
     const antigravity = yield* AntigravityInstallation.makeAntigravityInstallation({
       baseDir: root,
+      onFailure: (cause) =>
+        Effect.sync(() =>
+          process.stderr.write(
+            Cause.pretty(cause)
+              .slice(0, 1800)
+              .replace(/https?:\/\/\S+/gu, "<vendor-url>") + "\n",
+          ),
+        ),
     }).pipe(Effect.provideService(HostProcess.Environment, environment));
     for (const { driver, installation } of [
       { driver: "codex", installation: codex },

@@ -114,6 +114,8 @@ export class AntigravityInstallation extends Context.Service<
 
 export interface AntigravityInstallationOptions {
   readonly baseDir: string;
+  /** Isolated acceptance can inspect failures without exposing native output in client state. */
+  readonly onFailure?: (cause: Cause.Cause<AntigravityInstallationError>) => Effect.Effect<void>;
   readonly releaseAsset?: AntigravityReleaseAsset | null;
   readonly validate?: (
     executable: AntigravityExecutable,
@@ -702,6 +704,9 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
         };
         yield* SubscriptionRef.set(state, next);
         const work = install(releaseAsset).pipe(
+          Effect.onExit((exit) =>
+            Exit.isFailure(exit) && options.onFailure ? options.onFailure(exit.cause) : Effect.void,
+          ),
           Effect.onExit((exit) =>
             Exit.isFailure(exit)
               ? SubscriptionRef.update(state, (value) => {

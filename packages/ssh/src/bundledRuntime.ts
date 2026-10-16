@@ -167,6 +167,15 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
 ) {
   const platform = yield* detectRemotePlatform(target, auth);
   const archive = platform === "windows" ? bundles.windows : bundles.linux;
+  if (
+    archive.requirements?.architecture !== undefined &&
+    archive.requirements.architecture !== "x64"
+  )
+    return yield* new SshLaunchError({
+      message:
+        "This desktop installation does not bundle the x64 server runtime required by the selected remote host.",
+      stdout: "",
+    });
   if (!/^[a-f0-9]{64}$/.test(archive.sha256))
     return yield* new SshLaunchError({
       message: "The bundled SSH runtime has no valid checksum.",

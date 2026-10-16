@@ -24,8 +24,6 @@ jobs:
       - run: vp install --frozen-lockfile
       - name: Focused SSH tests
         run: timeout 900 vp test run --maxWorkers 1 packages/ssh/src packages/client-runtime/src/connection/routes.test.ts packages/client-runtime/src/connection/resolver.test.ts apps/desktop/src/ssh apps/desktop/src/ipc/methods/sshEnvironment.test.ts apps/server/src/cli/sshManagedRuntime.test.ts apps/web/src/state/desktopSshHosts.test.ts apps/web/src/components/settings/ConnectionsSettings.logic.test.ts scripts/imaorise/publish-release.test.ts apps/server/src/provider/providerInstallation.test.ts apps/server/src/provider/ManagedProviderArchives.test.ts apps/server/src/provider/CodexInstallation.test.ts apps/server/src/provider/AntigravityInstallation.test.ts packages/shared/src/nodeRuntime.test.ts scripts/build-desktop-artifact.test.ts apps/web/src/components/desktop/SshPasswordPromptDialog.test.tsx apps/server/src/auth/RpcAuthorization.test.ts
-      - name: Verified vendor provider archives
-        run: timeout 900 node apps/server/src/provider/testFixtures/verifiedRecipes.ts
       - name: Isolated Linux OpenSSH session survival
         run: |
           apt-get update -qq
@@ -94,3 +92,6 @@ jobs:
       - name: Minimal Linux missing-libatomic review and installation
         timeout-minutes: 10
         run: node packages/ssh/src/testFixtures/prerequisitesSmoke.ts
+      - name: Verified Linux vendor provider archives
+        timeout-minutes: 15
+        run: node apps/server/src/provider/testFixtures/verifiedRecipes.ts

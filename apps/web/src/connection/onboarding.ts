@@ -55,12 +55,12 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
       setupCancellations.set(key, cancel);
       const environments = yield* EnvironmentRegistry.EnvironmentRegistry;
       const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
+      const crypto = yield* Crypto.Crypto;
       return yield* onboarding
         .registerSsh({
           ...input,
           afterRegistration: (environmentId, selectedProviders) =>
             Effect.gen(function* () {
-              const crypto = yield* Crypto.Crypto;
               const operationId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
               cancelCurrent = async () => {
                 const result = await serverEnvironment.cancelSelectedProviderInstall.run(atoms, {

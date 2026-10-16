@@ -14,6 +14,7 @@ import { SshLaunchError } from "./errors.ts";
 import {
   PROVIDER_RECIPE_CATALOG,
   providerArchiveRecipe,
+  NODE_PROVIDER_RUNTIME,
 } from "@t3tools/shared/providerInstallRecipes";
 
 // This fallback also serves old archives. New archives carry measured ABI floors.
@@ -37,13 +38,15 @@ export const runtimeRequirements = (
 
 export const linuxInspectionScript = `set -eu
 export LC_ALL=C
-printf 'identity=%s:%s:%s\\n' "$(cat /etc/machine-id 2>/dev/null || hostname)" "$(id -u)" "$HOME"
+machine=$(cat /etc/machine-id 2>/dev/null || true)
+if [ -z "$machine" ]; then machine=$(cat /proc/sys/kernel/hostname 2>/dev/null || hostname); fi
+printf 'identity=%s:%s:%s\\n' "$machine" "$(id -u)" "$HOME"
 printf 'architecture=%s\\nkernel=%s\\n' "$(uname -m)" "$(uname -r)"
 printf 'glibc=%s\\n' "$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
 if [ -r /etc/os-release ]; then . /etc/os-release; fi
 printf 'distribution=%s\\nfamily=%s\\n' "\${ID:-unknown}" "\${ID_LIKE:-}"
 manager=none
-case "\${ID:-} \${ID_LIKE:-}" in *debian*|*ubuntu*) command -v apt-get >/dev/null && manager=apt ;; *fedora*|*rhel*|*centos*|*rocky*|*almalinux*) if command -v dnf >/dev/null; then manager=dnf; elif command -v yum >/dev/null; then manager=yum; fi ;; esac
+case "\${ID:-} \${ID_LIKE:-}" in *debian*|*ubuntu*) if command -v apt-get >/dev/null; then manager=apt; fi ;; *fedora*|*rhel*|*centos*|*rocky*|*almalinux*) if command -v dnf >/dev/null; then manager=dnf; elif command -v yum >/dev/null; then manager=yum; fi ;; esac
 printf 'manager=%s\\n' "$manager"
 elevation=unavailable
 if [ "$(id -u)" = 0 ]; then elevation=root; elif command -v sudo >/dev/null; then elevation=sudo; fi
@@ -73,6 +76,10 @@ Write-Output 'manager=windows'
 if($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){Write-Output 'elevation=administrator'}else{Write-Output 'elevation=unavailable'}
 foreach($lib in @('VCRUNTIME140.dll','MSVCP140.dll')){Write-Output ($lib+'='+[string](Test-Path -LiteralPath (Join-Path $env:WINDIR ('System32/'+$lib))))}
 foreach($tool in @('git','node','npm','codex','claude','agent','grok','opencode','antigravity','pi','muse','winget.exe')){ $c=Get-Command $tool -ErrorAction SilentlyContinue; Write-Output ('tool.'+$tool+'='+$(if($c){$c.Source}else{''})) }
+$git=Get-Command git -ErrorAction SilentlyContinue
+$bash=$env:CLAUDE_CODE_GIT_BASH_PATH
+if(!$bash -and $git){$bash=Join-Path (Split-Path (Split-Path $git.Source -Parent) -Parent) 'bin/bash.exe'}
+Write-Output ('gitbash='+[string][bool]($bash -and (Test-Path -LiteralPath $bash)))
 Write-Output ('expand='+[string][bool](Get-Command Expand-Archive -ErrorAction SilentlyContinue))
 Write-Output ('checksum='+[string][bool](Get-Command Get-FileHash -ErrorAction SilentlyContinue))
 `;
@@ -84,6 +91,52 @@ export function parseInspection(output: string): ReadonlyMap<string, string> {
     if (at > 0 && line.length <= 4096) values.set(line.slice(0, at), line.slice(at + 1));
   }
   return values;
+}
+
+export function buildProviderChoices(
+  platform: "linux" | "windows",
+  values: ReadonlyMap<string, string>,
+): readonly SshProviderChoice[] {
+  return PROVIDER_RECIPE_CATALOG.map((entry) => {
+    const installed = Boolean(values.get(`tool.${entry.command}`));
+    const recipe = providerArchiveRecipe(entry.driver, platform);
+    const missingShell =
+      platform === "windows" &&
+      entry.driver === "claudeAgent" &&
+      Boolean(values.get("tool.git")) &&
+      values.get("gitbash") !== "True";
+    const available =
+      installed ||
+      (!missingShell &&
+        (entry.driver === "codex" || entry.driver === "antigravity" || recipe !== undefined));
+    const node = NODE_PROVIDER_RUNTIME[platform];
+    return {
+      driver: entry.driver,
+      label: entry.label,
+      version: entry.version,
+      source: recipe?.url ?? entry.source,
+      command: installed
+        ? "Reuse existing installation; no replacement"
+        : recipe
+          ? `Download ${recipe.url}; verify ${recipe.integrity}; tar -xf <verified archive> -C <private staging>; ${recipe.executable} --version; activate in the T3 user tools directory.`
+          : `Existing T3 managed installer: ${entry.driver} ${entry.version ?? ""}; verify vendor archive and executable before activation (user scope).`,
+      available,
+      installed,
+      reason: installed
+        ? "Existing/custom installations are preserved."
+        : missingShell
+          ? "The installed Git lacks Git Bash. Install Git for Windows/Bash or configure CLAUDE_CODE_GIT_BASH_PATH before selecting Claude. T3 will preserve the existing Git installation."
+          : available
+            ? "Installs after the T3 server connects. Sign in separately in provider settings."
+            : "No pinned, verified automatic installation recipe is available. Install using the vendor instructions, then refresh providers.",
+      dependencies:
+        entry.driver === "antigravity"
+          ? [`${entry.dependency}: ${node.url}; ${node.integrity}`]
+          : entry.dependency && platform === "windows"
+            ? [entry.dependency]
+            : [],
+    };
+  });
 }
 const atLeast = (actual: string, required: string) => {
   const a = actual.split(/[.-]/u).map(Number),
@@ -369,36 +422,7 @@ export const inspectAndPrepare = Effect.fn("ssh.prerequisites.prepare")(function
   const prompt = yield* SshPasswordPrompt;
   yield* input.progress("Inspecting remote prerequisites…");
   const values = parseInspection((yield* input.inspect()).stdout);
-  const providers =
-    input.providers ??
-    PROVIDER_RECIPE_CATALOG.map((entry) => {
-      const installed = Boolean(values.get(`tool.${entry.command}`));
-      const recipe = providerArchiveRecipe(entry.driver, input.requirements.platform);
-      const available =
-        installed ||
-        entry.driver === "codex" ||
-        entry.driver === "antigravity" ||
-        providerArchiveRecipe(entry.driver, input.requirements.platform) !== undefined;
-      return {
-        driver: entry.driver,
-        label: entry.label,
-        version: entry.version,
-        source: recipe?.url ?? entry.source,
-        command: installed
-          ? "Reuse existing installation; no replacement"
-          : recipe
-            ? `Download ${recipe.url}; verify ${recipe.integrity}; tar -xf <verified archive> -C <private staging>; ${recipe.executable} --version; activate in the T3 user tools directory.`
-            : `Existing T3 managed installer: ${entry.driver} ${entry.version ?? ""}; verify vendor archive and executable before activation (user scope).`,
-        available,
-        installed,
-        reason: installed
-          ? "Existing/custom installations are preserved."
-          : available
-            ? "Installs after the T3 server connects. Sign in separately in provider settings."
-            : "No pinned, verified automatic installation recipe is available. Install using the vendor instructions, then refresh providers.",
-        dependencies: entry.dependency ? [entry.dependency] : [],
-      };
-    });
+  const providers = input.providers ?? buildProviderChoices(input.requirements.platform, values);
   const review = buildSetupReview({
     ...input,
     values,
