@@ -38,6 +38,7 @@ import { SettingsRow } from "./settingsLayout";
 import { AddCodexAccountDialog } from "./AddCodexAccountDialog";
 import { getOnboardingProviderState } from "../../onboarding/providerReadiness.logic";
 import { getProviderSummary } from "./providerStatus";
+import { ProviderVersions } from "./ProviderVersions";
 
 const noop = () => undefined;
 
@@ -552,13 +553,39 @@ function ManagedCodexSetup({
         } else {
           await ensureLocalApi().shell.openExternal(authorizationUrl);
         }
-      } catch {
+      } catch (error) {
+        if (
+          requestedMethodId === "codex-browser" &&
+          receivingCallback.current === authorizationUrl &&
+          error instanceof Error &&
+          error.message.includes("callback port is in use")
+        ) {
+          // A native Codex on this computer owns 1455 itself. Let its listener
+          // finish directly, while retaining manual forwarding for remote hosts.
+          receivingCallback.current = null;
+          setCallbackHelpOpen(true);
+          try {
+            await ensureLocalApi().shell.openExternal(authorizationUrl);
+            return;
+          } catch {
+            /* Show the same actionable fallback below. */
+          }
+        }
         setError(
           "Could not finish sign-in on this computer. Try again or paste the redirect URL below.",
         );
       }
     },
-    [clientCallback, flowId, run, completeAuth, environmentId, instanceId, auth?.interaction?.type],
+    [
+      clientCallback,
+      flowId,
+      run,
+      completeAuth,
+      environmentId,
+      instanceId,
+      auth?.interaction?.type,
+      requestedMethodId,
+    ],
   );
 
   useEffect(() => {
@@ -825,6 +852,12 @@ function ManagedCodexSetup({
       <>
         {accountPicker}
         {otherSignInMethods}
+        <ProviderVersions
+          environmentId={environmentId}
+          instanceId={instanceId}
+          provider={"codex" as ServerProvider["driver"]}
+          readOnly={readOnly === true}
+        />
         <CodexWelcomeCard
           title={displayName || provider?.displayName || "Codex"}
           description={
@@ -950,6 +983,14 @@ function ManagedCodexSetup({
     <section aria-label="Codex setup" className="divide-y divide-border/50">
       {accountPicker}
       {otherSignInMethods}
+      {!allowExistingCli ? (
+        <ProviderVersions
+          environmentId={environmentId}
+          instanceId={instanceId}
+          provider={"codex" as ServerProvider["driver"]}
+          readOnly={readOnly === true}
+        />
+      ) : null}
       <SettingsRow
         title="ChatGPT account"
         description={accountDescription}

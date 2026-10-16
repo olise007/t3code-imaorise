@@ -1,4 +1,16 @@
 import type { DesktopSshEnvironmentTarget } from "@t3tools/contracts";
+export const sshSetupTargetKey = (target: DesktopSshEnvironmentTarget) =>
+  JSON.stringify([
+    target.alias,
+    target.hostname,
+    target.username,
+    target.port,
+    target.executionSource?.type === "wsl" ? target.executionSource.distro : "local",
+    target.manual?.profileId ?? null,
+    target.manual?.name ?? null,
+    target.manual?.authentication.type ?? null,
+    target.manual?.authentication.type === "key" ? target.manual.authentication.identityFile : null,
+  ]);
 
 export interface SshSetupAttempt {
   readonly id: string;
@@ -33,6 +45,12 @@ export function createSshSetupProgress() {
       };
     },
     snapshot: () => attempts,
+    runningOperation: (target: DesktopSshEnvironmentTarget) =>
+      attempts.find(
+        (attempt) =>
+          attempt.status === "running" &&
+          sshSetupTargetKey(attempt.target) === sshSetupTargetKey(target),
+      )?.id,
     begin: (target: DesktopSshEnvironmentTarget) => {
       const id = `ssh-setup-${Date.now()}-${++nextId}`;
       attempts = [
@@ -62,12 +80,12 @@ export function createSshSetupProgress() {
           { sequence: (item.lines.at(-1)?.sequence ?? 0) + 1, time: Date.now(), text: safe },
         ];
         let bytes = lines.reduce(
-          (sum, line) => sum + new TextEncoder().encode(line.text).length,
+          (sum, line) => sum + new TextEncoder().encode(line.text).length + 32,
           0,
         );
         let truncated = item.truncated;
         while (lines.length > 2000 || bytes > 262144) {
-          bytes -= new TextEncoder().encode(lines.shift()!.text).length;
+          bytes -= new TextEncoder().encode(lines.shift()!.text).length + 32;
           truncated = true;
         }
         return { ...item, lines, truncated };

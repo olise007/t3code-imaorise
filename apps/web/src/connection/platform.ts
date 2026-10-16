@@ -61,6 +61,7 @@ import {
 } from "./desktopLocal";
 import * as ConnectionStorage from "./storage";
 import { clientPresentationMetadata } from "./clientMetadata";
+import { sshSetupProgress } from "./sshSetupProgress";
 
 let nextObservedRpcRequestId = 0;
 
@@ -193,6 +194,9 @@ export const provisionDesktopSshEnvironment = Effect.fn(
   const bootstrap = yield* Effect.tryPromise({
     try: () =>
       bridge.ensureSshEnvironment(target, {
+        ...(sshSetupProgress.runningOperation(target)
+          ? { operationId: sshSetupProgress.runningOperation(target)! }
+          : {}),
         issuePairingToken: true,
         supportsSetupReview: bridge.resolveSshSetupReview !== undefined,
       }),

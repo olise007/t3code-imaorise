@@ -161,6 +161,7 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
         });
       const selected = yield* catalog.resolve(input.provider, input.targetVersion);
       if (
+        selected.release.version !== input.targetVersion ||
         !selected.release.available ||
         !selected.artifact ||
         selected.release.integrity !== input.expectedIntegrity ||
@@ -223,6 +224,45 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
                         operation: "activate",
                         detail:
                           cause instanceof Error ? cause.message : "Installation settings changed.",
+                      }),
+                  ),
+                ),
+                Effect.gen(function* () {
+                  const replacements: Record<string, ProviderInstanceConfig> = {};
+                  for (const id of initial.affected) {
+                    const previous = initial.entries[id]!;
+                    const value = configObject(previous.config) ? previous.config : {};
+                    if (value.setupMode !== "managed" && typeof value.binaryPath === "string")
+                      replacements[id] = {
+                        ...previous,
+                        config: {
+                          ...value,
+                          binaryPath: path.join(
+                            codex.managedDirectory,
+                            input.targetVersion!,
+                            "bin",
+                            path.basename(value.binaryPath),
+                          ),
+                        },
+                      };
+                  }
+                  if (Object.keys(replacements).length > 0) {
+                    if (!settings.activateProviderInstallation)
+                      return yield* new CodexInstallation.CodexInstallationError({
+                        operation: "activate",
+                        detail: "Update T3 Code before changing this shared installation.",
+                      });
+                    yield* settings.activateProviderInstallation(
+                      initial.current.providerInstances,
+                      replacements,
+                    );
+                  }
+                }).pipe(
+                  Effect.mapError(
+                    () =>
+                      new CodexInstallation.CodexInstallationError({
+                        operation: "activate",
+                        detail: "Provider settings changed; the previous selection was restored.",
                       }),
                   ),
                 ),

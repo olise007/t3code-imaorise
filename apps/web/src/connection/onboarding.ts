@@ -14,11 +14,11 @@ import * as Stream from "effect/Stream";
 import { serverEnvironment } from "../state/server";
 
 import { connectionAtomRuntime } from "./runtime";
-import { sshSetupProgress } from "./sshSetupProgress";
+import { sshSetupProgress, sshSetupTargetKey } from "./sshSetupProgress";
 
 const onboardingScheduler = createAtomCommandScheduler();
 const setupCancellations = new Map<string, () => Promise<unknown>>();
-const setupKey = (target: DesktopSshEnvironmentTarget) => JSON.stringify(target);
+const setupKey = sshSetupTargetKey;
 export const cancelSshEnvironmentSetup = async (target: DesktopSshEnvironmentTarget) => {
   await setupCancellations.get(setupKey(target))?.();
 };
@@ -46,6 +46,7 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
   execute: (
     input: ConnectionOnboarding.SshConnectionInput & {
       readonly credentials?: { readonly secret: string; readonly remember: boolean };
+      readonly testOnly?: boolean;
     },
     atoms,
   ) =>
@@ -53,18 +54,32 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
       const key = setupKey(input.target);
       const progressId = sshSetupProgress.begin(input.target);
       sshSetupProgress.append(progressId, "Starting SSH environment setup");
-      const unsubscribe = window.desktopBridge?.onSshConnectionProgress?.(({ target, stage }) => {
-        if (
-          target.alias === input.target.alias &&
-          JSON.stringify(target.executionSource ?? { type: "local" }) ===
-            JSON.stringify(input.target.executionSource ?? { type: "local" }) &&
-          target.manual?.profileId === input.target.manual?.profileId
-        )
-          sshSetupProgress.append(
-            progressId,
-            stage === "Connected" ? "Environment connected" : stage,
-          );
-      });
+      let lastSequence = 0;
+      const unsubscribe = window.desktopBridge?.onSshConnectionProgress?.(
+        ({ target, stage, operationId, sequence }) => {
+          if (operationId !== undefined) {
+            if (operationId !== progressId || sequence === undefined || sequence <= lastSequence)
+              return;
+            lastSequence = sequence;
+            sshSetupProgress.append(
+              progressId,
+              stage === "Connected" ? "Environment connected" : stage,
+            );
+            return;
+          }
+          if (
+            target.alias === input.target.alias &&
+            JSON.stringify(target.executionSource ?? { type: "local" }) ===
+              JSON.stringify(input.target.executionSource ?? { type: "local" }) &&
+            target.manual?.profileId === input.target.manual?.profileId &&
+            (!target.manual || sshSetupTargetKey(target) === sshSetupTargetKey(input.target))
+          )
+            sshSetupProgress.append(
+              progressId,
+              stage === "Connected" ? "Environment connected" : stage,
+            );
+        },
+      );
       let cancelled = false;
       let cancelCurrent = () =>
         window.desktopBridge?.cancelSshSetup?.(input.target) ?? Promise.resolve();
@@ -81,13 +96,14 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
       const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
       const crypto = yield* Crypto.Crypto;
       return yield* Effect.gen(function* () {
-        if (input.credentials && window.desktopBridge) {
+        if ((input.credentials || input.testOnly) && window.desktopBridge) {
           const bootstrap = yield* Effect.tryPromise({
             try: () =>
               window.desktopBridge!.ensureSshEnvironment(input.target, {
                 testOnly: true,
-                ...(input.credentials!.secret ? { authSecret: input.credentials!.secret } : {}),
-                rememberSecret: input.credentials!.remember,
+                operationId: progressId,
+                ...(input.credentials?.secret ? { authSecret: input.credentials.secret } : {}),
+                rememberSecret: input.testOnly ? false : input.credentials?.remember === true,
               }),
             catch: () =>
               new ConnectionTransientError({
@@ -99,6 +115,7 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
           for (const warning of bootstrap.setupWarnings ?? [])
             sshSetupProgress.append(progressId, warning);
         }
+        if (input.testOnly) return;
         return yield* onboarding.registerSsh({
           target: input.target,
           ...(input.label === undefined ? {} : { label: input.label }),

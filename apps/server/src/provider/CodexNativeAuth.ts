@@ -273,7 +273,7 @@ export const makeCodexNativeAuth = Effect.fn("makeCodexNativeAuth")(function* (o
         )
         .pipe(Effect.mapError(() => fail("logout", "Could not disconnect native Codex.")));
       return true;
-    }),
+    }).pipe(Effect.mapError(() => fail("logout", "Could not disconnect native Codex."))),
     nativeEnvironment,
     nativeArgs,
   };

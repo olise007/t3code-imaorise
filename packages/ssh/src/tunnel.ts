@@ -92,7 +92,11 @@ export interface RemoteT3RunnerOptions {
 
 export interface SshEnvironmentManagerOptions {
   readonly resolveCliRunner?: Effect.Effect<RemoteT3RunnerOptions>;
-  readonly onProgress?: (target: DesktopSshEnvironmentTarget, stage: string) => Effect.Effect<void>;
+  readonly onProgress?: (
+    target: DesktopSshEnvironmentTarget,
+    stage: string,
+    correlation?: { operationId: string; sequence: number },
+  ) => Effect.Effect<void>;
 }
 
 interface SshTunnelEntry {
@@ -164,6 +168,7 @@ interface SshAuthAttemptInput<T> extends SshAuthOperationInput<T> {
 }
 
 export interface SshEnvironmentManagerShape {
+  readonly forgetAuthentication?: (target: DesktopSshEnvironmentTarget) => Effect.Effect<void>;
   readonly authenticatedSecret?: (target: DesktopSshEnvironmentTarget) => string | undefined;
   readonly stopEnvironment: (
     target: DesktopSshEnvironmentTarget,
@@ -171,6 +176,7 @@ export interface SshEnvironmentManagerShape {
   readonly ensureEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: {
+      operationId?: string;
       authSecret?: string;
       testOnly?: boolean;
       readonly issuePairingToken?: boolean;
@@ -1396,8 +1402,18 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const tunnels = new Map<string, SshTunnelEntry>();
   const targetLocks = yield* KeyedLock.make<string>();
   const authSecrets = new Map<string, string>();
+  const operations = new Map<string, string>();
+  const sequences = new Map<string, number>();
   const reportProgress = (target: DesktopSshEnvironmentTarget, stage: string) =>
-    options.onProgress?.(target, stage) ?? Effect.void;
+    Effect.suspend(() => {
+      const operationId = operations.get(targetConnectionKey(target));
+      const sequence = operationId ? (sequences.get(operationId) ?? 0) + 1 : 0;
+      if (operationId) sequences.set(operationId, sequence);
+      return (
+        options.onProgress?.(target, stage, operationId ? { operationId, sequence } : undefined) ??
+        Effect.void
+      );
+    });
   const trustedHostPrompts = new Map<string, string>();
 
   // Keep one lock per target so reconnect cannot reuse a server while stop is pending.
@@ -1731,6 +1747,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const ensureEnvironment = Effect.fn("ssh/tunnel.ensureEnvironment")(function* (
     target: DesktopSshEnvironmentTarget,
     requestOptions?: {
+      operationId?: string;
       authSecret?: string;
       testOnly?: boolean;
       readonly issuePairingToken?: boolean;
@@ -1765,6 +1782,16 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return yield* withTargetLock(
       key,
       Effect.gen(function* () {
+        const operationId =
+          requestOptions?.operationId ?? (yield* (yield* Crypto.Crypto).randomUUIDv4);
+        operations.set(key, operationId);
+        if (sequences.size > 64)
+          for (const id of sequences.keys()) {
+            if (!Array.from(operations.values()).includes(id)) {
+              sequences.delete(id);
+              break;
+            }
+          }
         if (requestOptions?.authSecret !== undefined)
           authSecrets.set(key, requestOptions.authSecret);
         // Only this harmless preflight may retry authentication. Never replay
@@ -1864,7 +1891,13 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           remotePort: entry.remotePort,
           ...(entry.remoteServerKind ? { remoteServerKind: entry.remoteServerKind } : {}),
         };
-      }),
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            operations.delete(key);
+          }),
+        ),
+      ),
     );
   });
 
@@ -1906,6 +1939,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   });
 
   return SshEnvironmentManager.of({
+    forgetAuthentication: (target) =>
+      Effect.sync(() => {
+        const key = targetConnectionKey(target);
+        authSecrets.delete(key);
+        trustedHostPrompts.delete(key);
+      }),
     authenticatedSecret: (target) => authSecrets.get(targetConnectionKey(target)),
     ensureEnvironment,
     disconnectEnvironment,

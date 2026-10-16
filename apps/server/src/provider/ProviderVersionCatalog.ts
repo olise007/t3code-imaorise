@@ -13,7 +13,8 @@ import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import * as Stream from "effect/Stream";
+import { HttpClient, HttpClientRequest } from "effect/http";
 import * as ModelManifest from "./ModelManifest.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
@@ -93,7 +94,22 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
         ),
       )
       .pipe(
-        Effect.flatMap(HttpClientResponse.schemaBodyJson(schema)),
+        Effect.flatMap((response) =>
+          Effect.gen(function* () {
+            let bytes = 0;
+            const text = yield* response.stream.pipe(
+              Stream.mapEffect((chunk) => {
+                bytes += chunk.length;
+                return bytes <= 16 * 1024 * 1024
+                  ? Effect.succeed(chunk)
+                  : Effect.fail("The official catalog exceeds the supported response limit.");
+              }),
+              Stream.decodeText(),
+              Stream.mkString,
+            );
+            return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text);
+          }),
+        ),
         Effect.scoped,
         Effect.timeout("30 seconds"),
       );
@@ -162,7 +178,7 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
               archiveBytes: asset.size,
             },
           }
-        : recipe
+        : recipe && arch === "x64" && (platform === "linux" || platform === "win32")
           ? {
               kind: "archive",
               recipe: { ...recipe, version, url: asset.browser_download_url, integrity },
@@ -291,6 +307,8 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
             `https://api.github.com/repos/${repo}/releases/tags/${provider === "codex" ? "rust-v" : "v"}${version}`,
             GithubRelease,
           );
+          if (entry.draft || entry.tag_name.replace(/^(?:rust-)?v/, "") !== version)
+            return yield* error(provider);
           return yield* fromGithub(provider, entry, null);
         }
         // Npm catalogs have no pagination endpoint; resolve the exact dist metadata again.

@@ -23,6 +23,7 @@ import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeUtil from "node:util";
+import { createSetupDetails, sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
 
 import * as ModelManifest from "./ModelManifest.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
@@ -137,17 +138,14 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
             return stream;
           }
           const decoder = new TextDecoder();
-          let partialLine = "";
+          let latest: string | null = null;
+          const safeDetails = createSetupDetails((line) => {
+            latest = toProgressLine(line);
+          });
           return stream.pipe(
             Stream.tap((chunk) => {
-              const split = splitOutputLines(partialLine, decoder.decode(chunk, { stream: true }));
-              partialLine = split.partialLine;
-              // A progress bar that redraws with a leading `\r` keeps its newest
-              // frame unterminated, so that frame is the latest status.
-              const line =
-                toProgressLine(split.partialLine) ??
-                split.lines.map(toProgressLine).findLast((value) => value !== null);
-              return line ? Ref.set(pendingProgress, line) : Effect.void;
+              safeDetails.push(decoder.decode(chunk, { stream: true }));
+              return latest ? Ref.set(pendingProgress, latest) : Effect.void;
             }),
           );
         };
@@ -221,7 +219,9 @@ export function splitOutputLines(
 
 /** Turn one raw output line into a short status message, or null if it has no text. */
 export function toProgressLine(line: string): string | null {
-  const text = NodeUtil.stripVTControlCharacters(line).replace(/\s+/g, " ").trim();
+  const text = sanitizeSetupOutput(NodeUtil.stripVTControlCharacters(line))
+    .replace(/\s+/g, " ")
+    .trim();
   if (text.length === 0) {
     return null;
   }
@@ -246,7 +246,9 @@ function truncateText(value: string, maxLength: number): string {
 }
 
 function commandOutput(result: ProviderMaintenanceCommandResult): string | null {
-  const output = trimNullable([result.stderr, result.stdout].filter(Boolean).join("\n\n"));
+  const output = trimNullable(
+    sanitizeSetupOutput([result.stderr, result.stdout].filter(Boolean).join("\n\n")),
+  );
   if (!output) {
     return null;
   }
@@ -258,7 +260,10 @@ function failureMessage(result: ProviderMaintenanceCommandResult): string {
     return "Update timed out.";
   }
   if (result.exitCode !== null && result.exitCode !== 0) {
-    return `Update command exited with code ${result.exitCode}.`;
+    const detail = commandOutput(result)
+      ?.split("\n")
+      .findLast((line) => line.trim());
+    return `Update command exited with code ${result.exitCode}.${detail ? ` ${detail.slice(0, 300)}` : ""}`;
   }
   return "Update command failed.";
 }
@@ -489,7 +494,9 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                   (reviewed
                     ? advisory?.status === "broken" ||
                       advisory?.status === "unsupported" ||
-                      (advisory?.status !== "supported" && !allowUnknown)
+                      (advisory?.status !== "supported" &&
+                        advisory?.status !== "graceful" &&
+                        !allowUnknown)
                     : advisory?.recommendedVersion !== targetVersion ||
                       advisory.status !== "supported")
                 : advisory?.status === "broken" || advisory?.status === "unsupported";

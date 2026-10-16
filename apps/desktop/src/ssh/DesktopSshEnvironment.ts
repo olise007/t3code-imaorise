@@ -60,6 +60,7 @@ export class DesktopSshEnvironment extends Context.Service<
   DesktopSshEnvironment,
   {
     readonly cancelSetup: (target: DesktopSshEnvironmentTarget) => Effect.Effect<void>;
+    readonly forgetCredentials?: (target: DesktopSshEnvironmentTarget) => Effect.Effect<void>;
     readonly discoverHosts: (input?: {
       readonly homeDir?: string;
     }) => Effect.Effect<readonly DesktopDiscoveredSshHost[], DesktopSshEnvironmentDiscoverError>;
@@ -70,6 +71,7 @@ export class DesktopSshEnvironment extends Context.Service<
     readonly ensureEnvironment: (
       target: DesktopSshEnvironmentTarget,
       options?: {
+        operationId?: string;
         authSecret?: string;
         rememberSecret?: boolean;
         testOnly?: boolean;
@@ -207,6 +209,14 @@ export const make = Effect.gen(function* () {
   >();
 
   return DesktopSshEnvironment.of({
+    forgetCredentials: (target) =>
+      Effect.gen(function* () {
+        if (!target.manual) return;
+        const fiber = setups.get(targetConnectionKey(target));
+        if (fiber) yield* Fiber.interrupt(fiber);
+        yield* manager.forgetAuthentication?.(target) ?? Effect.void;
+        yield* fs.remove(yield* secretPath(target), { force: true }).pipe(Effect.orDie);
+      }),
     cancelSetup: (target) =>
       Effect.gen(function* () {
         const fiber = setups.get(targetConnectionKey(target));

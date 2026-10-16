@@ -165,6 +165,16 @@ export const cancelSshSetup = DesktopIpc.makeIpcMethod({
       service.cancelSetup(target),
     ),
 });
+export const forgetSshCredentials = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.FORGET_SSH_CREDENTIALS_CHANNEL,
+  payload: DesktopSshEnvironmentTargetSchema,
+  result: Schema.Void,
+  handler: (target) =>
+    Effect.flatMap(
+      DesktopSshEnvironment.DesktopSshEnvironment,
+      (service) => service.forgetCredentials?.(target) ?? Effect.void,
+    ),
+});
 
 export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.ENSURE_SSH_ENVIRONMENT_CHANNEL,

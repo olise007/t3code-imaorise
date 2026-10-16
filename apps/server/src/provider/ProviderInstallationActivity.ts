@@ -25,11 +25,12 @@ const wait = (ready: () => boolean) =>
       listeners.delete(check);
     });
   });
-const enter = (id: string) =>
+const enter = (id: string, acquired: () => void) =>
   Effect.callback<void>((resume) => {
     const check = () => {
       if (blocked.has(id)) return;
       counts.set(id, (counts.get(id) ?? 0) + 1);
+      acquired();
       listeners.delete(check);
       resume(Effect.void);
     };
@@ -73,18 +74,41 @@ export const reserveProviderInstallationIdle = (ids: readonly ProviderInstanceId
       }),
   ).pipe(Effect.andThen(wait(() => ids.every((id) => !counts.has(id)))));
 
+export const trackProviderInstallationWork = <A, E, R>(
+  id: ProviderInstanceId,
+  task: Effect.Effect<A, E, R>,
+) =>
+  Effect.suspend(() => {
+    let acquired = false;
+    return Effect.acquireUseRelease(
+      Effect.interruptible(
+        enter(id, () => {
+          acquired = true;
+        }),
+      ).pipe(Effect.onInterrupt(() => (acquired ? leave(id) : Effect.void))),
+      () => task,
+      () => leave(id),
+    );
+  });
+
 export const protectProviderInstallation = Effect.fn("protectProviderInstallation")(function* (
   instance: ProviderInstance,
 ) {
   const id = instance.instanceId;
   const track = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.acquireUseRelease(
-      enter(id),
-      () => effect,
-      () => leave(id),
-    );
+    trackProviderInstallationWork(id, effect);
   const scoped = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    Effect.acquireRelease(enter(id), () => leave(id)).pipe(Effect.andThen(effect));
+    Effect.suspend(() => {
+      let acquired = false;
+      return Effect.acquireRelease(
+        Effect.interruptible(
+          enter(id, () => {
+            acquired = true;
+          }),
+        ).pipe(Effect.onInterrupt(() => (acquired ? leave(id) : Effect.void))),
+        () => leave(id),
+      ).pipe(Effect.andThen(effect));
+    });
   if (instance.auth) {
     let active = false;
     const auth = instance.auth;

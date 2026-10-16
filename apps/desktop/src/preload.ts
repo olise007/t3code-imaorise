@@ -158,6 +158,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   stopSshEnvironment: (target) =>
     ipcRenderer.invoke(IpcChannels.STOP_SSH_ENVIRONMENT_CHANNEL, target),
   cancelSshSetup: (target) => ipcRenderer.invoke(IpcChannels.CANCEL_SSH_SETUP_CHANNEL, target),
+  forgetSshCredentials: (target) =>
+    ipcRenderer.invoke(IpcChannels.FORGET_SSH_CREDENTIALS_CHANNEL, target),
   ensureSshEnvironment: async (target, options) =>
     unwrapEnsureSshEnvironmentResult(
       await ipcRenderer.invoke(IpcChannels.ENSURE_SSH_ENVIRONMENT_CHANNEL, {

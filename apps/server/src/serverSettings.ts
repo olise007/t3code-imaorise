@@ -1237,10 +1237,15 @@ const make = Effect.gen(function* () {
       updateAndPersistSettings((current) =>
         Effect.gen(function* () {
           for (const [instanceId, previous] of Object.entries(expected)) {
-            if (!Equal.equals(current.providerInstances[instanceId], previous))
+            if (
+              !Equal.equals(
+                current.providerInstances[ProviderInstanceId.make(instanceId)],
+                previous,
+              )
+            )
               return yield* new ServerSettingsError({
                 settingsPath,
-                operation: "activate-provider-installation",
+                operation: "write-file",
                 cause: new Error(
                   "Provider settings changed during the download. Review the installation again.",
                 ),

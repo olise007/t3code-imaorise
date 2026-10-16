@@ -284,7 +284,10 @@ it.effect("requires an update before running an older activated managed installa
     expect((yield* Effect.flip(restarted.installation.resolve())).detail).toContain(
       "outside the supported range",
     );
-    yield* restarted.installation.start;
+    expect((yield* Effect.flip(restarted.installation.start)).detail).toContain(
+      "outside the supported range",
+    );
+    yield* restarted.installation.startVersion!(restarted.asset, false);
     expect((yield* terminalState(restarted.installation)).phase).toBe("succeeded");
     expect((yield* restarted.installation.resolve()).version).toBe("0.156.1");
     expect(restarted.downloads()).toBe(1);

@@ -78,10 +78,8 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
         auth: { status: "unauthenticated" as const },
       };
     const saved = yield* runtime.auth.read.pipe(Effect.orElseSucceed(() => Option.none()));
-    const nativeSelection = yield* runtime.native.read.pipe(
-      Effect.orElseSucceed(() => Option.some({ mode: "unavailable" as const, homePath: "" })),
-    );
-    if (Option.isSome(nativeSelection) && nativeSelection.value.mode === "unavailable")
+    const nativeResult = yield* Effect.result(runtime.native.read);
+    if (nativeResult._tag === "Failure")
       return {
         ...base,
         installed: true,
@@ -89,6 +87,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
         auth: { status: "unknown" as const },
         message: "Could not read the selected sign-in method. Reconnect and try again.",
       };
+    const nativeSelection = nativeResult.success;
     if (Option.isSome(nativeSelection) && nativeSelection.value.mode === "disconnected")
       return {
         ...base,

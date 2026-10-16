@@ -144,7 +144,7 @@ export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function
       yield* fs.makeDirectory(trust, { recursive: true, mode: 0o700 }).pipe(Effect.orDie);
     manualArgs.push(
       "-o",
-      `UserKnownHostsFile=${target.executionSource?.type === "wsl" ? "~/.t3-imaorise/ssh/known_hosts" : path.join(trust, "known_hosts")}`,
+      `UserKnownHostsFile="${target.executionSource?.type === "wsl" ? "~/.t3-imaorise/ssh/known_hosts" : path.join(trust, "known_hosts").replaceAll("\\", "/").replaceAll('"', '\\"')}"`,
     );
   }
   const sshArgs = [...manualArgs, ...args];
@@ -389,7 +389,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
         Stream.decodeText(),
         Stream.runForEach((chunk) =>
           Effect.gen(function* () {
-            result += chunk;
+            result = (result + chunk).slice(-1024 * 1024);
             details.push(chunk);
             for (const line of lines.splice(0)) yield* input.onDetails!(line);
           }),

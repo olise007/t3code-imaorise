@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./setupDetails": {
+      "types": "./src/setupDetails.ts",
+      "import": "./src/setupDetails.ts"
+    },
     "./userMessageCollapse": {
       "types": "./src/userMessageCollapse.ts",
       "import": "./src/userMessageCollapse.ts"

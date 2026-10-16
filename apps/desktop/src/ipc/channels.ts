@@ -136,3 +136,4 @@ export const GET_WSL_PAIRING_STATE_CHANNEL = "desktop:get-wsl-pairing-state";
 export const SET_WSL_PAIRING_ROUTE_CHANNEL = "desktop:set-wsl-pairing-route";
 export const RESOLVE_SSH_SETUP_REVIEW_CHANNEL = "desktop:resolve-ssh-setup-review";
 export const CANCEL_SSH_SETUP_CHANNEL = "desktop:cancel-ssh-setup";
+export const FORGET_SSH_CREDENTIALS_CHANNEL = "desktop:forget-ssh-credentials";

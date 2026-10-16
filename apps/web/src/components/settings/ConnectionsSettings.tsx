@@ -61,6 +61,9 @@ import {
   RelayConnectionRegistration,
   RelayConnectionTarget,
   connectionRoutes,
+  connectionRouteId,
+  sshTargetKey,
+  type ConnectionRoute,
   connectionStatusText,
   environmentMcpUrl,
 } from "@t3tools/client-runtime/connection";
@@ -318,6 +321,7 @@ function parseManualDesktopSshTarget(input: {
 
   const rawPort = input.port.trim();
   if (rawPort.length > 0) {
+    if (!/^\d+$/.test(rawPort)) throw new Error("SSH port must contain digits only.");
     port = Number.parseInt(rawPort, 10);
   }
 
@@ -1480,6 +1484,7 @@ type SavedBackendListRowProps = {
   onSetEnabled: (environmentId: EnvironmentId, enabled: boolean) => Promise<boolean>;
   onRemove: (environment: EnvironmentPresentation) => void;
   onAddRoute: (environment: EnvironmentPresentation) => void;
+  onEditSsh: (environment: EnvironmentPresentation, route: ConnectionRoute) => void;
 };
 
 /**
@@ -1530,6 +1535,7 @@ function SavedBackendListRow({
   onSetEnabled,
   onRemove,
   onAddRoute,
+  onEditSsh,
 }: SavedBackendListRowProps) {
   const desktopBridge = window.desktopBridge;
   const [routesOpen, setRoutesOpen] = useState(false);
@@ -1750,6 +1756,7 @@ function SavedBackendListRow({
             <EnvironmentRoutesList
               environment={environment}
               onAddRoute={() => onAddRoute(environment)}
+              onEditSsh={(route) => onEditSsh(environment, route)}
             />
           )}
           {permissionsOpen && (
@@ -2523,6 +2530,11 @@ export function ConnectionsSettings() {
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [sshManual, setSshManual] = useState(false);
+  const [editingSshRoute, setEditingSshRoute] = useState<string | null>(null);
+  const removeEditedSshRoute = useAtomCommand(
+    environmentCatalog.removeRoute,
+    "Replace SSH profile",
+  );
   const sshFormId = useId();
   const [sshProfileId, setSshProfileId] = useState(() => `${sshFormId}:${Date.now()}`);
   const [sshName, setSshName] = useState("");
@@ -2530,6 +2542,7 @@ export function ConnectionsSettings() {
   const [sshIdentityFile, setSshIdentityFile] = useState("");
   const [sshSecret, setSshSecret] = useState("");
   const [sshRememberSecret, setSshRememberSecret] = useState(false);
+  const [sshTestResult, setSshTestResult] = useState<string | null>(null);
   const [sshSource, setSshSource] = useState<DesktopSshExecutionSource>({ type: "local" });
   const [isRefreshingSshHosts, setIsRefreshingSshHosts] = useState(false);
   const [sshProgress, setSshProgress] = useState<string | null>(null);
@@ -2930,12 +2943,14 @@ export function ConnectionsSettings() {
     async (
       target: DesktopSshEnvironmentTarget,
       credentials?: { secret: string; remember: boolean },
+      testOnly = false,
     ) => {
       activeSshSetupTarget.current = target;
       setIsAddingSavedBackend(true);
       setSavedBackendError(null);
       const result = await connectSshEnvironment({
         target,
+        ...(testOnly ? { testOnly: true } : {}),
         ...(credentials ? { credentials } : {}),
         label: target.manual?.name ?? "",
         ...(routeTarget ? { expectedEnvironmentId: routeTarget.environmentId } : {}),
@@ -2948,6 +2963,25 @@ export function ConnectionsSettings() {
         setIsAddingSavedBackend(false);
         return;
       }
+
+      if (testOnly) {
+        setSshTestResult(
+          `Authentication succeeded for ${target.username ?? "SSH user"}@${target.hostname}. No runtime was installed or started.`,
+        );
+        setIsAddingSavedBackend(false);
+        return;
+      }
+      if (
+        routeTarget &&
+        editingSshRoute &&
+        editingSshRoute !== `ssh:${routeTarget.environmentId}:${sshTargetKey(target)}`
+      ) {
+        await removeEditedSshRoute({
+          environmentId: routeTarget.environmentId,
+          routeId: editingSshRoute,
+        });
+      }
+      setEditingSshRoute(null);
 
       setSavedBackendHost("");
       setSavedBackendPairingCode("");
@@ -2964,84 +2998,66 @@ export function ConnectionsSettings() {
       });
       setIsAddingSavedBackend(false);
     },
-    [connectSshEnvironment, routeTarget],
+    [connectSshEnvironment, routeTarget, editingSshRoute, removeEditedSshRoute],
   );
 
-  const handleAddSavedBackend = useCallback(async () => {
-    if (savedBackendMode === "ssh") {
-      let target: DesktopSshEnvironmentTarget;
-      try {
-        target = parseManualDesktopSshTarget({
-          host: savedBackendSshHost,
-          username: savedBackendSshUsername,
-          port: savedBackendSshPort,
-        });
-      } catch (error) {
-        setSavedBackendError(formatDesktopSshConnectionError(error));
+  const handleAddSavedBackend = useCallback(
+    async (testOnly = false) => {
+      if (savedBackendMode === "ssh") {
+        let target: DesktopSshEnvironmentTarget;
+        try {
+          target = parseManualDesktopSshTarget({
+            host: savedBackendSshHost,
+            username: savedBackendSshUsername,
+            port: savedBackendSshPort,
+          });
+        } catch (error) {
+          setSavedBackendError(formatDesktopSshConnectionError(error));
+          return;
+        }
+
+        const selectedTarget: DesktopSshEnvironmentTarget = {
+          ...target,
+          executionSource: sshSource,
+          ...(sshManual
+            ? {
+                manual: {
+                  profileId: sshProfileId,
+                  name: sshName.trim() || target.hostname,
+                  authentication:
+                    sshAuthentication === "password"
+                      ? { type: "password" as const }
+                      : { type: "key" as const, identityFile: sshIdentityFile.trim() },
+                },
+              }
+            : {}),
+        };
+        if (sshManual) {
+          if (!target.username || (sshAuthentication === "key" && !sshIdentityFile.trim())) {
+            setSavedBackendError(
+              "Enter a username and, for private-key authentication, a key path in the selected SSH source.",
+            );
+            return;
+          }
+        }
+        const credentials = sshManual
+          ? { secret: sshSecret, remember: sshRememberSecret }
+          : undefined;
+        setSshSecret("");
+        setSshTestResult(null);
+        await connectSavedBackendSshTarget(selectedTarget, credentials, testOnly);
         return;
       }
 
-      const selectedTarget: DesktopSshEnvironmentTarget = {
-        ...target,
-        executionSource: sshSource,
-        ...(sshManual
-          ? {
-              manual: {
-                profileId: sshProfileId,
-                name: sshName.trim() || target.hostname,
-                authentication:
-                  sshAuthentication === "password"
-                    ? { type: "password" as const }
-                    : { type: "key" as const, identityFile: sshIdentityFile.trim() },
-              },
-            }
-          : {}),
-      };
-      if (sshManual) {
-        if (!target.username || (sshAuthentication === "key" && !sshIdentityFile.trim())) {
-          setSavedBackendError(
-            "Enter a username and, for private-key authentication, a key path in the selected SSH source.",
-          );
-          return;
-        }
-      }
-      const credentials = sshManual
-        ? { secret: sshSecret, remember: sshRememberSecret }
-        : undefined;
-      setSshSecret("");
-      await connectSavedBackendSshTarget(selectedTarget, credentials);
-      return;
-    }
-
-    setIsAddingSavedBackend(true);
-    setSavedBackendError(null);
-    let remotePairingInput: ReturnType<typeof parseRemotePairingFields>;
-    try {
-      remotePairingInput = parseRemotePairingFields({
-        host: savedBackendHost,
-        pairingCode: savedBackendPairingCode,
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to add backend.";
-      setSavedBackendError(message);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not add backend",
-          description: message,
-        }),
-      );
-      setIsAddingSavedBackend(false);
-      return;
-    }
-
-    const result = await connectPairing({
-      ...remotePairingInput,
-      ...(routeTarget ? { expectedEnvironmentId: routeTarget.environmentId } : {}),
-    });
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
+      setIsAddingSavedBackend(true);
+      setSavedBackendError(null);
+      let remotePairingInput: ReturnType<typeof parseRemotePairingFields>;
+      try {
+        remotePairingInput = parseRemotePairingFields({
+          host: savedBackendHost,
+          pairingCode: savedBackendPairingCode,
+        });
+      } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to add backend.";
         setSavedBackendError(message);
         toastManager.add(
@@ -3051,51 +3067,73 @@ export function ConnectionsSettings() {
             description: message,
           }),
         );
+        setIsAddingSavedBackend(false);
+        return;
       }
-      setIsAddingSavedBackend(false);
-      return;
-    }
 
-    setSavedBackendHost("");
-    setSavedBackendPairingCode("");
-    setSavedBackendSshHost("");
-    setSavedBackendSshUsername("");
-    setSavedBackendSshPort("");
-    setAddBackendDialogOpen(false);
-    toastManager.add(
-      routeTarget
-        ? {
-            type: "success",
-            title: "Route added",
-            description: `${routeTarget.label} now has another way to connect.`,
-          }
-        : {
-            type: "success",
-            title: "Backend added",
-            description: "The environment is saved and will reconnect on app startup.",
-          },
-    );
-    setIsAddingSavedBackend(false);
-  }, [
-    routeTarget,
-    connectPairing,
-    connectSavedBackendSshTarget,
-    savedBackendHost,
-    savedBackendMode,
-    savedBackendPairingCode,
-    savedBackendSshHost,
-    sshSource,
-    savedBackendSshPort,
-    savedBackendSshUsername,
-    sshManual,
-    sshProfileId,
-    sshName,
-    sshAuthentication,
-    sshIdentityFile,
-    sshSecret,
-    sshRememberSecret,
-    desktopBridge,
-  ]);
+      const result = await connectPairing({
+        ...remotePairingInput,
+        ...(routeTarget ? { expectedEnvironmentId: routeTarget.environmentId } : {}),
+      });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          const message = error instanceof Error ? error.message : "Failed to add backend.";
+          setSavedBackendError(message);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not add backend",
+              description: message,
+            }),
+          );
+        }
+        setIsAddingSavedBackend(false);
+        return;
+      }
+
+      setSavedBackendHost("");
+      setSavedBackendPairingCode("");
+      setSavedBackendSshHost("");
+      setSavedBackendSshUsername("");
+      setSavedBackendSshPort("");
+      setAddBackendDialogOpen(false);
+      toastManager.add(
+        routeTarget
+          ? {
+              type: "success",
+              title: "Route added",
+              description: `${routeTarget.label} now has another way to connect.`,
+            }
+          : {
+              type: "success",
+              title: "Backend added",
+              description: "The environment is saved and will reconnect on app startup.",
+            },
+      );
+      setIsAddingSavedBackend(false);
+    },
+    [
+      routeTarget,
+      connectPairing,
+      connectSavedBackendSshTarget,
+      savedBackendHost,
+      savedBackendMode,
+      savedBackendPairingCode,
+      savedBackendSshHost,
+      sshSource,
+      savedBackendSshPort,
+      savedBackendSshUsername,
+      sshManual,
+      sshProfileId,
+      sshName,
+      sshAuthentication,
+      sshIdentityFile,
+      sshSecret,
+      sshRememberSecret,
+      desktopBridge,
+    ],
+  );
 
   const handleSavedBackendSshFieldKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
@@ -3245,6 +3283,25 @@ export function ConnectionsSettings() {
       const environmentId = environment.environmentId;
       setRemovingSavedEnvironmentId(environmentId);
       setSavedBackendError(null);
+      try {
+        for (const route of connectionRoutes(environment.entry)) {
+          if (
+            Option.isSome(route.profile) &&
+            route.profile.value._tag === "SshConnectionProfile" &&
+            route.profile.value.target.manual
+          )
+            await window.desktopBridge?.forgetSshCredentials?.(route.profile.value.target);
+        }
+      } catch {
+        setRemovingSavedEnvironmentId(null);
+        toastManager.add({
+          type: "error",
+          title: "Could not forget the saved SSH credential",
+          description:
+            "The environment was retained. Retry removal after reconnecting the desktop client.",
+        });
+        return;
+      }
       const result = await removeEnvironment(environmentId);
       setRemovingSavedEnvironmentId(null);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -3774,6 +3831,19 @@ export function ConnectionsSettings() {
             </label>
           </div>
         ) : null}
+        {sshTestResult ? (
+          <p role="status" className="text-xs">
+            {sshTestResult}
+          </p>
+        ) : null}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={isAddingSavedBackend || !savedBackendSshHost.trim()}
+          onClick={() => void handleAddSavedBackend(true)}
+        >
+          Test authentication
+        </Button>
         {savedBackendError || (!sshManual && discoveredSshHostsError) ? (
           <Alert variant="error">
             <AlertDescription>{savedBackendError ?? discoveredSshHostsError}</AlertDescription>
@@ -4322,8 +4392,11 @@ export function ConnectionsSettings() {
                 setAddBackendDialogOpen(open);
                 if (open) {
                   setRouteTarget(null);
+                  setEditingSshRoute(null);
                   setSshProfileId(`${sshFormId}:${Date.now()}`);
                   setSshSecret("");
+                  setSshRememberSecret(false);
+                  setSshTestResult(null);
                 } else {
                   setSavedBackendError(null);
                 }
@@ -4347,7 +4420,11 @@ export function ConnectionsSettings() {
               <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
                 <DialogHeader>
                   <DialogTitle>
-                    {routeTarget ? `Add a route to ${routeTarget.label}` : "Add Environment"}
+                    {editingSshRoute
+                      ? "Edit SSH server"
+                      : routeTarget
+                        ? `Add a route to ${routeTarget.label}`
+                        : "Add Environment"}
                   </DialogTitle>
                   <DialogDescription>
                     {routeTarget
@@ -4394,6 +4471,36 @@ export function ConnectionsSettings() {
             onRemove={handleRemoveSavedBackend}
             onAddRoute={(target) => {
               setRouteTarget(target);
+              setEditingSshRoute(null);
+              setSavedBackendError(null);
+              setAddBackendDialogOpen(true);
+            }}
+            onEditSsh={(environment, route) => {
+              if (
+                Option.isNone(route.profile) ||
+                route.profile.value._tag !== "SshConnectionProfile"
+              )
+                return;
+              const target = route.profile.value.target;
+              if (!target.manual) return;
+              setRouteTarget(environment);
+              setEditingSshRoute(connectionRouteId(route.target));
+              setSavedBackendMode("ssh");
+              setSshManual(true);
+              setSshProfileId(target.manual.profileId);
+              setSshName(target.manual.name);
+              setSavedBackendSshHost(target.hostname);
+              setSavedBackendSshUsername(target.username ?? "");
+              setSavedBackendSshPort(String(target.port ?? 22));
+              setSshSource(target.executionSource ?? { type: "local" });
+              setSshAuthentication(target.manual.authentication.type);
+              setSshIdentityFile(
+                target.manual.authentication.type === "key"
+                  ? target.manual.authentication.identityFile
+                  : "",
+              );
+              setSshSecret("");
+              setSshRememberSecret(false);
               setSavedBackendError(null);
               setAddBackendDialogOpen(true);
             }}

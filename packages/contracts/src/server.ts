@@ -969,7 +969,7 @@ export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
 export const ProviderVersionCatalogInput = Schema.Struct({
   provider: ProviderDriverKind,
   instanceId: ProviderInstanceId,
-  page: Schema.Int.check(Schema.isBetween(1, 100)),
+  page: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
   prereleases: Schema.Boolean,
 });
 export type ProviderVersionCatalogInput = typeof ProviderVersionCatalogInput.Type;

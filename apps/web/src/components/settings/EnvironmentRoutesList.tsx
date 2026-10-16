@@ -26,6 +26,7 @@ import {
 } from "@t3tools/client-runtime/connection";
 import { GripVerticalIcon, PlusIcon, XIcon } from "lucide-react";
 import { useState } from "react";
+import * as Option from "effect/Option";
 
 import { requestConfirmDialog } from "~/confirmDialog";
 import { environmentCatalog } from "~/connection/catalog";
@@ -44,15 +45,18 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 export function EnvironmentRoutesList({
   environment,
   onAddRoute,
+  onEditSsh,
 }: {
   readonly environment: EnvironmentPresentation;
   readonly onAddRoute: () => void;
+  readonly onEditSsh?: ((route: ConnectionRoute) => void) | undefined;
 }) {
   const saved = connectionRoutes(environment.entry);
   const savedIds = saved.map((route) => connectionRouteId(route.target));
   // A dropped order shows until the catalog matches it, so the row does not
   // jump back while the reorder is being saved.
   const [pending, setPending] = useState<ReadonlyArray<string> | null>(null);
+  const [credentialError, setCredentialError] = useState<string | null>(null);
   const order: Array<string> =
     pending !== null &&
     pending.length === savedIds.length &&
@@ -83,6 +87,20 @@ export function EnvironmentRoutesList({
       { variant: "destructive" },
     );
     if (confirmed !== true) return;
+    if (
+      Option.isSome(route.profile) &&
+      route.profile.value._tag === "SshConnectionProfile" &&
+      route.profile.value.target.manual
+    ) {
+      try {
+        await window.desktopBridge?.forgetSshCredentials?.(route.profile.value.target);
+      } catch {
+        setCredentialError(
+          "Could not forget the saved SSH credential. The profile was retained; try again.",
+        );
+        return;
+      }
+    }
     await removeRoute({
       environmentId: environment.environmentId,
       routeId: connectionRouteId(route.target),
@@ -104,6 +122,11 @@ export function EnvironmentRoutesList({
 
   return (
     <div className="mt-2 border-t border-border/50 py-2">
+      {credentialError ? (
+        <p role="alert" className="text-xs text-destructive">
+          {credentialError}
+        </p>
+      ) : null}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -123,6 +146,14 @@ export function EnvironmentRoutesList({
                 // learned again, so it is only reordered.
                 removable={routes.length > 1 && !isLearned(route)}
                 onRemove={() => void confirmRemove(route)}
+                onEdit={
+                  onEditSsh &&
+                  Option.isSome(route.profile) &&
+                  route.profile.value._tag === "SshConnectionProfile" &&
+                  route.profile.value.target.manual
+                    ? () => onEditSsh(route)
+                    : undefined
+                }
               />
             ))}
           </ol>
@@ -144,12 +175,14 @@ function SortableRouteRow({
   inUse,
   removable,
   onRemove,
+  onEdit,
 }: {
   readonly route: ConnectionRoute;
   readonly position: number;
   readonly inUse: boolean;
   readonly removable: boolean;
   readonly onRemove: () => void;
+  readonly onEdit?: (() => void) | undefined;
 }) {
   const id = connectionRouteId(route.target);
   const label = connectionRouteLabel(route);
@@ -199,6 +232,11 @@ function SortableRouteRow({
       >
         <GripVerticalIcon className="size-3.5" />
       </button>
+      {onEdit ? (
+        <Button size="xs" variant="ghost-muted" onClick={onEdit}>
+          Edit server
+        </Button>
+      ) : null}
       {removable ? (
         <Tooltip>
           <TooltipTrigger

@@ -997,6 +997,23 @@ export function ProviderInstanceCard({
               {updateProgress ?? updateProblem}
             </p>
           ) : null}
+          {liveProvider?.updateState?.output ? (
+            <details className="text-xs">
+              <summary className="cursor-pointer">Update details</summary>
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words">
+                {liveProvider.updateState.output}
+              </pre>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() =>
+                  copyToClipboard(liveProvider.updateState!.output!, { providerName: displayName })
+                }
+              >
+                Copy details
+              </Button>
+            </details>
+          ) : null}
           {onRunVersionAction && updateCommand ? (
             <div className="flex items-center gap-2 text-3xs font-medium uppercase tracking-wider text-muted-foreground">
               <span aria-hidden className="h-px flex-1 bg-border" />

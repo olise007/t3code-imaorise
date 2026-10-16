@@ -132,6 +132,7 @@ interface CodexInstallationService {
     asset: CodexReleaseAsset,
     allowUnknownCompatibility: boolean,
     beforeActivation?: Effect.Effect<void, CodexInstallationError, Scope.Scope>,
+    afterActivation?: Effect.Effect<void, CodexInstallationError>,
   ) => Effect.Effect<ProviderInstallState, CodexInstallationError>;
   readonly cancel: (
     operationId: string,
@@ -394,7 +395,14 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     Effect.orElseSucceed(() => null),
   );
   const resolve = Effect.fn("CodexInstallation.resolve")(function* () {
-    if (yield* fs.exists(activePath)) return yield* resolveManaged();
+    if (
+      yield* fs
+        .exists(activePath)
+        .pipe(
+          Effect.mapError(wrapFailure("resolve", "Could not inspect the managed Codex selection.")),
+        )
+    )
+      return yield* resolveManaged();
     const local = yield* resolveLocal();
     return local ?? (yield* resolveManaged());
   });
@@ -437,6 +445,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       release: CodexReleaseAsset,
       allowUnknownCompatibility = false,
       beforeActivation: Effect.Effect<void, CodexInstallationError, Scope.Scope> = Effect.void,
+      afterActivation: Effect.Effect<void, CodexInstallationError> = Effect.void,
     ) {
       yield* decodeVersion(release.version);
       yield* fs.makeDirectory(managedDirectory, { recursive: true });
@@ -478,7 +487,21 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
                   flag: "wx",
                 },
               );
+              const previous = yield* fs.readFile(activePath).pipe(Effect.option);
               yield* fs.rename(pointer, activePath);
+              yield* validate(executable, release.version).pipe(
+                Effect.scoped,
+                Effect.timeout("90 seconds"),
+                Effect.andThen(afterActivation),
+                Effect.tapError(() =>
+                  Option.isSome(previous)
+                    ? fs
+                        .writeFile(pointer, previous.value, { mode: 0o600 })
+                        .pipe(Effect.andThen(fs.rename(pointer, activePath)))
+                    : fs.remove(activePath, { force: true }),
+                ),
+              );
+
               yield* SubscriptionRef.update(
                 state,
                 (current) =>
@@ -618,12 +641,27 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     reuse: boolean,
     allowUnknownCompatibility = false,
     beforeActivation?: Effect.Effect<void, CodexInstallationError, Scope.Scope>,
+    afterActivation?: Effect.Effect<void, CodexInstallationError>,
   ) =>
     gate
       .withPermit(
         Effect.gen(function* () {
           const current = yield* SubscriptionRef.get(state);
           if (isRunning(current)) return current;
+          if (reuse && (yield* fs.exists(activePath))) {
+            const selected = yield* resolveManaged();
+            const retained: ProviderInstallState = {
+              ...current,
+              phase: "succeeded",
+              version: selected.version,
+              installedVersion: selected.version,
+              executablePath: selected.executablePath,
+              source: "managed",
+              message: null,
+            };
+            yield* SubscriptionRef.set(state, retained);
+            return retained;
+          }
           if (reuse && (yield* reuseLocal())) return yield* SubscriptionRef.get(state);
           if (!release) {
             return yield* installationError(
@@ -644,7 +682,12 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
             message: "Downloading Codex.",
           };
           yield* SubscriptionRef.set(state, next);
-          const work = install(release, allowUnknownCompatibility, beforeActivation).pipe(
+          const work = install(
+            release,
+            allowUnknownCompatibility,
+            beforeActivation,
+            afterActivation,
+          ).pipe(
             Effect.onExit((exit) =>
               Exit.isFailure(exit)
                 ? SubscriptionRef.update(state, (value) => {
@@ -758,6 +801,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
       (current) =>
         ({
           ...current,
+          version: installed.version,
           installedVersion: installed.version,
           executablePath: installed.executablePath,
           source: "managed",
@@ -782,8 +826,8 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     resolve,
     acquire,
     start: startRelease(asset, true),
-    startVersion: (release, allowUnknownCompatibility, beforeActivation) =>
-      startRelease(release, false, allowUnknownCompatibility, beforeActivation),
+    startVersion: (release, allowUnknownCompatibility, beforeActivation, afterActivation) =>
+      startRelease(release, false, allowUnknownCompatibility, beforeActivation, afterActivation),
     cancel,
     state: SubscriptionRef.get(state),
     changes: SubscriptionRef.changes(state),

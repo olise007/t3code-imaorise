@@ -513,6 +513,7 @@ export const DesktopSshPasswordPromptCancelledResultSchema = Schema.Struct({
 });
 
 export const DesktopSshEnvironmentEnsureOptionsSchema = Schema.Struct({
+  operationId: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(128))),
   authSecret: Schema.optionalKey(Schema.String),
   rememberSecret: Schema.optionalKey(Schema.Boolean),
   testOnly: Schema.optionalKey(Schema.Boolean),
@@ -1267,7 +1268,12 @@ export interface DesktopBridge {
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
   discoverSshConnections?: (loadDistro?: string) => Promise<DesktopSshDiscoveryReport>;
   onSshConnectionProgress?: (
-    listener: (progress: { target: DesktopSshEnvironmentTarget; stage: string }) => void,
+    listener: (progress: {
+      target: DesktopSshEnvironmentTarget;
+      stage: string;
+      operationId?: string;
+      sequence?: number;
+    }) => void,
   ) => () => void;
   /** Resolves a suggested SSH alias before populating the connection form. */
   resolveSshHost: (
@@ -1295,6 +1301,7 @@ export interface DesktopBridge {
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: {
+      operationId?: string;
       authSecret?: string;
       rememberSecret?: boolean;
       testOnly?: boolean;
@@ -1306,6 +1313,7 @@ export interface DesktopBridge {
   disconnectSshEnvironment: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   stopSshEnvironment?: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   cancelSshSetup?: (target: DesktopSshEnvironmentTarget) => Promise<void>;
+  forgetSshCredentials?: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   fetchSshEnvironmentDescriptor: (httpBaseUrl: string) => Promise<ExecutionEnvironmentDescriptor>;
   bootstrapSshBearerSession: (
     httpBaseUrl: string,
