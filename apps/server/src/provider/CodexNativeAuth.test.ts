@@ -4,6 +4,9 @@ import { vi } from "vite-plus/test";
 import { ProviderInstanceId, type ProviderAuthInteraction } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -13,6 +16,7 @@ import * as Schema from "effect/Schema";
 import { makeCodexNativeAuth } from "./CodexNativeAuth.ts";
 
 let verified = true;
+let holdCompletion = false;
 let calls: string[] = [];
 let complete: (event: { loginId: string; success: boolean }) => Effect.Effect<void>;
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
@@ -32,7 +36,7 @@ vi.mock("./CodexProvider.ts", () => ({
                 account: verified ? { type: "chatgpt", email: "fixture@example.test" } : null,
               };
             if (method === "account/login/start") {
-              yield* complete({ loginId: "fixture-login", success: verified });
+              if (!holdCompletion) yield* complete({ loginId: "fixture-login", success: verified });
               return params.type === "chatgptDeviceCode"
                 ? {
                     type: "chatgptDeviceCode",
@@ -58,6 +62,7 @@ it.effect.each(["codex-browser", "codex-device", "codex-existing"])(
     Effect.gen(function* () {
       calls = [];
       verified = true;
+      holdCompletion = false;
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "native-codex-auth-" });
@@ -151,6 +156,32 @@ it.effect.each(["codex-browser", "codex-device", "codex-existing"])(
       assert.isUndefined(native.nativeEnvironment(home).ACCESS_TOKEN);
       assert.isUndefined(native.nativeEnvironment(home).OPENAI_API_KEY);
       assert.notInclude(native.nativeArgs("native"), "token_sharing");
+      if (method !== "codex-existing") {
+        for (const ending of ["cancel", "expire"]) {
+          holdCompletion = true;
+          const waiting = yield* Deferred.make<void>();
+          const attempt = yield* native
+            .authenticate(method, {
+              ...context,
+              setInteraction: (value) =>
+                context
+                  .setInteraction(value)
+                  .pipe(Effect.andThen(Deferred.succeed(waiting, undefined)), Effect.asVoid),
+            })
+            .pipe(Effect.timeout("1 minute"), Effect.forkChild);
+          yield* Deferred.await(waiting);
+          if (ending === "cancel") yield* Fiber.interrupt(attempt);
+          else {
+            yield* TestClock.adjust("2 minutes");
+            yield* Fiber.await(attempt);
+          }
+          holdCompletion = false;
+          assert.include(calls, "account/login/cancel:");
+          assert.deepEqual(yield* native.read, selected);
+          const kept = Option.getOrThrow(selected).homePath;
+          assert.deepEqual(yield* fs.readDirectory(path.dirname(kept)), [path.basename(kept)]);
+        }
+      }
       verified = false;
       yield* native.authenticate(method, context).pipe(Effect.flip);
       assert.deepEqual(yield* native.read, selected);
