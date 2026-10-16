@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Incremental artifact SHA-512 verification.
 import {
   ProviderInstanceId,
   ServerProviderUpdateError,
@@ -16,6 +17,11 @@ import * as Schema from "effect/Schema";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
+import * as Crypto from "effect/Crypto";
+import * as NodeCrypto from "node:crypto";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
+import { makeTargetedProviderUpdateAction } from "@t3tools/provider-core/server/maintenanceResolver";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 import { PROVIDER_RECIPE_CATALOG } from "@t3tools/shared/providerInstallRecipes";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
@@ -44,6 +50,8 @@ const decodeCodexRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(Codex
 /** Coordinates approval, immutable staging, ownership checks, and activation in the destination environment. */
 export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make")(function* () {
   const catalog = yield* makeProviderVersionCatalog();
+  const http = yield* HttpClient.HttpClient;
+  const crypto = yield* Crypto.Crypto;
   const settings = yield* ServerSettings.ServerSettingsService;
   const config = yield* ServerConfig.ServerConfig;
   const codex = yield* CodexInstallation.CodexInstallation;
@@ -118,7 +126,8 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
     }
     const root = path.join(config.baseDir, "tools", "provider-archives", instance.driver);
     const realRoot = yield* fs.realPath(root).pipe(Effect.orElseSucceed(() => root));
-    if (!real.value.startsWith(`${realRoot}${path.sep}`)) return null;
+    if (!real.value.startsWith(`${realRoot}${path.sep}`))
+      return { kind: "external" as const, key: real.value, binary: real.value };
     const marker = yield* fs
       .readFileString(path.join(path.dirname(real.value), ".recipe-integrity"))
       .pipe(Effect.option);
@@ -151,12 +160,55 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
           ),
         ).pipe(Effect.map((ids) => ids.filter((id) => id !== null)))
       : [input.instanceId];
-    return { current, entries, entry, installation, affected };
+    const capabilities =
+      installation?.kind === "external"
+        ? yield* providers.getProviderMaintenanceCapabilitiesForInstance(
+            input.instanceId,
+            input.provider,
+            { fresh: true },
+          )
+        : null;
+    const officialPackages: Readonly<Record<string, readonly string[]>> = {
+      codex: ["@openai/codex"],
+      claudeAgent: ["@anthropic-ai/claude-code"],
+      grok: ["@xai-official/grok"],
+      opencode: ["@opencode/cli", "opencode-ai"],
+      pi: ["@earendil-works/pi-coding-agent"],
+    };
+    const externalPackage =
+      capabilities?.packageName &&
+      officialPackages[input.provider]?.includes(capabilities.packageName)
+        ? capabilities.packageName
+        : undefined;
+    return { current, entries, entry, installation, affected, capabilities, externalPackage };
   });
+  const selectionPath = (key: string) =>
+    path.join(
+      config.baseDir,
+      "tools",
+      "provider-selections",
+      `${NodeCrypto.createHash("sha256").update(key).digest("hex")}.json`,
+    );
+  const readSelection = (key: string) =>
+    fs.readFileString(selectionPath(key)).pipe(
+      Effect.flatMap(
+        Schema.decodeUnknownEffect(
+          Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
+        ),
+      ),
+      Effect.map((value) => value.version),
+      Effect.orElseSucceed(() => null),
+    );
   const page = (input: ProviderVersionCatalogInput) =>
     Effect.gen(function* () {
-      const result = yield* catalog.page(input);
       const group = yield* describe(input);
+      const result = yield* catalog.page(input, group.externalPackage);
+      const externalUnsupported =
+        group.installation?.kind === "external" &&
+        (!group.externalPackage ||
+          !group.capabilities ||
+          !makeTargetedProviderUpdateAction(group.capabilities, "1.0.0") ||
+          group.capabilities.update?.lockKey === "volta");
       const selected =
         group.installation?.kind === "codex"
           ? yield* fs.readFileString(path.join(codex.managedDirectory, "active.json")).pipe(
@@ -175,9 +227,22 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
               )
             : group.installation?.kind === "archive" && group.installation.binary
               ? path.basename(path.dirname(group.installation.binary))
-              : null;
+              : group.installation?.kind === "external"
+                ? yield* readSelection(group.installation.key)
+                : null;
       return {
         ...result,
+        ...(externalUnsupported
+          ? {
+              message:
+                "This external installation cannot safely activate a reviewed archive through its current updater. Use its package manager to install an exact version, or configure a T3-managed installation. Existing update commands remain available.",
+              releases: result.releases.map((release) => ({
+                ...release,
+                available: false,
+                reason: "Use the owning installer for this external executable.",
+              })),
+            }
+          : {}),
         ...(group.installation?.kind === "unverified"
           ? {
               releases: result.releases.map((release) => ({
@@ -207,7 +272,10 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
     Effect.gen(function* () {
       const instanceId = input.instanceId ?? ProviderInstanceId.make(input.provider);
       const initial = yield* describe({ ...input, instanceId });
-      if (!initial.installation && !input.expectedIntegrity)
+      if (
+        (!initial.installation || initial.installation.kind === "external") &&
+        !input.expectedIntegrity
+      )
         return yield* maintenance.updateProvider(input);
       if (!input.targetVersion || !input.expectedIntegrity)
         return yield* new ServerProviderUpdateError({
@@ -215,7 +283,11 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
           reason:
             "Choose a version and review its exact artifact before updating a managed installation.",
         });
-      const selected = yield* catalog.resolve(input.provider, input.targetVersion);
+      const selected = yield* catalog.resolve(
+        input.provider,
+        input.targetVersion,
+        initial.externalPackage,
+      );
       if (
         selected.release.version !== input.targetVersion ||
         !selected.release.available ||
@@ -243,7 +315,11 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
               })
               .pipe(Effect.asVoid);
           const verifySettings = Effect.gen(function* () {
-            const checked = yield* catalog.resolve(input.provider, input.targetVersion!);
+            const checked = yield* catalog.resolve(
+              input.provider,
+              input.targetVersion!,
+              initial.externalPackage,
+            );
             if (
               !checked.release.available ||
               checked.release.integrity !== input.expectedIntegrity ||
@@ -270,7 +346,109 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
           });
           yield* state(`Downloading and verifying ${input.provider} ${input.targetVersion}`);
           yield* Effect.gen(function* () {
-            if (selected.artifact!.kind === "codex" && installation.kind === "codex") {
+            if (selected.artifact!.kind === "package" && installation.kind === "external") {
+              if (
+                !initial.capabilities ||
+                !makeTargetedProviderUpdateAction(initial.capabilities, input.targetVersion!) ||
+                initial.capabilities.update?.lockKey === "volta"
+              )
+                return yield* new ServerProviderUpdateError({
+                  provider: input.provider,
+                  reason: "Use the owning installer to select this external version.",
+                });
+              const artifact = selected.artifact!;
+              const staged = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-package-" });
+              const archivePath = path.join(staged, "provider.tgz");
+              const hash = NodeCrypto.createHash("sha512");
+              let bytes = 0;
+              const response = yield* http
+                .execute(HttpClientRequest.get(artifact.url))
+                .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk));
+              yield* response.stream.pipe(
+                Stream.tap((chunk) =>
+                  Effect.gen(function* () {
+                    bytes += chunk.byteLength;
+                    if (bytes > 256 * 1024 * 1024)
+                      return yield* new ServerProviderUpdateError({
+                        provider: input.provider,
+                        reason: "The selected package exceeds its download limit.",
+                      });
+                    hash.update(chunk);
+                  }),
+                ),
+                Stream.run(fs.sink(archivePath, { flag: "wx", mode: 0o600 })),
+                Effect.timeout("5 minutes"),
+              );
+              if (`sha512-${hash.digest("base64")}` !== artifact.integrity)
+                return yield* new ServerProviderUpdateError({
+                  provider: input.provider,
+                  reason:
+                    "The selected package failed its integrity check. The previous installation is unchanged.",
+                });
+              yield* state("Ready—waiting for running work");
+              yield* withProviderInstallationIdle(
+                initial.affected,
+                Effect.gen(function* () {
+                  yield* verifySettings;
+                  const capabilities =
+                    yield* providers.getProviderMaintenanceCapabilitiesForInstance(
+                      instanceId,
+                      input.provider,
+                      { fresh: true },
+                    );
+                  if (
+                    !Equal.equals(capabilities.update, initial.capabilities!.update) ||
+                    capabilities.packageName !== initial.externalPackage
+                  )
+                    return yield* new ServerProviderUpdateError({
+                      provider: input.provider,
+                      reason: "The owning package manager changed. Review the version again.",
+                    });
+                  const outcome = yield* maintenance.updateProvider({
+                    ...input,
+                    verifiedPackageArchive: archivePath,
+                  });
+                  const installed = outcome.providers.find(
+                    (provider) => provider.instanceId === instanceId,
+                  );
+                  if (
+                    installed?.updateState?.status !== "succeeded" ||
+                    installed.version?.replace(/^v/, "") !== input.targetVersion
+                  )
+                    return yield* new ServerProviderUpdateError({
+                      provider: input.provider,
+                      reason:
+                        installed?.updateState?.message ??
+                        "The selected external version could not be verified. Its previous selection is retained.",
+                    });
+                  const record = selectionPath(installation.key);
+                  yield* fs.makeDirectory(path.dirname(record), { recursive: true });
+                  const temporary = `${record}.${yield* crypto.randomUUIDv4}.tmp`;
+                  yield* fs.writeFileString(
+                    temporary,
+                    yield* Schema.encodeEffect(
+                      Schema.fromJsonString(
+                        Schema.Struct({
+                          version: Schema.String,
+                          integrity: Schema.String,
+                          source: Schema.String,
+                        }),
+                      ),
+                    )({
+                      version: input.targetVersion!,
+                      integrity: artifact.integrity,
+                      source: artifact.url,
+                    }),
+                    { mode: 0o600, flag: "wx" },
+                  );
+                  yield* fs
+                    .rename(temporary, record)
+                    .pipe(
+                      Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore)),
+                    );
+                }),
+              );
+            } else if (selected.artifact!.kind === "codex" && installation.kind === "codex") {
               if (!codex.startVersion)
                 return yield* new ServerProviderUpdateError({
                   provider: input.provider,
@@ -470,9 +648,9 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
             );
             yield* providers.refresh(input.provider);
           }).pipe(
-            Effect.tapError(() =>
+            Effect.tapError((cause) =>
               state(
-                "The update failed. The previous selection is retained; review installation details before retrying.",
+                `The update failed. ${sanitizeSetupOutput(cause instanceof Error ? cause.message : "Review installation details before retrying.").slice(0, 500)}`,
                 "failed",
               ),
             ),
@@ -481,6 +659,7 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
         }),
       );
     }).pipe(
+      Effect.scoped,
       Effect.mapError(
         (cause) =>
           new ServerProviderUpdateError({

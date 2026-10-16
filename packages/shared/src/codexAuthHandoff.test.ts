@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import {
   codexAuthorizationRequest,
+  codexCallbackUrl,
   codexNativeAuthorizationRequest,
   codexSignInAuthorizationRequest,
   codexAuthDeliveryUrl,
@@ -102,4 +103,18 @@ it("accepts fresh native Codex URLs without broadening token-sharing callback va
   url.searchParams.set("state", "a".repeat(43));
   url.searchParams.set("redirect_uri", "http://localhost:1456/auth/callback");
   expect(() => codexNativeAuthorizationRequest(url.toString())).toThrow();
+});
+
+it("binds native callback client IDs and state to the fresh sign-in", () => {
+  const redirect = "http://localhost:1455/auth/callback";
+  const callback = `${redirect}?code=fixture&state=expected&client_id=app_fixture`;
+  expect(
+    codexCallbackUrl(callback, redirect, "expected", "app_fixture").searchParams.get("code"),
+  ).toBe("fixture");
+  expect(() => codexCallbackUrl(callback, redirect, "wrong", "app_fixture")).toThrow();
+  expect(() => codexCallbackUrl(callback, redirect, "expected", "app_other")).toThrow();
+  expect(() => codexCallbackUrl(callback, redirect, "expected")).toThrow();
+  expect(() =>
+    codexCallbackUrl(callback + "&client_id=app_fixture", redirect, "expected", "app_fixture"),
+  ).toThrow();
 });

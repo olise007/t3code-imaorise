@@ -129,7 +129,11 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
       const marker = path.join(destination, ".recipe-integrity");
       if ((yield* fs.exists(marker)) && (yield* fs.readFileString(marker)) === recipe.integrity) {
         const version = yield* run(binary, ["--version"]);
-        if (!version.includes(recipe.version))
+        if (
+          !version
+            .split(/[^0-9A-Za-z.+-]+/)
+            .some((part) => part.replace(/^v(?=\d)/, "") === recipe.version)
+        )
           return yield* failure(
             recipe.driver,
             "verify",
@@ -262,7 +266,11 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
       if (platform !== "win32") yield* fs.chmod(stagedBinary, 0o700);
       yield* update(recipe.driver, { phase: "verifying" });
       const version = yield* run(stagedBinary, ["--version"]);
-      if (!version.includes(recipe.version))
+      if (
+        !version
+          .split(/[^0-9A-Za-z.+-]+/)
+          .some((part) => part.replace(/^v(?=\d)/, "") === recipe.version)
+      )
         return yield* failure(
           recipe.driver,
           "verify",

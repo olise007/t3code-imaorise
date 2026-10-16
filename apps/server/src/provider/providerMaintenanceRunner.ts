@@ -67,6 +67,8 @@ export interface ProviderMaintenanceRunnerShape {
           readonly instanceId?: ProviderInstanceId | undefined;
           readonly targetVersion?: string | undefined;
           readonly expectedIntegrity?: string | undefined;
+          /** Server-verified local archive; never accepted directly from an RPC payload. */
+          readonly verifiedPackageArchive?: string | undefined;
           readonly allowUnknownCompatibility?: boolean | undefined;
         },
   ) => Effect.Effect<ServerProviderUpdatedPayload, ServerProviderUpdateError>;
@@ -261,8 +263,10 @@ function failureMessage(result: ProviderMaintenanceCommandResult): string {
     return "Update timed out.";
   }
   if (result.exitCode !== null && result.exitCode !== 0) {
-    const detail = commandOutput(result)
-      ?.split("\n")
+    const detail = (
+      sanitizeSetupOutput(result.stderr).trim() || sanitizeSetupOutput(result.stdout).trim()
+    )
+      .split("\n")
       .findLast((line) => line.trim());
     return `Update command exited with code ${result.exitCode}.${detail ? ` ${detail.slice(0, 300)}` : ""}`;
   }
@@ -485,10 +489,22 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                 provider,
                 candidateVersion,
               );
-            const command =
+            const targeted =
               targetVersion !== undefined
                 ? makeTargetedProviderUpdateAction(fresh, targetVersion)
                 : fresh.update;
+            const archive = typeof target === "string" ? undefined : target.verifiedPackageArchive;
+            const packageArgument =
+              fresh.packageName && targetVersion ? `${fresh.packageName}@${targetVersion}` : null;
+            const command =
+              targeted && archive && packageArgument
+                ? {
+                    ...targeted,
+                    args: targeted.args.map((argument) =>
+                      argument === packageArgument ? archive : argument,
+                    ),
+                  }
+                : targeted;
             const rejected =
               targetVersion !== undefined
                 ? !command ||

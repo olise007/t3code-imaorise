@@ -135,6 +135,9 @@ export function ProviderVersions({
               ) : null}
               {data ? (
                 <p className="text-xs">
+                  Installed: {data.installedVersion ?? "Not detected"} · Selected:{" "}
+                  {data.selectedVersion ?? "Not pinned"}
+                  <br />
                   Affected instances: {data.affectedInstances.join(", ") || instanceId}
                 </p>
               ) : null}

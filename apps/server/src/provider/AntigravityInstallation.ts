@@ -456,11 +456,7 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
       const activate = Effect.fn("AntigravityInstallation.activate")(
         function* () {
           yield* beforeActivation;
-          const installed = yield* completedRelease(asset.sha256);
-          yield* validate(installed, asset.version).pipe(
-            Effect.scoped,
-            Effect.timeout(VALIDATION_TIMEOUT),
-          );
+          yield* completedRelease(asset.sha256);
           let activated = false;
           while (!activated) {
             yield* Deferred.await(idle);
@@ -774,8 +770,6 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
               phase: "succeeded",
               version: selected.version,
               installedVersion: selected.version,
-              executablePath: selected.executablePath,
-              source: "managed",
               message: null,
             };
             yield* SubscriptionRef.set(state, retained);

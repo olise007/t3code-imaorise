@@ -218,7 +218,19 @@ const makeHarness = Effect.fn("test.makeAntigravityInstallation")(function* (
       ),
     ),
   );
-  return { installation, fs, path, baseDir, requests, validations, stagingReleased };
+  return {
+    installation: {
+      ...installation,
+      start: asset ? installation.startVersion!(asset) : installation.start,
+    },
+    implicitStart: installation.start,
+    fs,
+    path,
+    baseDir,
+    requests,
+    validations,
+    stagingReleased,
+  };
 });
 
 const terminalState = (installation: AntigravityInstallation.AntigravityInstallation["Service"]) =>
@@ -244,6 +256,14 @@ const expectPreviousRelease = Effect.fn("test.expectPreviousAntigravityRelease")
 });
 
 it.layer(NodeServices.layer)("Antigravity installation", (it) => {
+  it.effect("retains the active selected runtime during implicit setup", () =>
+    Effect.gen(function* () {
+      const { installation, implicitStart, requests } = yield* makeHarness({ previous: true });
+      yield* implicitStart;
+      yield* expectPreviousRelease(installation);
+      expect(requests).toEqual([]);
+    }),
+  );
   it.effect("reports missing Node before downloading the standalone provider runtime", () =>
     Effect.gen(function* () {
       const { installation, requests, validations } = yield* makeHarness();

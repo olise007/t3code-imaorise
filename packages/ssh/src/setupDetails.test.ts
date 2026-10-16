@@ -24,3 +24,15 @@ it("bounds an unterminated line without transmitting a secret suffix", () => {
   stream.finish();
   expect(lines).toEqual(["[Oversized output line omitted]", "Done"]);
 });
+
+it("omits private-key blocks across chunks and never previews key material", () => {
+  const lines: string[] = [];
+  const details = createSetupDetails((line) => lines.push(line));
+  details.push("-----BEGIN OPENSSH PRIVATE KEY-----\nabc");
+  expect(details.preview()).toBeNull();
+  details.push("def\n-----END OPENSSH PRIVATE KEY-----\nVerified");
+  expect(details.preview()).toBe("Verified");
+  details.finish();
+  expect(lines.join("\n")).not.toContain("abcdef");
+  expect(lines.at(-1)).toBe("Verified");
+});

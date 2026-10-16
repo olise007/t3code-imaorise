@@ -53,6 +53,7 @@ type Github = typeof GithubRelease.Type;
 export type VersionArtifact =
   | { kind: "codex"; asset: CodexReleaseAsset }
   | { kind: "archive"; recipe: ProviderArchiveRecipe }
+  | { kind: "package"; name: string; url: string; integrity: string }
   | { kind: "antigravity"; asset: AntigravityReleaseAsset };
 export interface ResolvedProviderRelease {
   readonly release: ProviderVersionRelease;
@@ -202,9 +203,10 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
   });
   const load = Effect.fn("ProviderVersionCatalog.load")(function* (
     input: ProviderVersionCatalogInput,
+    externalPackage?: string,
   ) {
     const provider = input.provider;
-    if (provider === "codex" || provider === "pi") {
+    if (!externalPackage && (provider === "codex" || provider === "pi")) {
       const repository = provider === "codex" ? "openai/codex" : "earendil-works/pi";
       const base = `https://api.github.com/repos/${repository}/releases`;
       const entries = yield* get(
@@ -228,12 +230,12 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
       );
       return { releases, hasMore: entries.length === 50, message: null };
     }
-    const name = npmNames[provider]?.[host];
+    const name = externalPackage ?? npmNames[provider]?.[host];
     if (name && arch === "x64" && (platform === "linux" || platform === "win32")) {
       const metadata = yield* get(
         `https://registry.npmjs.org/${name.replace("/", "%2f")}`,
         NpmCatalog,
-        "application/vnd.npm.install-v1+json",
+        "application/json",
       );
       const versions = Object.keys(metadata.versions)
         .filter(
@@ -251,8 +253,12 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
               : null;
           const recipe = providerArchiveRecipe(provider, host);
           const artifact: VersionArtifact | null =
-            recipe && integrity && dist.tarball.startsWith(`https://registry.npmjs.org/${name}/-/`)
-              ? { kind: "archive", recipe: { ...recipe, version, url: dist.tarball, integrity } }
+            (recipe || externalPackage) &&
+            integrity &&
+            dist.tarball.startsWith(`https://registry.npmjs.org/${name}/-/`)
+              ? externalPackage
+                ? { kind: "package", name, url: dist.tarball, integrity }
+                : { kind: "archive", recipe: { ...recipe!, version, url: dist.tarball, integrity } }
               : null;
           return classify(
             provider,
@@ -307,10 +313,10 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
     };
   });
   return {
-    resolve: (provider: ProviderDriverKind, version: string) =>
+    resolve: (provider: ProviderDriverKind, version: string, externalPackage?: string) =>
       Effect.gen(function* () {
         if (!versionPattern.test(version)) return yield* error(provider);
-        if (provider === "codex" || provider === "pi") {
+        if (!externalPackage && (provider === "codex" || provider === "pi")) {
           const repo = provider === "codex" ? "openai/codex" : "earendil-works/pi";
           const entry = yield* get(
             `https://api.github.com/repos/${repo}/releases/tags/${provider === "codex" ? "rust-v" : "v"}${version}`,
@@ -321,7 +327,7 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
           return yield* fromGithub(provider, entry, null);
         }
         // Npm catalogs have no pagination endpoint; resolve the exact dist metadata again.
-        const name = npmNames[provider]?.[host];
+        const name = externalPackage ?? npmNames[provider]?.[host];
         if (name) {
           const entry = yield* get(
             `https://registry.npmjs.org/${name.replace("/", "%2f")}/${version}`,
@@ -336,15 +342,17 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
           const recipe = providerArchiveRecipe(provider, host);
           const integrity = entry.dist.integrity ?? null;
           const artifact: VersionArtifact | null =
-            recipe &&
+            (recipe || externalPackage) &&
             entry.version === version &&
             integrity &&
             /^sha512-[A-Za-z0-9+/]+=*$/.test(integrity) &&
             entry.dist.tarball.startsWith(`https://registry.npmjs.org/${name}/-/`)
-              ? {
-                  kind: "archive",
-                  recipe: { ...recipe, version, integrity, url: entry.dist.tarball },
-                }
+              ? externalPackage
+                ? { kind: "package", name, url: entry.dist.tarball, integrity }
+                : {
+                    kind: "archive",
+                    recipe: { ...recipe!, version, integrity, url: entry.dist.tarball },
+                  }
               : null;
           return yield* classify(
             provider,
@@ -370,9 +378,9 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
         if (!found) return yield* error(provider);
         return found;
       }).pipe(Effect.mapError(() => error(provider))),
-    page: (input: ProviderVersionCatalogInput) =>
+    page: (input: ProviderVersionCatalogInput, externalPackage?: string) =>
       Effect.gen(function* () {
-        const data = yield* load(input);
+        const data = yield* load(input, externalPackage);
         const snapshots = yield* providers.getProviders;
         const instance = snapshots.find(
           (provider) =>
