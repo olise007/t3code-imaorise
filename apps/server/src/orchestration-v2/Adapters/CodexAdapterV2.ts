@@ -4871,72 +4871,68 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
             if (payload.item.type === "commandExecution") {
               const item = payload.item;
-              return yield* turnTerminalizationPermit.withPermits(1)(
-                Effect.gen(function* () {
-                  const turnDrained = yield* clearRunningCommandItem(payload.turnId, item.id);
-                  const artifacts = yield* buildCommandExecutionArtifacts(context, item);
-                  yield* emitProviderEvent({
-                    type: "node.updated",
-                    driver: CODEX_PROVIDER,
-                    node: artifacts.node,
-                  });
-                  yield* emitProviderEvent({
-                    type: "turn_item.updated",
-                    driver: CODEX_PROVIDER,
-                    turnItem: artifacts.turnItem,
-                  });
-                  if (settled) {
-                    if (
-                      context.subagent === null &&
-                      continuationRequests !== undefined &&
-                      !(yield* Ref.get(interruptingNativeTurns)).has(payload.turnId)
-                    ) {
-                      const alreadyOffered = yield* Ref.modify(
-                        offeredContinuationItemsByTurn,
-                        (current) => {
-                          const items = current.get(payload.turnId);
-                          if (items !== undefined && items.has(item.id)) {
-                            return [true, current] as const;
-                          }
-                          const updated = new Map(current);
-                          const updatedItems = new Set(items ?? []);
-                          updatedItems.add(item.id);
-                          updated.set(payload.turnId, updatedItems);
-                          return [false, updated] as const;
-                        },
-                      );
-                      if (!alreadyOffered) {
-                        yield* continuationRequests.offer({
-                          threadId: context.projectionThreadId,
-                          providerThreadId: context.providerThread.id,
-                          driver: CODEX_PROVIDER,
-                          detail: codexBackgroundCommandDetail(item),
-                          notification: {
-                            ...backgroundWorkNotification([
-                              {
-                                kind: "command",
-                                label: item.command,
-                                outcome:
-                                  item.exitCode === 0
-                                    ? "completed"
-                                    : item.exitCode == null
-                                      ? "unknown"
-                                      : "failed",
-                                exitCode: item.exitCode ?? undefined,
-                              },
-                            ]),
-                            detail: item.command,
-                          },
-                        });
+              const turnDrained = yield* clearRunningCommandItem(payload.turnId, item.id);
+              const artifacts = yield* buildCommandExecutionArtifacts(context, item);
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: artifacts.node,
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: artifacts.turnItem,
+              });
+              if (settled) {
+                if (
+                  context.subagent === null &&
+                  continuationRequests !== undefined &&
+                  !(yield* Ref.get(interruptingNativeTurns)).has(payload.turnId)
+                ) {
+                  const alreadyOffered = yield* Ref.modify(
+                    offeredContinuationItemsByTurn,
+                    (current) => {
+                      const items = current.get(payload.turnId);
+                      if (items !== undefined && items.has(item.id)) {
+                        return [true, current] as const;
                       }
-                    }
-                    if (turnDrained) {
-                      yield* releaseSettledTurnIfIdle(payload.turnId);
-                    }
+                      const updated = new Map(current);
+                      const updatedItems = new Set(items ?? []);
+                      updatedItems.add(item.id);
+                      updated.set(payload.turnId, updatedItems);
+                      return [false, updated] as const;
+                    },
+                  );
+                  if (!alreadyOffered) {
+                    yield* continuationRequests.offer({
+                      threadId: context.projectionThreadId,
+                      providerThreadId: context.providerThread.id,
+                      driver: CODEX_PROVIDER,
+                      detail: codexBackgroundCommandDetail(item),
+                      notification: {
+                        ...backgroundWorkNotification([
+                          {
+                            kind: "command",
+                            label: item.command,
+                            outcome:
+                              item.exitCode === 0
+                                ? "completed"
+                                : item.exitCode == null
+                                  ? "unknown"
+                                  : "failed",
+                            exitCode: item.exitCode ?? undefined,
+                          },
+                        ]),
+                        detail: item.command,
+                      },
+                    });
                   }
-                  return;
-                }),
-              );
+                }
+                if (turnDrained) {
+                  yield* releaseSettledTurnIfIdle(payload.turnId);
+                }
+              }
+              return;
             }
 
             if (payload.item.type === "mcpToolCall" || payload.item.type === "dynamicToolCall") {
