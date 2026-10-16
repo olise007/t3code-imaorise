@@ -78,6 +78,33 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
         auth: { status: "unauthenticated" as const },
       };
     const saved = yield* runtime.auth.read.pipe(Effect.orElseSucceed(() => Option.none()));
+    const nativeSelection = yield* runtime.native.read;
+    if (Option.isSome(nativeSelection) && nativeSelection.value.mode === "disconnected")
+      return {
+        ...base,
+        installed: true,
+        version: executable.value.version,
+        models: [],
+        message: "Sign in with ChatGPT to use Codex.",
+        auth: { status: "unauthenticated" as const },
+      };
+    if (Option.isSome(nativeSelection))
+      return yield* runtime.auth.controller.withAccess!(runtime.resolve).pipe(
+        Effect.flatMap((effective) =>
+          checkCodexProviderStatus(effective.config, undefined, effective.environment),
+        ),
+        Effect.map((draft) =>
+          stamp({
+            ...draft,
+            setup,
+            runtimePaths: {
+              homePath: runtime.homeLayout.sharedHomePath,
+              shadowHomePath: nativeSelection.value.homePath,
+            },
+          }),
+        ),
+        Effect.scoped,
+      );
     if (Option.isSome(saved) && !saved.value.scopes.includes("chatgpt.tokens.use.direct"))
       return {
         ...base,

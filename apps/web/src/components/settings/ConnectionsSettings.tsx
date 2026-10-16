@@ -2523,7 +2523,8 @@ export function ConnectionsSettings() {
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [sshManual, setSshManual] = useState(false);
-  const [sshProfileId, setSshProfileId] = useState(() => crypto.randomUUID());
+  const sshFormId = useId();
+  const [sshProfileId, setSshProfileId] = useState(() => `${sshFormId}:${Date.now()}`);
   const [sshName, setSshName] = useState("");
   const [sshAuthentication, setSshAuthentication] = useState<"password" | "key">("password");
   const [sshIdentityFile, setSshIdentityFile] = useState("");
@@ -4321,7 +4322,7 @@ export function ConnectionsSettings() {
                 setAddBackendDialogOpen(open);
                 if (open) {
                   setRouteTarget(null);
-                  setSshProfileId(crypto.randomUUID());
+                  setSshProfileId(`${sshFormId}:${Date.now()}`);
                   setSshSecret("");
                 } else {
                   setSavedBackendError(null);

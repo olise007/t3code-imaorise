@@ -154,7 +154,21 @@ export function CodexSetupSection(props: CodexSetupSectionProps) {
         }}
       />
     );
-  return content;
+  return (
+    <>
+      {content}
+      {props.mode === "existing" ? (
+        <Button
+          size="sm"
+          variant="ghost-muted"
+          disabled={props.readOnly}
+          onClick={() => props.onModeChange("managed")}
+        >
+          Other sign-in methods
+        </Button>
+      ) : null}
+    </>
+  );
 }
 
 /** All add-Codex entry points use the same managed account setup. */
@@ -408,7 +422,7 @@ function ManagedCodexSetup({
       if (returnUrl.pathname === "/welcome") returnUrl.hash = `agents:${environmentId}`;
       if (returnUrl.pathname === "/settings/providers")
         returnUrl.searchParams.set("instanceId", instanceId);
-      if (primaryAuthEnvironmentId) {
+      if (primaryAuthEnvironmentId && !methodId.startsWith("codex-")) {
         const attemptId = `${handoffId}:${++handoffSequence.current}`;
         const succeeded = await run(
           () => reconnectProfile({ environmentId, input: { instanceId, methodId } }),
@@ -523,7 +537,7 @@ function ManagedCodexSetup({
     async (authorizationUrl: string) => {
       try {
         const receive = window.desktopBridge?.receiveProviderAuthCallback;
-        if (receive && clientCallback && flowId) {
+        if (receive && clientCallback && flowId && auth?.interaction?.type !== "deviceCode") {
           if (receivingCallback.current === authorizationUrl) {
             await ensureLocalApi().shell.openExternal(authorizationUrl);
             return;
@@ -544,7 +558,7 @@ function ManagedCodexSetup({
         );
       }
     },
-    [clientCallback, flowId, run, completeAuth, environmentId, instanceId],
+    [clientCallback, flowId, run, completeAuth, environmentId, instanceId, auth?.interaction?.type],
   );
 
   useEffect(() => {
@@ -609,7 +623,11 @@ function ManagedCodexSetup({
   );
 
   const handoffUrl =
-    needsManualCallback && url && auth?.flowId && providerAuthReturnUrl(returnUrl.toString())
+    needsManualCallback &&
+    url &&
+    auth?.interaction?.type !== "deviceCode" &&
+    auth?.flowId &&
+    providerAuthReturnUrl(returnUrl.toString())
       ? codexAuthHandoffUrl(
           {
             authorizationUrl: url,
@@ -653,7 +671,7 @@ function ManagedCodexSetup({
     </Button>
   );
   const callbackCompletion =
-    !handoff && auth?.phase === "waiting" && url ? (
+    !handoff && auth?.phase === "waiting" && url && auth?.interaction?.type !== "deviceCode" ? (
       <div className="flex w-full flex-col gap-3 text-xs leading-relaxed text-muted-foreground">
         <p>If sign-in doesn't return to T3 Code, paste the URL from the final localhost page.</p>
         <form
@@ -756,6 +774,44 @@ function ManagedCodexSetup({
   const logoutWarning =
     auth?.phase === "idle" && auth.message?.startsWith("Signed out locally.") ? auth.message : null;
 
+  const otherSignInMethods = (
+    <details className="px-3 py-3 text-xs sm:px-4">
+      <summary className="cursor-pointer">Other sign-in methods</summary>
+      <p className="my-2 text-muted-foreground">
+        Use native Codex sign-in when ChatGPT token sharing is unavailable. Credentials stay in the
+        selected environment.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {[
+          ["codex-browser", "Codex browser login"],
+          ["codex-device", "Device-code login"],
+          ["codex-existing", "Existing CLI credentials"],
+        ].map(([id, label]) => (
+          <Button
+            key={id}
+            size="sm"
+            variant="outline"
+            disabled={unavailable || busy || !auth?.methods?.some((method) => method.id === id)}
+            onClick={() => void setup(id)}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+      {auth?.interaction?.type === "deviceCode" ? (
+        <p className="mt-3">
+          Enter this code on the Codex verification page:{" "}
+          <RedactedSensitiveText
+            value={auth.interaction.userCode}
+            ariaLabel="Toggle device-code visibility"
+            revealTooltip="Show device code"
+            hideTooltip="Hide device code"
+          />
+        </p>
+      ) : null}
+    </details>
+  );
+
   if (presentation === "onboarding") {
     const setupError =
       logoutWarning ??
@@ -768,6 +824,7 @@ function ManagedCodexSetup({
     return (
       <>
         {accountPicker}
+        {otherSignInMethods}
         <CodexWelcomeCard
           title={displayName || provider?.displayName || "Codex"}
           description={
@@ -892,6 +949,7 @@ function ManagedCodexSetup({
   return (
     <section aria-label="Codex setup" className="divide-y divide-border/50">
       {accountPicker}
+      {otherSignInMethods}
       <SettingsRow
         title="ChatGPT account"
         description={accountDescription}

@@ -14,6 +14,7 @@ export interface SshSetupAttempt {
 }
 
 export function createSshSetupProgress() {
+  let nextId = 0;
   let attempts: readonly SshSetupAttempt[] = [];
   let notification: ReturnType<typeof setTimeout> | undefined;
   const notify = () => {
@@ -33,7 +34,7 @@ export function createSshSetupProgress() {
     },
     snapshot: () => attempts,
     begin: (target: DesktopSshEnvironmentTarget) => {
-      const id = crypto.randomUUID();
+      const id = `ssh-setup-${Date.now()}-${++nextId}`;
       attempts = [
         ...attempts.filter((item) => item.status === "running"),
         ...attempts.filter((item) => item.status !== "running").slice(-10),

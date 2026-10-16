@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import {
   codexAuthorizationRequest,
+  codexNativeAuthorizationRequest,
+  codexSignInAuthorizationRequest,
   codexAuthDeliveryUrl,
   codexAuthHandoffUrl,
   readCodexAuthDelivery,
@@ -76,4 +78,28 @@ describe("Codex desktop handoff", () => {
     expect(() => codexAuthorizationRequest(url.toString())).toThrow();
     expect(() => codexAuthDeliveryUrl(input, callbackUrl + "&state=another")).toThrow();
   });
+});
+
+it("accepts fresh native Codex URLs without broadening token-sharing callback validation", () => {
+  const url = new URL(authorizationUrl());
+  url.pathname = "/oauth/authorize";
+  url.searchParams.set("client_id", "app_fixture");
+  url.searchParams.set("redirect_uri", "http://localhost:1455/auth/callback");
+  expect(codexNativeAuthorizationRequest(url.toString()).redirectUri).toBe(
+    "http://localhost:1455/auth/callback",
+  );
+  expect(codexSignInAuthorizationRequest(url.toString()).state).toBe("a".repeat(43));
+  expect(() => codexAuthorizationRequest(url.toString())).toThrow();
+  const handoff = { ...input, authorizationUrl: url.toString() };
+  const callback = `http://localhost:1455/auth/callback?state=${"a".repeat(43)}&code=fixture`;
+  expect(readCodexAuthHandoff(codexAuthHandoffUrl(handoff), false)).toEqual(handoff);
+  expect(readCodexAuthDelivery(codexAuthDeliveryUrl(handoff, callback))?.callbackUrl).toBe(
+    callback,
+  );
+  url.searchParams.append("state", "another");
+  expect(() => codexNativeAuthorizationRequest(url.toString())).toThrow();
+  url.searchParams.delete("state");
+  url.searchParams.set("state", "a".repeat(43));
+  url.searchParams.set("redirect_uri", "http://localhost:1456/auth/callback");
+  expect(() => codexNativeAuthorizationRequest(url.toString())).toThrow();
 });

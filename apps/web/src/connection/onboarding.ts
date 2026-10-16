@@ -101,7 +101,7 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
         }
         return yield* onboarding.registerSsh({
           target: input.target,
-          label: input.label,
+          ...(input.label === undefined ? {} : { label: input.label }),
           ...(input.expectedEnvironmentId
             ? { expectedEnvironmentId: input.expectedEnvironmentId }
             : {}),

@@ -1,7 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off - Native loopback helper uses a bounded Node listener with AbortController cleanup.
 import * as Schema from "effect/Schema";
 import * as NodeHttp from "node:http";
-import { codexAuthorizationRequest, codexCallbackUrl } from "@t3tools/shared/codexAuthHandoff";
+import {
+  codexSignInAuthorizationRequest,
+  codexCallbackUrl,
+} from "@t3tools/shared/codexAuthHandoff";
 
 export class CodexAuthCallbackError extends Schema.TaggedError<CodexAuthCallbackError>()(
   "CodexAuthCallbackError",
@@ -15,7 +18,7 @@ export class CodexAuthCallbackError extends Schema.TaggedError<CodexAuthCallback
 const listeners = new Map<string, AbortController>();
 
 export function cancelCodexAuthCallback(authorizationUrl: string) {
-  const { state } = codexAuthorizationRequest(authorizationUrl);
+  const { state } = codexSignInAuthorizationRequest(authorizationUrl);
   listeners.get(state)?.abort();
 }
 
@@ -26,7 +29,7 @@ export async function receiveCodexAuthCallback(
   destination?: (callbackUrl: string) => string,
   signal?: AbortSignal,
 ) {
-  const request = codexAuthorizationRequest(authorizationUrl);
+  const request = codexSignInAuthorizationRequest(authorizationUrl);
   if (listeners.has(request.state))
     throw new Error("This sign-in is already open on this computer.");
   const abort = new AbortController();

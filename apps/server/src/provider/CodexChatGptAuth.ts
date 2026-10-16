@@ -106,6 +106,15 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   readonly defaultReturnUrl?: string;
   readonly reconnectProfile?: ChatGptReconnectProfile | null;
   readonly telemetryFlow?: "direct" | "primary_handoff";
+  readonly native?: {
+    readonly methods: readonly import("@t3tools/contracts").ProviderAuthMethod[];
+    readonly authenticate: (
+      method: string,
+      context: ProviderAuthFlowContext,
+    ) => Effect.Effect<void, ProviderSetupError, import("effect/Scope").Scope>;
+    readonly selectTokenSharing: Effect.Effect<void, ProviderSetupError>;
+    readonly logout: Effect.Effect<boolean, ProviderSetupError>;
+  };
 }) {
   const analytics = yield* Effect.serviceOption(AnalyticsService.AnalyticsService);
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
@@ -852,13 +861,14 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
           type: "agent" as const,
         },
         // The wire contract allows 32 methods; advertise the 30 most recent profiles.
-        ...profiles.slice(0, 30).map((profile) => ({
+        ...profiles.slice(0, options.native ? 27 : 30).map((profile) => ({
           id: profileMethodId(profile.clientId),
           name: `${profile.email ?? "ChatGPT account"} · ${profile.connectionLabel}`,
           ...(profile.email ? { accountEmail: profile.email } : {}),
           description: "Reuse this account's original sign-in registration.",
           type: "agent" as const,
         })),
+        ...(options.native?.methods ?? []),
       ];
     }),
     authenticate: (method, context) =>
@@ -879,11 +889,20 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
                     : "default",
             callbackMode: context.callbackMode ?? "server",
           },
-          authenticate(method, context),
+          options.native?.methods.some((item) => item.id === method)
+            ? options.native.authenticate(method, context)
+            : authenticate(method, context).pipe(
+                Effect.andThen(options.native?.selectTokenSharing ?? Effect.void),
+              ),
           context.expiresAt,
         ),
       ),
-    logout: lock.withPermit(withSessionLock(logout)),
+    logout: lock.withPermit(
+      Effect.gen(function* () {
+        if (options.native && (yield* options.native.logout)) return;
+        return yield* withSessionLock(logout);
+      }),
+    ),
   });
   const reconnectProfile = Effect.fnUntraced(function* (methodId: string) {
     if (methodId === "chatgpt-change-account") return null;
@@ -969,6 +988,7 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
         );
       yield* saveRegistration(registration);
       yield* save(profile.credentials, true);
+      if (options.native) yield* options.native.selectTokenSharing;
     });
     return lock.withPermit(
       track(
