@@ -131,6 +131,7 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
             : {}),
           afterRegistration: (environmentId, selectedProviders) =>
             Effect.gen(function* () {
+              sshSetupProgress.associateEnvironment(progressId, environmentId);
               sshSetupProgress.append(
                 progressId,
                 `Installing selected providers: ${selectedProviders.join(", ")}. Account sign-in is separate.`,

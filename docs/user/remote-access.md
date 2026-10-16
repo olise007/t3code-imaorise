@@ -188,6 +188,22 @@ Running distros are discovered automatically; **Load hosts** starts a stopped
 distro when you need it. Hosts with the same alias in different sources stay
 separate.
 
+Choose **Manual server** to save connection details without adding an SSH config
+entry. Enter its address, username, port, and password or source-owned private-key
+path. Manual servers use T3's own host trust records and do not inherit SSH aliases
+or identities. Confirm an unfamiliar fingerprint only after verifying it; a changed
+host key requires investigation rather than automatic replacement. Saved manual
+servers can be tested, edited, and removed from Connections.
+
+Passwords and key passphrases stay in memory unless you select **Remember securely**.
+T3 saves them only after authentication succeeds and protected storage is available.
+Otherwise it explains that you will be prompted again. Private keys stay in their
+Windows or WSL source.
+
+Setup progress remains available in Connections after closing the setup dialog.
+**View progress** shows stages and sanitized live details; **Cancel setup** stops
+the active attempt. Recent attempts are kept for the current app session only.
+
 Imaorise Windows desktop builds prepare Linux x64 and native Windows x64 hosts
 by uploading their bundled server runtime over SSH. Setup inspects the remote
 platform and shows missing requirements, optional provider CLIs, commands, sources,

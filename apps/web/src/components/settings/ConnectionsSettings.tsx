@@ -2531,6 +2531,8 @@ export function ConnectionsSettings() {
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [sshManual, setSshManual] = useState(false);
   const [editingSshRoute, setEditingSshRoute] = useState<string | null>(null);
+  const [editingSshOriginalTarget, setEditingSshOriginalTarget] =
+    useState<DesktopSshEnvironmentTarget | null>(null);
   const removeEditedSshRoute = useAtomCommand(
     environmentCatalog.removeRoute,
     "Replace SSH profile",
@@ -2976,12 +2978,15 @@ export function ConnectionsSettings() {
         editingSshRoute &&
         editingSshRoute !== `ssh:${routeTarget.environmentId}:${sshTargetKey(target)}`
       ) {
+        if (editingSshOriginalTarget)
+          await window.desktopBridge?.forgetSshCredentials?.(editingSshOriginalTarget);
         await removeEditedSshRoute({
           environmentId: routeTarget.environmentId,
           routeId: editingSshRoute,
         });
       }
       setEditingSshRoute(null);
+      setEditingSshOriginalTarget(null);
 
       setSavedBackendHost("");
       setSavedBackendPairingCode("");
@@ -2998,7 +3003,13 @@ export function ConnectionsSettings() {
       });
       setIsAddingSavedBackend(false);
     },
-    [connectSshEnvironment, routeTarget, editingSshRoute, removeEditedSshRoute],
+    [
+      connectSshEnvironment,
+      routeTarget,
+      editingSshRoute,
+      editingSshOriginalTarget,
+      removeEditedSshRoute,
+    ],
   );
 
   const handleAddSavedBackend = useCallback(
@@ -4403,6 +4414,7 @@ export function ConnectionsSettings() {
                 if (open) {
                   setRouteTarget(null);
                   setEditingSshRoute(null);
+                  setEditingSshOriginalTarget(null);
                   setSshProfileId(`${sshFormId}:${Date.now()}`);
                   setSshSecret("");
                   setSshRememberSecret(false);
@@ -4482,6 +4494,7 @@ export function ConnectionsSettings() {
             onAddRoute={(target) => {
               setRouteTarget(target);
               setEditingSshRoute(null);
+              setEditingSshOriginalTarget(null);
               setSavedBackendError(null);
               setAddBackendDialogOpen(true);
             }}
@@ -4495,6 +4508,7 @@ export function ConnectionsSettings() {
               if (!target.manual) return;
               setRouteTarget(environment);
               setEditingSshRoute(connectionRouteId(route.target));
+              setEditingSshOriginalTarget(target);
               setSavedBackendMode("ssh");
               setSshManual(true);
               setSshProfileId(target.manual.profileId);

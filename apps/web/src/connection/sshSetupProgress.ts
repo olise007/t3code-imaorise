@@ -1,3 +1,4 @@
+import { sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
 import type { DesktopSshEnvironmentTarget } from "@t3tools/contracts";
 export const sshSetupTargetKey = (target: DesktopSshEnvironmentTarget) =>
   JSON.stringify([
@@ -14,6 +15,7 @@ export const sshSetupTargetKey = (target: DesktopSshEnvironmentTarget) =>
 
 export interface SshSetupAttempt {
   readonly id: string;
+  readonly environmentId: string | null;
   readonly target: DesktopSshEnvironmentTarget;
   readonly startedAt: number;
   readonly status: "running" | "succeeded" | "failed" | "cancelled";
@@ -61,6 +63,7 @@ export function createSshSetupProgress() {
         {
           id,
           target,
+          environmentId: null,
           startedAt: Date.now(),
           status: "running",
           lines: [],
@@ -71,18 +74,16 @@ export function createSshSetupProgress() {
       notify();
       return id;
     },
+    associateEnvironment: (id: string, environmentId: string) => {
+      attempts = attempts.map((attempt) =>
+        attempt.id === id ? { ...attempt, environmentId } : attempt,
+      );
+      notify();
+    },
     append: (id: string, text: string) => {
       // Authentication/protocol responses never enter this store. Strip terminal
       // control sequences and redact URL/query-shaped credentials defensively.
-      const safe = text
-        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-        .replace(/https?:\/\/\S+/gi, "[address omitted]")
-        .replace(
-          /((?:token|password|credential|secret|authorization|code)\s*[:=]\s*)[^\s,;]+/gi,
-          "$1[redacted]",
-        )
-        .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
-        .slice(0, 8192);
+      const safe = sanitizeSetupOutput(text).slice(0, 8192);
       attempts = attempts.map((item) => {
         if (item.id !== id || item.status !== "running") return item;
         const lines = [

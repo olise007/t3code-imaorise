@@ -113,6 +113,18 @@ Provider update checks and restart continuation preferences are in
 **Settings → Maintenance**. If provider update checks are disabled, enable them
 there before refreshing to find newer versions.
 
+In provider settings, **Check for updates** and **Choose version** show available
+official releases separately from the installed and selected version. Prereleases
+are optional. Review the exact version, download source, integrity, and affected
+instances before upgrading or downgrading. Unknown compatibility requires explicit
+confirmation; known incompatible versions cannot be selected. Providers without a
+verified artifact or supported installer show manual guidance.
+
+T3-managed updates download alongside running work and wait for affected agents
+and sign-in flows to finish before activation. Checks do not change a selected
+version automatically. External installations keep their owning package manager;
+installers that cannot accept a verified selected package require manual updating.
+
 Install App Store or Google Play releases as usual. The mobile app can also
 download updates in the background and apply them when you next leave the app.
 It saves drafts and queued messages before restarting. If you keep the app open
