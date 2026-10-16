@@ -18,6 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
@@ -64,6 +65,7 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
   const platform = yield* HostProcess.Platform;
   const arch = yield* HostProcess.Architecture;
   const home = yield* HostProcess.HomeDirectory;
+  const environment = yield* HostProcess.Environment;
   const http = yield* HttpClient.HttpClient;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const scope = yield* Effect.scope;
@@ -79,7 +81,9 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
     command: string,
     args: readonly string[],
   ) {
-    const child = yield* spawner.spawn(ChildProcess.make(command, args, { cwd: home }));
+    const child = yield* spawner.spawn(
+      ChildProcess.make(command, args, { cwd: home, env: environment, extendEnv: false }),
+    );
     const [stdout, , code] = yield* Effect.all(
       [
         child.stdout.pipe(Stream.decodeText(), Stream.mkString),
@@ -206,7 +210,8 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
           )
       )
         return yield* failure(recipe.driver, "verify", "Provider archive contains an unsafe path.");
-      const entries = yield* run(tar, ["-tvf", archive]);
+      const nodeFiles = [recipe.executable, `${recipe.executable.split("/")[0]!}/LICENSE`];
+      const entries = yield* run(tar, ["-tvf", archive, ...(node ? nodeFiles : [])]);
       if (
         entries
           .trim()
@@ -218,7 +223,7 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
           "verify",
           "Provider archive contains a link or unsupported entry.",
         );
-      yield* run(tar, ["-xf", archive, "-C", unpacked]);
+      yield* run(tar, ["-xf", archive, "-C", unpacked, ...(node ? nodeFiles : [])]);
       const source = path.join(unpacked, recipe.executable);
       const root = path.join(stage, "runtime");
       if (node) {
@@ -263,7 +268,7 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
     },
     Effect.scoped,
     Effect.mapError((cause) =>
-      cause instanceof ProviderSetupError
+      Schema.is(ProviderSetupError)(cause)
         ? cause
         : failure(
             "provider",
@@ -277,7 +282,7 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
   return ManagedProviderArchives.of({
     ensureNode,
     changes: (driver) =>
-      states.changes.pipe(
+      SubscriptionRef.changes(states).pipe(
         Stream.map((all) => all.get(driver) ?? idle(driver)),
         Stream.changes,
       ),
@@ -322,6 +327,7 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
             }),
           ),
           Effect.ensuring(Effect.sync(() => running.delete(driver))),
+          Effect.asVoid,
           Effect.forkIn(scope),
         );
         running.set(driver, { id, fiber });

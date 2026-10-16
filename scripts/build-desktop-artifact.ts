@@ -1103,6 +1103,10 @@ export const bundlesWslRuntime = (input: {
 export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE,
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
+  {
+    from: "apps/desktop/prod-resources/wsl-runtime.tar.gz.requirements.json",
+    to: "wsl-runtime.tar.gz.requirements.json",
+  },
 ] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
   {
@@ -2795,15 +2799,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
-      ...(platform === "win" && wslRuntimeBundled
-        ? [
-            ...WSL_RUNTIME_EXTRA_RESOURCES,
-            {
-              from: "apps/desktop/prod-resources/wsl-runtime.tar.gz.requirements.json",
-              to: "wsl-runtime.tar.gz.requirements.json",
-            },
-          ]
-        : []),
+      ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
       ...(platform === "win" && sshWindowsRuntimeBundled
         ? [
             {
@@ -3038,9 +3034,10 @@ export const stageWslRuntimeArchive = Effect.fn("stageWslRuntimeArchive")(functi
   yield* fs.writeFileString(input.hashPath, `${digest}\n`);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const archiveOutput = Effect.fn("readRuntimeMetadata")(function* (args: readonly string[]) {
+    const platform = yield* HostProcess.Platform;
     const child = yield* spawner.spawn(
       ChildProcess.make(
-        process.platform === "win32"
+        platform === "win32"
           ? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\tar.exe`
           : "tar",
         args,

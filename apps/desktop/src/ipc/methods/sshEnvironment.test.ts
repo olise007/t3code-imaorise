@@ -48,6 +48,7 @@ describe("SSH environment IPC", () => {
     Layer.succeed(
       DesktopSshEnvironment,
       DesktopSshEnvironment.of({
+        cancelSetup: () => Effect.void,
         discoverHosts: () => Effect.die("unexpected discovery"),
         resolveHost: (alias, source) =>
           Effect.sync(() => {

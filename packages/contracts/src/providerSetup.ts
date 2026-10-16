@@ -14,8 +14,12 @@ export const ProviderSetupInput = Schema.Struct({
 });
 export type ProviderSetupInput = typeof ProviderSetupInput.Type;
 export const ProviderInstallSelectedInput = Schema.Struct({
+  operationId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
   recipeRevision: Schema.Literal(1),
   drivers: Schema.Array(ProviderDriverKind).check(Schema.isMaxLength(32)),
+});
+export const ProviderInstallSelectedCancelInput = Schema.Struct({
+  operationId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
 });
 export const ProviderInstallSelectedResult = Schema.Array(
   Schema.Struct({ driver: ProviderDriverKind, message: Schema.String }),

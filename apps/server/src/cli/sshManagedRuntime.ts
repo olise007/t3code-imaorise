@@ -57,41 +57,45 @@ const operation = <A>(run: () => Promise<A>) =>
   });
 export const layer = Layer.sync(SshManagedRuntime, () =>
   SshManagedRuntime.of({
-    verifyRuntime: operation(async () => {
-      const root = NodePath.dirname(process.execPath);
-      const require = NodeModule.createRequire(NodePath.join(root, "runtime.cjs"));
-      for (const name of ["node-pty", "@ff-labs/fff-node"]) require(name);
-      const { DatabaseSync } = await import("node:sqlite");
-      const database = new DatabaseSync(":memory:");
-      database.close();
-      const monitor = NodePath.join(
-        root,
-        "resource-monitor",
-        process.platform === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor",
-      );
-      await new Promise<void>((resolve, reject) => {
-        const child = NodeChildProcess.spawn(monitor, [], { stdio: ["pipe", "pipe", "ignore"] });
-        const timer = setTimeout(() => {
-          child.kill();
-          reject(new Error("The resource monitor readiness check timed out."));
-        }, 10_000);
-        let hello = false;
-        child.stdout.on("data", (bytes: Buffer) => {
-          if (bytes.toString().includes('"type":"hello"')) hello = true;
+    verifyRuntime: Effect.flatMap(HostProcess.Platform, (platform) =>
+      operation(async () => {
+        const root = NodePath.dirname(process.execPath);
+        const require = NodeModule.createRequire(NodePath.join(root, "runtime.cjs"));
+        for (const name of ["node-pty", "@ff-labs/fff-node"]) require(name);
+        const { DatabaseSync } = await import("node:sqlite");
+        const database = new DatabaseSync(":memory:");
+        database.close();
+        const monitor = NodePath.join(
+          root,
+          "resource-monitor",
+          platform === "win32" ? "t3-resource-monitor.exe" : "t3-resource-monitor",
+        );
+        await new Promise<void>((resolve, reject) => {
+          const child = NodeChildProcess.spawn(monitor, [], { stdio: ["pipe", "pipe", "ignore"] });
+          const timer = setTimeout(() => {
+            child.kill();
+            reject(new Error("The resource monitor readiness check timed out."));
+          }, 10_000);
+          let hello = false;
+          let greeting = "";
+          child.stdout.on("data", (bytes: Buffer) => {
+            greeting = (greeting + bytes.toString()).slice(-4096);
+            if (greeting.includes('"type":"hello"')) hello = true;
+          });
+          child.once("error", (error) => {
+            clearTimeout(timer);
+            reject(error);
+          });
+          child.once("exit", (code) => {
+            clearTimeout(timer);
+            if (code === 0 && hello) resolve();
+            else reject(new Error("The resource monitor could not start on this platform."));
+          });
+          child.stdin.on("error", () => {});
+          child.stdin.end('{"version":1,"type":"shutdown"}\n');
         });
-        child.once("error", (error) => {
-          clearTimeout(timer);
-          reject(error);
-        });
-        child.once("exit", (code) => {
-          clearTimeout(timer);
-          if (code === 0 && hello) resolve();
-          else reject(new Error("The resource monitor could not start on this platform."));
-        });
-        child.stdin.on("error", () => {});
-        child.stdin.end('{"version":1,"type":"shutdown"}\n');
-      });
-    }),
+      }),
+    ),
     start: (key, version, resume) =>
       Effect.flatMap(HostProcess.Platform, (platform) =>
         operation(() => startManagedSsh(key, version, platform, resume)),

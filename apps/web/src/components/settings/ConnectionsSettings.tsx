@@ -175,6 +175,7 @@ import { environmentCatalog } from "~/connection/catalog";
 import {
   connectPairing as connectPairingAtom,
   connectSshEnvironment as connectSshEnvironmentAtom,
+  cancelSshEnvironmentSetup,
 } from "~/connection/onboarding";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useEnvironmentQuery } from "~/state/query";
@@ -2523,6 +2524,7 @@ export function ConnectionsSettings() {
   const [sshSource, setSshSource] = useState<DesktopSshExecutionSource>({ type: "local" });
   const [isRefreshingSshHosts, setIsRefreshingSshHosts] = useState(false);
   const [sshProgress, setSshProgress] = useState<string | null>(null);
+  const activeSshSetupTarget = useRef<DesktopSshEnvironmentTarget | null>(null);
   const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
   const [sshReport, setSshReport] = useState<DesktopSshDiscoveryReport | null>(null);
   const sshDiscoverySequence = useRef(0);
@@ -2623,7 +2625,11 @@ export function ConnectionsSettings() {
           (target.executionSource?.type === "wsl" &&
             target.executionSource.distro === sshSource.distro))
       )
-        setSshProgress(stage);
+        setSshProgress(
+          stage === "Connected"
+            ? "Connected. Preparing selected providers; sign-in is separate…"
+            : stage,
+        );
     });
   }, [desktopBridge, isSshDiscoveryActive, savedBackendSshHost, sshSource]);
   const desktopWsl = useEnvironmentQuery(
@@ -2913,6 +2919,7 @@ export function ConnectionsSettings() {
   // Shared by manual SSH submission and discovered-host selection.
   const connectSavedBackendSshTarget = useCallback(
     async (target: DesktopSshEnvironmentTarget) => {
+      activeSshSetupTarget.current = target;
       setIsAddingSavedBackend(true);
       setSavedBackendError(null);
       const result = await connectSshEnvironment({
@@ -2920,6 +2927,7 @@ export function ConnectionsSettings() {
         label: "",
         ...(routeTarget ? { expectedEnvironmentId: routeTarget.environmentId } : {}),
       });
+      activeSshSetupTarget.current = null;
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
           setSavedBackendError(formatDesktopSshConnectionError(squashAtomCommandFailure(result)));
@@ -2939,7 +2947,7 @@ export function ConnectionsSettings() {
         title: routeTarget ? "Route added" : "Environment connected",
         description: routeTarget
           ? `${routeTarget.label} can now be reached over SSH ${target.alias}.`
-          : `${target.alias} is ready over an SSH-managed tunnel.`,
+          : `${target.alias} is connected. Review provider setup and sign in under Settings → Providers for this environment.`,
       });
       setIsAddingSavedBackend(false);
     },
@@ -3629,6 +3637,17 @@ export function ConnectionsSettings() {
           <PlusIcon className="size-3.5" />
           {isAddingSavedBackend ? "Adding…" : routeTarget ? "Add route" : "Add environment"}
         </Button>
+        {isAddingSavedBackend ? (
+          <Button
+            variant="outline"
+            onClick={() => {
+              const target = activeSshSetupTarget.current;
+              if (target) void cancelSshEnvironmentSetup(target);
+            }}
+          >
+            Cancel setup
+          </Button>
+        ) : null}
       </div>
     </div>
   );
@@ -4149,6 +4168,8 @@ export function ConnectionsSettings() {
             <Dialog
               open={addBackendDialogOpen}
               onOpenChange={(open) => {
+                if (!open && isAddingSavedBackend && activeSshSetupTarget.current)
+                  void cancelSshEnvironmentSetup(activeSshSetupTarget.current).catch(() => {});
                 setAddBackendDialogOpen(open);
                 if (open) {
                   setRouteTarget(null);

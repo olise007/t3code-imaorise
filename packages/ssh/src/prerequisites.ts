@@ -316,7 +316,7 @@ $signature=Get-AuthenticodeSignature -LiteralPath $file
 if($signature.Status -ne 'Valid'){throw 'Installer signature verification failed'}
 $child=Start-Process -FilePath $file -ArgumentList '${r.args}' -PassThru
 $child.WaitForExit()
-if($child.ExitCode -eq 3010 -or $child.ExitCode -eq 1641){throw 'A restart is required to complete installation. T3 will not restart this machine. Restart separately, then review setup again.'}
+if($child.ExitCode -eq 3010 -or $child.ExitCode -eq 1641){Write-Output 'T3_SETUP_RESTART_REQUIRED'; throw 'A restart is required to complete installation. T3 will not restart this machine. Restart separately, then review setup again.'}
 if($child.ExitCode -ne 0){throw 'The approved Windows installer failed. Review Windows installer state before retrying.'}
 $child=$null`,
   )
@@ -373,6 +373,7 @@ export const inspectAndPrepare = Effect.fn("ssh.prerequisites.prepare")(function
     input.providers ??
     PROVIDER_RECIPE_CATALOG.map((entry) => {
       const installed = Boolean(values.get(`tool.${entry.command}`));
+      const recipe = providerArchiveRecipe(entry.driver, input.requirements.platform);
       const available =
         installed ||
         entry.driver === "codex" ||
@@ -382,10 +383,12 @@ export const inspectAndPrepare = Effect.fn("ssh.prerequisites.prepare")(function
         driver: entry.driver,
         label: entry.label,
         version: entry.version,
-        source: entry.source,
+        source: recipe?.url ?? entry.source,
         command: installed
           ? "Reuse existing installation; no replacement"
-          : `T3 managed installer: ${entry.driver} ${entry.version ?? ""} (verified vendor archive; user scope)`,
+          : recipe
+            ? `Download ${recipe.url}; verify ${recipe.integrity}; tar -xf <verified archive> -C <private staging>; ${recipe.executable} --version; activate in the T3 user tools directory.`
+            : `Existing T3 managed installer: ${entry.driver} ${entry.version ?? ""}; verify vendor archive and executable before activation (user scope).`,
         available,
         installed,
         reason: installed
@@ -432,7 +435,8 @@ export const inspectAndPrepare = Effect.fn("ssh.prerequisites.prepare")(function
   if (
     current.get("identity") !== review.remoteIdentity ||
     current.get("architecture") !== values.get("architecture") ||
-    current.get("manager") !== values.get("manager")
+    current.get("manager") !== values.get("manager") ||
+    current.get("elevation") !== values.get("elevation")
   )
     return yield* new SshLaunchError({
       message: "The SSH destination changed after review. Start a new review.",
@@ -484,7 +488,10 @@ export const inspectAndPrepare = Effect.fn("ssh.prerequisites.prepare")(function
         (cause) =>
           new SshLaunchError({
             message:
-              "Approved prerequisite installation failed, requires a separate restart, or elevation was rejected. Review the remote installer state, then start a new review. Completed installations are retained.",
+              cause._tag === "SshCommandError" &&
+              cause.stdout?.includes("T3_SETUP_RESTART_REQUIRED")
+                ? "Windows requires a restart to complete the approved prerequisite installation. T3 has not restarted the machine. Restart separately, then review setup again."
+                : "Approved prerequisite installation failed or elevation was rejected. Review the remote installer state, then start a new review. Completed installations are retained.",
             stdout: "",
             cause,
           }),

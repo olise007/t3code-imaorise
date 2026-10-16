@@ -1963,7 +1963,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "clerk.example.com",
       "example.clerk.accounts.dev",
     ]);
-    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code</string>");
+    assert.include(entitlements, "<string>ABC1234567.com.imaorise.t3code</string>");
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
@@ -2017,7 +2017,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         configuration,
       ),
       {
-        touchIdKeychainAccessGroup: "ABC1234567.com.t3tools.t3code.webauthn",
+        touchIdKeychainAccessGroup: "ABC1234567.com.imaorise.t3code.webauthn",
         browserPasskeys: true,
       },
     );

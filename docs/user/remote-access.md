@@ -189,12 +189,26 @@ distro when you need it. Hosts with the same alias in different sources stay
 separate.
 
 Imaorise Windows desktop builds prepare Linux x64 and native Windows x64 hosts
-by uploading their bundled server runtime over SSH. The remote machine needs
-OpenSSH plus extraction and checksum tools; Windows hosts need PowerShell.
-Provider CLIs and account login must be configured on the remote machine.
-No remote Node installation or desktop installer is needed.
+by uploading their bundled server runtime over SSH. Setup inspects the remote
+platform and shows missing requirements, optional provider CLIs, commands, sources,
+and elevation needs before asking you to approve installation. Debian/Ubuntu and
+Fedora/RHEL hosts can install missing system packages through their package manager.
+Windows uses verified installers; missing system components require an elevated
+SSH session. Other unsupported requirements receive manual instructions.
 
-Provider CLIs must be on the remote SSH session's `PATH`. For Linux, check with:
+The control server needs no separate Node or desktop installation. A provider
+that requires Node can install a verified private copy with your approval. Existing
+and custom provider installations are preserved. After connection, finish provider
+account sign-in in that environment's provider settings; local credentials are never copied.
+Providers without a verified automatic recipe show their manual setup guidance.
+
+Cancel setup to stop owned installation work. Completed packages remain installed;
+retry explicitly after resolving a failure. Reconnecting never repeats approved
+system commands or provider installation. T3 does not upgrade the OS, change the
+firewall or SSH server, or reboot the machine.
+
+For manually installed providers, make their executables available to the remote
+SSH session or configure their executable paths in provider settings. On Linux:
 
 ```bash
 ssh user@example.com 'sh -lc "command -v claude codex"'

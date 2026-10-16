@@ -2361,6 +2361,8 @@ const layerWsRpc = (
           providerAuth.subscribe(input, currentSessionId),
         [WS_METHODS.providerInstallStart]: (input) => providerInstallation.start(input),
         [WS_METHODS.providerInstallSelected]: (input) => providerInstallation.selected(input),
+        [WS_METHODS.providerInstallSelectedCancel]: ({ operationId }) =>
+          providerInstallation.cancelSelected(operationId),
         [WS_METHODS.providerInstallCancel]: (input) => providerInstallation.cancel(input),
         [WS_METHODS.providerInstallSubscribe]: (input) => providerInstallation.subscribe(input),
         [WS_METHODS.providerInstallRemove]: (input) => providerInstallation.remove(input),

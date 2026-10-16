@@ -11,6 +11,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Exit from "effect/Exit";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
@@ -58,6 +61,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
   input: {
     instance?: ProviderInstance;
     settings?: Parameters<typeof ServerSettings.layerTest>[0];
+    archives?: Partial<ManagedProviderArchives.ManagedProviderArchives["Service"]>;
   } = {},
 ) {
   const calls: string[] = [];
@@ -66,7 +70,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
   const router = yield* makeProviderInstallation().pipe(
     Effect.provide(
       Layer.mergeAll(
-        Layer.mock(ManagedProviderArchives.ManagedProviderArchives)({}),
+        Layer.mock(ManagedProviderArchives.ManagedProviderArchives)(input.archives ?? {}),
         ServerSettings.layerTest(input.settings),
         Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
           getInstance: (id) =>
@@ -125,6 +129,69 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
 });
 
 describe("provider installation routing", () => {
+  it.effect("preserves custom provider executables and keeps authentication separate", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({
+        settings: {
+          providerInstances: {
+            [instanceId]: { driver, config: { binaryPath: "/custom/antigravity" } },
+          },
+        },
+      });
+      const result = yield* h.router.selected({
+        recipeRevision: 1,
+        operationId: "custom-selection",
+        drivers: [driver],
+      });
+      assert.include(result[0]!.message, "Custom executable preserved");
+      assert.deepEqual(h.calls, ["refresh"]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("cancels only the selected setup's owned provider installation", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const cancellations: string[] = [];
+      const h = yield* makeHarness({
+        archives: {
+          start: (selectedDriver) =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.as({
+                ...state,
+                driver: ProviderDriverKind.make(selectedDriver),
+                phase: "downloading",
+                operationId: "owned-download",
+              }),
+            ),
+          changes: () => Stream.never,
+          cancel: (selectedDriver, operationId) =>
+            Effect.sync(() => {
+              cancellations.push(`${selectedDriver}:${operationId}`);
+              return { ...state, phase: "cancelled" as const };
+            }),
+        },
+      });
+      const fiber = yield* h.router
+        .selected({
+          recipeRevision: 1,
+          operationId: "selected-setup",
+          drivers: [ProviderDriverKind.make("claudeAgent")],
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* h.router.cancelSelected("different-setup");
+      assert.deepEqual(cancellations, []);
+      yield* h.router.cancelSelected("selected-setup");
+      assert.isTrue(Exit.isFailure(yield* Fiber.await(fiber)));
+      assert.deepEqual(cancellations, ["claudeAgent:owned-download"]);
+      assert.deepEqual(h.calls, []);
+    }).pipe(
+      Effect.provideService(HostProcess.Environment, { PATH: "" }),
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
   it.effect("allows explicit installation while the provider is disabled", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

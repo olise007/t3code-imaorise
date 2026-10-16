@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Build-time ELF inspection is a native tooling boundary.
-import * as NodeFS from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
@@ -25,10 +25,13 @@ export async function writeRuntimeRequirements(
   const glibc: string[] = [],
     glibcxx: string[] = [];
   if (platform === "linux") {
-    for (const entry of await NodeFS.readdir(directory, { recursive: true, withFileTypes: true })) {
+    for (const entry of await NodeFSP.readdir(directory, {
+      recursive: true,
+      withFileTypes: true,
+    })) {
       if (!entry.isFile()) continue;
       const file = NodePath.join(entry.parentPath, entry.name);
-      const handle = await NodeFS.open(file, "r");
+      const handle = await NodeFSP.open(file, "r");
       const magic = Buffer.alloc(4);
       try {
         await handle.read(magic, 0, 4, 0);
@@ -57,7 +60,7 @@ export async function writeRuntimeRequirements(
         ? ["libatomic.so.1", "libstdc++.so.6", "libgcc_s.so.1"]
         : ["VCRUNTIME140.dll", "MSVCP140.dll"],
   };
-  await NodeFS.writeFile(
+  await NodeFSP.writeFile(
     NodePath.join(directory, "runtime-requirements.json"),
     JSON.stringify(metadata, null, 2) + "\n",
   );

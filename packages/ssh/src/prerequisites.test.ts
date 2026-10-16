@@ -217,8 +217,8 @@ describe("SSH prerequisite inspection and review", () => {
       expect(actual.prompts).toEqual(["elevation"]);
       const call = vi.mocked(runSshCommand).mock.calls[0]!;
       expect(call[0].executionSource).toEqual({ type: "wsl", distro: "Ubuntu" });
-      expect(call[1].remoteCommandArgs?.join(" ")).not.toContain("sudo-fixture-only");
-      expect(call[1].stdin).toBe("sudo-fixture-only\n");
+      expect(call[1]!.remoteCommandArgs?.join(" ")).not.toContain("sudo-fixture-only");
+      expect(call[1]!.stdin).toBe("sudo-fixture-only\n");
     }),
   );
 });

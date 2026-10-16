@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Option from "effect/Option";
+import * as Fiber from "effect/Fiber";
 import * as ManagedProviderArchives from "./ManagedProviderArchives.ts";
 import { PROVIDER_RECIPE_CATALOG } from "@t3tools/shared/providerInstallRecipes";
 
@@ -169,7 +170,7 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
     return yield* installation.state;
   });
 
-  const selected = Effect.fn("ProviderInstallation.selected")(function* (
+  const installSelected = Effect.fn("ProviderInstallation.installSelected")(function* (
     input: typeof ProviderInstallSelectedInput.Type,
   ) {
     const results: { driver: ProviderDriverKind; message: string }[] = [];
@@ -280,7 +281,12 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
             config: {
               ...latestConfig,
               ...(driver === "codex" ? { setupMode: "managed" } : {}),
-              binaryPath: driver === "codex" ? "codex" : installed.executablePath,
+              binaryPath:
+                driver === "codex"
+                  ? "codex"
+                  : driver === "antigravity"
+                    ? ""
+                    : installed.executablePath,
             },
           },
         })
@@ -303,5 +309,42 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
     }
     return results;
   });
-  return { start, cancel, subscribe, remove, selected };
+  const selections = new Map<
+    string,
+    Fiber.Fiber<{ driver: ProviderDriverKind; message: string }[], ProviderSetupError>
+  >();
+  const selected = Effect.fn("ProviderInstallation.selected")(function* (
+    input: typeof ProviderInstallSelectedInput.Type,
+  ) {
+    if (selections.has(input.operationId))
+      return yield* new ProviderSetupError({
+        instanceId: defaultInstanceIdForDriver(ProviderDriverKind.make("codex")),
+        operation: "install",
+        detail: "This setup operation is already running. Wait for it or cancel it.",
+      });
+    const fiber = yield* installSelected(input).pipe(
+      Effect.mapError((cause) =>
+        Schema.is(ProviderSetupError)(cause)
+          ? cause
+          : new ProviderSetupError({
+              instanceId: defaultInstanceIdForDriver(ProviderDriverKind.make("codex")),
+              operation: "install",
+              detail:
+                "Selected provider setup failed. Review the remote provider settings before retrying.",
+              cause,
+            }),
+      ),
+      Effect.forkChild,
+    );
+    selections.set(input.operationId, fiber);
+    return yield* Fiber.join(fiber).pipe(
+      Effect.ensuring(Effect.sync(() => selections.delete(input.operationId))),
+    );
+  });
+  const cancelSelected = (operationId: string) =>
+    Effect.gen(function* () {
+      const fiber = selections.get(operationId);
+      if (fiber) yield* Fiber.interrupt(fiber);
+    });
+  return { start, cancel, subscribe, remove, selected, cancelSelected };
 });

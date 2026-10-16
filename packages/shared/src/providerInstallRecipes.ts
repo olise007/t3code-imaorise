@@ -36,7 +36,7 @@ export const PROVIDER_RECIPE_CATALOG = [
     dependency: "",
   },
   {
-    driver: "claude",
+    driver: "claudeAgent",
     label: "Claude Code",
     command: "claude",
     version: "2.1.301",
@@ -104,7 +104,7 @@ export const PROVIDER_RECIPE_CATALOG = [
 const native: Readonly<Record<string, readonly ProviderArchiveRecipe[]>> = {
   linux: [
     npm(
-      "claude",
+      "claudeAgent",
       "2.1.301",
       "@anthropic-ai/claude-code-linux-x64",
       "sha512-JNe0VzIuXdaBrtlh+fY2SX5AQLDf8BDfIKrylOWK528AZ/aAq2bJt4SBkPikZ0CvecUbL0YN22Xe7eltAWCJGg==",
@@ -136,7 +136,7 @@ const native: Readonly<Record<string, readonly ProviderArchiveRecipe[]>> = {
   ],
   windows: [
     npm(
-      "claude",
+      "claudeAgent",
       "2.1.301",
       "@anthropic-ai/claude-code-win32-x64",
       "sha512-YXl7/bzqywOZlqMW+18zi52DbZJJD8K5exBI6p2tLs5ZVEUhsd+fPnI+FOTehpRRHQ4imtIRas5zkcb3ninNtw==",

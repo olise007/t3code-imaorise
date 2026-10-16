@@ -6,7 +6,6 @@ import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as Option from "effect/Option";
 import * as Deferred from "effect/Deferred";
@@ -48,7 +47,7 @@ const harness = Effect.fn("test.managedArchives")(function* (
       executable: "package/claude",
     }),
   }).pipe(
-    Effect.provide(Layer.mock(ServerConfig.ServerConfig)({ baseDir: root })),
+    Effect.provide(ServerConfig.layerTest(root, root)),
     Effect.provideService(HostProcess.HomeDirectory, root),
     Effect.provideService(HostProcess.Platform, "linux"),
     Effect.provideService(HostProcess.Architecture, "x64"),
@@ -82,7 +81,7 @@ it("offers every shipped driver and pins each automatic platform recipe", () => 
     BUILT_IN_DRIVERS.map((d) => d.driverKind).sort(),
   );
   for (const platform of ["linux", "windows"] as const)
-    for (const driver of ["claude", "grok", "opencode", "pi"]) {
+    for (const driver of ["claudeAgent", "grok", "opencode", "pi"]) {
       const recipe = providerArchiveRecipe(driver, platform)!;
       expect(recipe.url).toMatch(/^https:\/\//u);
       expect(recipe.integrity).toMatch(/^(sha256:[a-f0-9]{64}|sha512-[A-Za-z0-9+/]+=*)$/u);

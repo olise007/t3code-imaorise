@@ -41,6 +41,7 @@ import {
   ProviderSetupError,
   ProviderSetupInput,
   ProviderInstallSelectedInput,
+  ProviderInstallSelectedCancelInput,
   ProviderInstallSelectedResult,
 } from "./providerSetup.ts";
 
@@ -423,6 +424,7 @@ export const WS_METHODS = {
   providerAuthSubscribe: "provider.auth.subscribe",
   providerInstallStart: "provider.install.start",
   providerInstallSelected: "provider.install.selected",
+  providerInstallSelectedCancel: "provider.install.selectedCancel",
   providerInstallCancel: "provider.install.cancel",
   providerInstallSubscribe: "provider.install.subscribe",
   providerInstallRemove: "provider.install.remove",
@@ -722,6 +724,11 @@ const WsProviderInstallStartRpc = Rpc.make(WS_METHODS.providerInstallStart, {
 const WsProviderInstallSelectedRpc = Rpc.make(WS_METHODS.providerInstallSelected, {
   payload: ProviderInstallSelectedInput,
   success: ProviderInstallSelectedResult,
+  error: ProviderSetupRpcError,
+});
+const WsProviderInstallSelectedCancelRpc = Rpc.make(WS_METHODS.providerInstallSelectedCancel, {
+  payload: ProviderInstallSelectedCancelInput,
+  success: Schema.Void,
   error: ProviderSetupRpcError,
 });
 
@@ -1919,6 +1926,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderAuthSubscribeRpc,
   WsProviderInstallStartRpc,
   WsProviderInstallSelectedRpc,
+  WsProviderInstallSelectedCancelRpc,
   WsProviderInstallCancelRpc,
   WsProviderInstallSubscribeRpc,
   WsProviderInstallRemoveRpc,
