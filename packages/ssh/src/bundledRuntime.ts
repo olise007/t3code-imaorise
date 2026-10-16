@@ -203,6 +203,12 @@ try {
 `;
 }
 
+export function windowsUploadScript(hash: string, suffix: string, byteLength: number) {
+  // Win32 OpenSSH can retain stdin after a large pipe write. The verified
+  // archive length frames this transfer without depending on a forwarded EOF.
+  return `$ErrorActionPreference='Stop'; $d=Join-Path $HOME '.t3-imaorise/runtime'; [IO.Directory]::CreateDirectory($d)|Out-Null; $f=[IO.File]::Open((Join-Path $d 'upload-${hash}${suffix}.zip'),[IO.FileMode]::Create); try { $inputStream=[Console]::OpenStandardInput(); $buffer=New-Object byte[] 65536; [long]$remaining=${byteLength}; while($remaining -gt 0) { $count=$inputStream.Read($buffer,0,[int][Math]::Min($buffer.Length,$remaining)); if($count -eq 0){throw 'Runtime transfer ended before the expected archive length'}; $f.Write($buffer,0,$count); $remaining-=$count } } finally { $f.Dispose() }`;
+}
+
 export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* (
   target: DesktopSshEnvironmentTarget,
   auth: SshAuthOptions,
@@ -288,13 +294,11 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
   yield* progress("Transferring the matching runtime over SSH…");
   const transfer =
     platform === "windows"
-      ? powershellArgs(
-          `$ErrorActionPreference='Stop'; $d=Join-Path $HOME '.t3-imaorise/runtime'; [IO.Directory]::CreateDirectory($d)|Out-Null; $f=[IO.File]::Open((Join-Path $d 'upload-${hash}${suffix}.zip'),[IO.FileMode]::Create); try{[Console]::OpenStandardInput().CopyTo($f)}finally{$f.Dispose()}`,
-        )
+      ? powershellArgs(windowsUploadScript(hash, suffix, bytes.length))
       : [
           "sh",
           "-c",
-          `'umask 077; mkdir -p "$HOME/.t3-imaorise/runtime"; cat > "$HOME/.t3-imaorise/runtime/upload-${hash}${suffix}.tar.gz"'`,
+          `'umask 077; mkdir -p "$HOME/.t3-imaorise/runtime" && head -c ${bytes.length} > "$HOME/.t3-imaorise/runtime/upload-${hash}${suffix}.tar.gz"'`,
         ];
   yield* Effect.gen(function* () {
     yield* runSshCommand(target, {

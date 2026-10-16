@@ -14,6 +14,7 @@ import {
   powershellArgs,
   powershellFileArgs,
   runtimeStorageScript,
+  windowsUploadScript,
 } from "../../packages/ssh/src/bundledRuntime.ts";
 import { runtimeRequirements } from "../../packages/ssh/src/prerequisites.ts";
 import * as Effect from "effect/Effect";
@@ -88,17 +89,21 @@ const program = Effect.gen(function* () {
     stdin: runtimeStorageScript("windows", 4 * 1024 * 1024, runtimeRequirements("windows", "test")),
   });
   const payload = new Uint8Array(4 * 1024 * 1024).fill(37);
+  const digest = NodeCrypto.createHash("sha256").update(payload).digest("hex");
+  yield* runSshCommand(target, {
+    interactiveAuth: true,
+    authSecret: input.password,
+    remoteCommandArgs: powershellArgs(windowsUploadScript(digest, "-fixture", payload.length)),
+    stdinBytes: payload,
+  });
   const upload = yield* runSshCommand(target, {
     interactiveAuth: true,
     authSecret: input.password,
     remoteCommandArgs: powershellArgs(
-      "$hash=[Security.Cryptography.SHA256]::Create(); try { [BitConverter]::ToString($hash.ComputeHash([Console]::OpenStandardInput())).Replace('-','').ToLowerInvariant() } finally { $hash.Dispose() }",
+      `$p=Join-Path $HOME '.t3-imaorise/runtime/upload-${digest}-fixture.zip'; try { (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant() } finally { Remove-Item -LiteralPath $p -Force }`,
     ),
-    stdinBytes: payload,
   });
-  NodeAssert.ok(
-    upload.stdout.includes(NodeCrypto.createHash("sha256").update(payload).digest("hex")),
-  );
+  NodeAssert.ok(upload.stdout.includes(digest));
   const closed = yield* Effect.result(
     runSshCommand(target, {
       interactiveAuth: true,

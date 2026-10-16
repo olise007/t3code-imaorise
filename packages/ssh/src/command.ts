@@ -16,6 +16,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import {
   buildSshChildEnvironment,
+  isSshAuthFailure,
   retainSshAuthenticationHelper,
   type SshAuthOptions,
 } from "./auth.ts";
@@ -294,21 +295,22 @@ export const collectProcessOutput = <E>(
 
 function redactSshErrorOutput(output: string, preserveAuthEvidence = false): string {
   // The authentication layer consumes these internal challenge records. They
-  // must survive in the typed error, but never in display messages or logs.
+  // must survive in the typed error, but not display messages or command logs.
   const evidence = preserveAuthEvidence
-    ? [...output.matchAll(/^T3_SSH_(?:AUTH_)?PROMPT:[A-Za-z0-9+/=]{1,3000}$/gmu)].map(
+    ? [...output.matchAll(/^T3_SSH_(?:AUTH_)?PROMPT:[A-Za-z0-9+/=]{1,3000}(?=\r?$)/gmu)].map(
         (match) => match[0],
       )
     : [];
-  const redacted = [
-    ...evidence,
-    sanitizeSetupOutput(
-      output.replace(
-        /("(?:access_token|bearerToken|credential|pairingToken|token)"\s*:\s*")[^"]+(")/giu,
-        "$1[redacted]$2",
+  const redacted =
+    [
+      ...evidence,
+      sanitizeSetupOutput(
+        output.replace(
+          /("(?:access_token|bearerToken|credential|pairingToken|token)"\s*:\s*")[^"]+(")/giu,
+          "$1[redacted]$2",
+        ),
       ),
-    ),
-  ].join("\n");
+    ].join("\n") + (output.endsWith("\n") ? "\n" : "");
   return redacted.length > MAX_SSH_ERROR_OUTPUT_LENGTH
     ? `${redacted.slice(0, MAX_SSH_ERROR_OUTPUT_LENGTH)}\n[truncated]`
     : redacted;
@@ -483,11 +485,14 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       exitCode,
       stdout: diagnosticStdout,
       stderr: diagnosticStderr,
-      message: normalizeSshErrorMessage({
-        stdout: diagnosticStdout,
-        stderr: diagnosticStderr,
-        fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
-      }),
+      message:
+        !input.sensitiveInput && isSshAuthFailure(new Error(stderr))
+          ? "SSH authentication failed. Check the selected user and authentication method."
+          : normalizeSshErrorMessage({
+              stdout: diagnosticStdout,
+              stderr: diagnosticStderr,
+              fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
+            }),
     });
   }
 

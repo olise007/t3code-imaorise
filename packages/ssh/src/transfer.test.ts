@@ -1,9 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - These fixtures exercise owned native pipes without contacting SSH hosts.
-import * as NodeChildProcess from "node:child_process";
+import NodeChildProcess, { type ChildProcess as NativeChildProcess } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { expect, vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
@@ -73,13 +75,14 @@ it.live("rejects truncated input even when the receiver exits successfully", () 
 it.live("handles a late Windows EOF after the input writer is cancelled", () =>
   Effect.gen(function* () {
     const spawn = NodeChildProcess.spawn;
-    let captured: NodeChildProcess.ChildProcess | undefined;
+    let captured: NativeChildProcess | undefined;
     const spy = vi
       .spyOn(NodeChildProcess, "spawn")
       .mockImplementation((...args: Parameters<typeof spawn>) => {
         captured = spawn(...args);
         return captured;
       });
+    syncBuiltinESMExports();
     try {
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -92,7 +95,14 @@ it.live("handles a late Windows EOF after the input writer is cancelled", () =>
           );
           // Read a real readiness event; no timing assumptions or polling.
           yield* child.stdout.pipe(Stream.take(1), Stream.runDrain);
-          const writer = yield* Stream.run(Stream.never, child.stdin).pipe(Effect.forkScoped);
+          const feeding = yield* Deferred.make<void>();
+          const writer = yield* Stream.run(
+            Stream.fromEffect(
+              Deferred.succeed(feeding, undefined).pipe(Effect.andThen(Effect.never)),
+            ),
+            child.stdin,
+          ).pipe(Effect.forkScoped);
+          yield* Deferred.await(feeding);
           yield* Fiber.interrupt(writer);
           yield* Effect.sync(() => {
             const pipe = captured!.stdin!;
@@ -103,6 +113,7 @@ it.live("handles a late Windows EOF after the input writer is cancelled", () =>
       );
     } finally {
       spy.mockRestore();
+      syncBuiltinESMExports();
     }
   }).pipe(Effect.provide(NodeServices.layer)),
 );

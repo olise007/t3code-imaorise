@@ -19,6 +19,7 @@ import {
   runSshCommand,
 } from "./command.ts";
 import { SshCommandError } from "./errors.ts";
+import { isSshAuthFailure } from "./auth.ts";
 
 const encoder = new TextEncoder();
 
@@ -66,6 +67,66 @@ const makeNeverFinishingProcess = () => {
 };
 
 describe("ssh command", () => {
+  it.effect("keeps rejected credentials retryable after display sanitizing", () => {
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed(
+        makeFailedProcess({
+          stdout: "",
+          stderr: "fixture: Permission denied (publickey,password,keyboard-interactive).\r\n",
+        }),
+      ),
+    );
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        runSshCommand({ alias: "fixture", hostname: "fixture", username: null, port: 22 }),
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) assert.isTrue(isSshAuthFailure(result.failure));
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
+    );
+  });
+  it.effect(
+    "retains CRLF host-key evidence for authentication without displaying it",
+    () => {
+      const record = `T3_SSH_PROMPT:${Buffer.from("Host SHA256:fixture (yes/no)?").toString("base64")}`;
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          makeFailedProcess({
+            stdout: "",
+            stderr: `${record}\r\nHost key verification failed.\r\n`,
+          }),
+        ),
+      );
+      return Effect.gen(function* () {
+        const result = yield* Effect.result(
+          runSshCommand(
+            { alias: "fixture", hostname: "fixture", username: null, port: 22 },
+            { interactiveAuth: true },
+          ),
+        );
+        assert.isTrue(Result.isFailure(result));
+        if (Result.isFailure(result)) {
+          assert.instanceOf(result.failure, SshCommandError);
+          assert.include(result.failure.stderr, record);
+          assert.notInclude(result.failure.message, record);
+        }
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          ),
+        ),
+      );
+    },
+    30_000,
+  );
   it.effect("bounds extraction errors and summarizes an exhausted destination", () => {
     const stderr =
       "tar: No space left on device\n" +
@@ -79,6 +140,7 @@ describe("ssh command", () => {
       );
       assert.isTrue(Result.isFailure(result));
       if (Result.isFailure(result)) {
+        assert.instanceOf(result.failure, SshCommandError);
         assert.include(result.failure.message, "ran out of storage");
         assert.isBelow(result.failure.message.length, 600);
         assert.isBelow(result.failure.stderr.length, 4100);
