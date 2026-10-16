@@ -34,7 +34,10 @@ const input = {
   expectedIntegrity: `sha512-${"a".repeat(86)}==`,
   allowUnknownCompatibility: true,
 };
-const harness = Effect.fn("test.versionManager")(function* (changeSettings = false) {
+const harness = Effect.fn("test.versionManager")(function* (
+  changeSettings = false,
+  uninstalled = false,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = yield* fs.makeTempDirectoryScoped({ prefix: "provider-version-manager-" });
@@ -53,7 +56,7 @@ const harness = Effect.fn("test.versionManager")(function* (changeSettings = fal
         {
           driver: ProviderDriverKind.make("claudeAgent"),
           displayName: id,
-          config: { binaryPath: binary },
+          config: uninstalled ? {} : { binaryPath: binary },
         },
       ]),
     ),
@@ -206,6 +209,17 @@ it.layer(NodeServices.layer)("provider version activation", (it) => {
           fixture.current().providerInstances[ProviderInstanceId.make("shared-two")]?.config,
         );
       }),
+  );
+  it.effect("installs an explicitly selected version for an uninstalled managed provider", () =>
+    Effect.gen(function* () {
+      const fixture = yield* harness(false, true);
+      yield* fixture.manager.update(input);
+      expect(fixture.preparations()).toBe(1);
+      expect(fixture.activations()).toBe(1);
+      expect(fixture.current().providerInstances[input.instanceId]?.config).toMatchObject({
+        binaryPath: expect.stringContaining("verified-2.1.301"),
+      });
+    }),
   );
   it.effect("rejects a changed artifact before staging", () =>
     Effect.gen(function* () {

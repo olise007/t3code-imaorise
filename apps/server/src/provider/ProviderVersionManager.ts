@@ -92,7 +92,18 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
           Effect.orElseSucceed(() => null),
         )
       : null;
-    if (!binary) return null;
+    if (!binary) {
+      if (
+        !(typeof value.binaryPath === "string" && value.binaryPath.trim()) &&
+        ["claudeAgent", "grok", "opencode", "pi"].includes(instance.driver)
+      )
+        return {
+          kind: "archive" as const,
+          key: path.join(config.baseDir, "tools", "provider-archives", instance.driver),
+          binary: null,
+        };
+      return null;
+    }
     const real = yield* fs.realPath(binary).pipe(Effect.option);
     if (Option.isNone(real)) return null;
     const antigRoot = yield* fs

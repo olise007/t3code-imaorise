@@ -17,7 +17,7 @@ import {
   type SshAuthOptions,
 } from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
-import { createSetupDetails } from "./setupDetails.ts";
+import { createSetupDetails, sanitizeSetupOutput } from "./setupDetails.ts";
 
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
 const MAX_SSH_ERROR_OUTPUT_LENGTH = 4_000;
@@ -359,7 +359,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
           command: ["ssh"],
           exitCode: null,
           stderr: "",
-          message: "Failed to prepare SSH authentication helpers.",
+          message: `Failed to prepare SSH authentication helpers. ${sanitizeSetupOutput(cause instanceof Error ? cause.message : "Check Windows PowerShell availability and temporary-directory access.").slice(0, 600)}`,
           cause,
         }),
     ),

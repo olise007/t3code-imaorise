@@ -10,7 +10,7 @@ import {
   NODE_PROVIDER_RUNTIME,
   type ProviderArchiveRecipe,
 } from "@t3tools/shared/providerInstallRecipes";
-import { compareSemverVersions } from "@t3tools/shared/semver";
+import { satisfiesSemverRange, compareSemverVersions } from "@t3tools/shared/semver";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -135,7 +135,13 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
       release: {
         ...data,
         compatibility,
-        recommended: policy?.recommendedVersion === version,
+        recommended:
+          policy?.recommendedVersion === version ||
+          (data.latestStable &&
+            compatibility === "supported" &&
+            Boolean(
+              policy?.recommendedRange && satisfiesSemverRange(version, policy.recommendedRange),
+            )),
         available: artifact !== null && !blocked,
         reason: blocked
           ? (policy?.message ?? "This version is incompatible with T3 Code.")
@@ -293,14 +299,17 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
                   integrity: `sha256:${asset.sha256}`,
                   source: asset.url,
                   latestStable: false,
-                  dependencies: [
-                    {
-                      name: "Node.js, only if a compatible runtime is missing",
-                      version: NODE_PROVIDER_RUNTIME[host].version,
-                      source: NODE_PROVIDER_RUNTIME[host].url,
-                      integrity: NODE_PROVIDER_RUNTIME[host].integrity,
-                    },
-                  ],
+                  dependencies:
+                    platform === "linux" || platform === "win32"
+                      ? [
+                          {
+                            name: "Node.js, only if a compatible runtime is missing",
+                            version: NODE_PROVIDER_RUNTIME[host].version,
+                            source: NODE_PROVIDER_RUNTIME[host].url,
+                            integrity: NODE_PROVIDER_RUNTIME[host].integrity,
+                          },
+                        ]
+                      : [],
                 },
                 { kind: "antigravity", asset },
               ),
