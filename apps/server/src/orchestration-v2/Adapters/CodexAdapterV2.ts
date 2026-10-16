@@ -2329,7 +2329,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               const cursors = new Set<string>();
               let cursor: string | null = null;
               for (let pageIndex = 0; pageIndex < 16; pageIndex++) {
-                const page = yield* client.raw
+                const page: CodexBackgroundTerminalsListPage = yield* client.raw
                   .request("thread/backgroundTerminals/list", {
                     threadId,
                     cursor,
