@@ -145,7 +145,8 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
           return stream.pipe(
             Stream.tap((chunk) => {
               safeDetails.push(decoder.decode(chunk, { stream: true }));
-              return latest ? Ref.set(pendingProgress, latest) : Effect.void;
+              const line = toProgressLine(safeDetails.preview() ?? "") ?? latest;
+              return line ? Ref.set(pendingProgress, line) : Effect.void;
             }),
           );
         };

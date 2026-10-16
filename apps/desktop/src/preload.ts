@@ -149,6 +149,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ),
   discoverSshConnections: (loadDistro) =>
     ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_CONNECTIONS_CHANNEL, loadDistro),
+  sshConnectionCapabilities: () => ({ manualProfiles: true, authenticationPreflight: true }),
   onSshConnectionProgress: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof listener>[0]) =>
       listener(progress);

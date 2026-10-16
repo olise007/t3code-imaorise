@@ -11,6 +11,8 @@ import { ProviderDriverKind, type DesktopSshEnvironmentTarget } from "@t3tools/c
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
 import * as Stream from "effect/Stream";
+import * as Cause from "effect/Cause";
+import { sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
 import { serverEnvironment } from "../state/server";
 
 import { connectionAtomRuntime } from "./runtime";
@@ -97,6 +99,12 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
       const crypto = yield* Crypto.Crypto;
       return yield* Effect.gen(function* () {
         if ((input.credentials || input.testOnly) && window.desktopBridge) {
+          if (!window.desktopBridge.sshConnectionCapabilities?.().authenticationPreflight)
+            return yield* new ConnectionTransientError({
+              reason: "remote-unavailable",
+              detail:
+                "Update the desktop client before testing SSH authentication or using a manual SSH profile.",
+            });
           const bootstrap = yield* Effect.tryPromise({
             try: () =>
               window.desktopBridge!.ensureSshEnvironment(input.target, {
@@ -105,11 +113,10 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
                 ...(input.credentials?.secret ? { authSecret: input.credentials.secret } : {}),
                 rememberSecret: input.testOnly ? false : input.credentials?.remember === true,
               }),
-            catch: () =>
+            catch: (cause) =>
               new ConnectionTransientError({
                 reason: "remote-unavailable",
-                detail:
-                  "SSH authentication failed or was cancelled. Check the host fingerprint, username, and selected authentication method.",
+                detail: `SSH authentication failed or was cancelled. ${sanitizeSetupOutput(cause instanceof Error ? cause.message : "Check the host fingerprint, username, and selected authentication method.").slice(0, 1200)}`,
               }),
           });
           for (const warning of bootstrap.setupWarnings ?? [])
@@ -186,14 +193,23 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
             if (exit._tag === "Success")
               sshSetupProgress.append(
                 progressId,
-                "Setup complete. Provider sign-in may still be required.",
+                input.testOnly
+                  ? "Authentication test passed. No remote runtime was installed or started."
+                  : "Setup complete. Provider sign-in may still be required.",
               );
             else
               sshSetupProgress.append(
                 progressId,
                 cancelled
                   ? "Setup cancelled"
-                  : "Setup failed. Review the connection error; completed work is retained.",
+                  : sanitizeSetupOutput(
+                      (() => {
+                        const error = Cause.squash(exit.cause);
+                        return error instanceof Error
+                          ? error.message
+                          : "Setup failed; completed work is retained.";
+                      })(),
+                    ),
               );
             sshSetupProgress.finish(
               progressId,

@@ -3547,10 +3547,20 @@ export function ConnectionsSettings() {
           </SelectTrigger>
           <SelectPopup>
             <SelectItem value="config">SSH config host</SelectItem>
-            <SelectItem value="manual">Manual server</SelectItem>
+            <SelectItem
+              value="manual"
+              disabled={!desktopBridge?.sshConnectionCapabilities?.().manualProfiles}
+            >
+              Manual server
+            </SelectItem>
           </SelectPopup>
         </Select>
       </label>
+      {!desktopBridge?.sshConnectionCapabilities?.().manualProfiles ? (
+        <p className="text-xs text-muted-foreground">
+          Update the desktop client to enable manual profiles and authentication testing.
+        </p>
+      ) : null}
       {sshManual ? (
         <label className="block">
           <span className="mb-1.5 block text-xs font-medium">Name</span>

@@ -2,6 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": { "composite": false },
   "include": [
+    "imaorise/ssh-auth-windows-smoke.ts",
     "build-cli-archive.ts",
     "build-desktop-artifact.ts",
     "build-desktop-artifact.test.ts",

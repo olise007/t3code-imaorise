@@ -355,7 +355,10 @@ it.effect("keeps an activated runtime when a later update fails verification", (
     expect((yield* update.installation.state).executablePath).toBe(
       (yield* first.installation.resolve()).executablePath,
     );
-    yield* update.installation.start;
+    yield* update.installation.startVersion!(
+      { ...update.asset, version: "0.156.2", sha256: "0".repeat(64) },
+      false,
+    );
     expect((yield* terminalState(update.installation)).phase).toBe("failed");
     expect((yield* update.installation.resolve()).version).toBe("0.156.1");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

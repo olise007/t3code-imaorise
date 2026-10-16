@@ -13,6 +13,9 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
+import { resolveCommandPath } from "@t3tools/shared/shell";
+import { PROVIDER_RECIPE_CATALOG } from "@t3tools/shared/providerInstallRecipes";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
@@ -52,10 +55,15 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
     const value = configObject(instance.config) ? instance.config : {};
     if (instance.driver === "codex" && value.setupMode === "managed")
       return { kind: "codex" as const, key: codex.managedDirectory, binary: null };
-    const binary =
-      typeof value.binaryPath === "string" && path.isAbsolute(value.binaryPath)
+    const command =
+      typeof value.binaryPath === "string" && value.binaryPath.trim()
         ? value.binaryPath
-        : null;
+        : PROVIDER_RECIPE_CATALOG.find((recipe) => recipe.driver === instance.driver)?.command;
+    const binary = command
+      ? yield* resolveCommandPath(command, {
+          env: yield* mergeProviderInstanceEnvironment(instance.environment),
+        }).pipe(Effect.orElseSucceed(() => null))
+      : null;
     if (!binary) return null;
     const real = yield* fs.realPath(binary).pipe(Effect.option);
     if (Option.isNone(real)) return null;
@@ -72,7 +80,7 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
         path.basename(directory) !== record.value.version ||
         path.basename(real.value).replace(/\.exe$/i, "") !== "codex"
       )
-        return null;
+        return { kind: "unverified" as const, key: codex.managedDirectory, binary: real.value };
       return { kind: "codex" as const, key: codex.managedDirectory, binary: real.value };
     }
     const root = path.join(config.baseDir, "tools", "provider-archives", instance.driver);
@@ -85,7 +93,7 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
       Option.isNone(marker) ||
       !/^(?:sha256:[a-f0-9]{64}|sha512-[A-Za-z0-9+/]+=*)$/.test(marker.value.trim())
     )
-      return null;
+      return { kind: "unverified" as const, key: real.value, binary: real.value };
     return { kind: "archive" as const, key: real.value, binary: real.value };
   });
   const describe = Effect.fn("ProviderVersionManager.describe")(function* (input: {

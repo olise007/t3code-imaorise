@@ -1783,7 +1783,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       key,
       Effect.gen(function* () {
         const operationId =
-          requestOptions?.operationId ?? (yield* (yield* Crypto.Crypto).randomUUIDv4);
+          requestOptions?.operationId ??
+          (yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie));
         operations.set(key, operationId);
         if (sequences.size > 64)
           for (const id of sequences.keys()) {

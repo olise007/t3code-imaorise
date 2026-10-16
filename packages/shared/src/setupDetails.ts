@@ -14,7 +14,7 @@ export function createSetupDetails(onLine: (line: string) => void) {
       return;
     }
     if (
-      /PRIVATE KEY|authorization|password|passphrase|access.?token|refresh.?token|device.?code|user.?code|code_verifier|T3_SSH_.*PROMPT/i.test(
+      /PRIVATE KEY|authorization|password|passphrase|access.?token|refresh.?token|device.?code|user.?code|code_verifier|code_challenge|client_id|redirect_uri|T3_SSH_.*PROMPT/i.test(
         clean,
       )
     ) {
@@ -28,6 +28,8 @@ export function createSetupDetails(onLine: (line: string) => void) {
     );
   };
   return {
+    preview: () =>
+      !discarding && !privateKey && pending.trim() ? sanitizeSetupOutput(pending) : null,
     push(chunk: string) {
       for (const part of chunk.replaceAll("\r", "\n").split(/(?<=\n)/)) {
         if (!discarding) pending += part;

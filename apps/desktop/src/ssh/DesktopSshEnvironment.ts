@@ -183,6 +183,7 @@ export const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const home = yield* HostProcess.HomeDirectory;
+  const platform = yield* HostProcess.Platform;
   const crypto = yield* CryptoRuntime.Crypto;
   const storage = yield* Effect.serviceOption(ElectronSafeStorage.ElectronSafeStorage);
   const safeStorage = Option.getOrUndefined(storage);
@@ -190,7 +191,12 @@ export const make = Effect.gen(function* () {
     ? yield* safeStorage.isEncryptionAvailable.pipe(
         Effect.flatMap((available) =>
           safeStorage.selectedStorageBackend.pipe(
-            Effect.map((backend) => available && Option.getOrUndefined(backend) !== "basic_text"),
+            Effect.map(
+              (backend) =>
+                available &&
+                (platform !== "linux" || Option.isSome(backend)) &&
+                Option.getOrUndefined(backend) !== "basic_text",
+            ),
           ),
         ),
         Effect.orElseSucceed(() => false),

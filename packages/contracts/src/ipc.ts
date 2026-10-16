@@ -445,11 +445,17 @@ export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
   executionSource: Schema.optionalKey(DesktopSshExecutionSourceSchema),
   manual: Schema.optionalKey(
     Schema.Struct({
-      profileId: Schema.NonEmptyString,
-      name: Schema.String,
+      profileId: Schema.NonEmptyString.check(Schema.isMaxLength(128)),
+      name: Schema.String.check(Schema.isMaxLength(256)),
       authentication: Schema.Union([
         Schema.Struct({ type: Schema.Literal("password") }),
-        Schema.Struct({ type: Schema.Literal("key"), identityFile: Schema.NonEmptyString }),
+        Schema.Struct({
+          type: Schema.Literal("key"),
+          identityFile: Schema.NonEmptyString.check(
+            Schema.isMaxLength(4096),
+            Schema.isPattern(/^[^\x00\r\n]+$/),
+          ),
+        }),
       ]),
     }),
   ),
@@ -1266,6 +1272,7 @@ export interface DesktopBridge {
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;
   clearConnectionCatalog?: () => Promise<void>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
+  sshConnectionCapabilities?: () => { manualProfiles: boolean; authenticationPreflight: boolean };
   discoverSshConnections?: (loadDistro?: string) => Promise<DesktopSshDiscoveryReport>;
   onSshConnectionProgress?: (
     listener: (progress: {

@@ -433,7 +433,18 @@ export function sshTargetKey(target: DesktopSshEnvironmentTarget): string {
     target.hostname,
     target.username,
     target.port,
-    ...(target.manual ? [target.manual] : []),
+    ...(target.manual
+      ? [
+          [
+            target.manual.profileId,
+            target.manual.name,
+            target.manual.authentication.type,
+            target.manual.authentication.type === "key"
+              ? target.manual.authentication.identityFile
+              : null,
+          ],
+        ]
+      : []),
   ];
   return JSON.stringify(
     target.executionSource?.type === "wsl"

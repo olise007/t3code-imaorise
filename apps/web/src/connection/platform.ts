@@ -191,6 +191,12 @@ export const provisionDesktopSshEnvironment = Effect.fn(
   target: DesktopSshEnvironmentTarget,
   expectedEnvironmentId?: EnvironmentId,
 ) {
+  if (target.manual && !bridge.sshConnectionCapabilities?.().manualProfiles)
+    return yield* new ConnectionBlockedError({
+      reason: "configuration",
+      detail:
+        "Update the desktop client to use this manually configured SSH profile. Its source and authentication settings were retained.",
+    });
   const bootstrap = yield* Effect.tryPromise({
     try: () =>
       bridge.ensureSshEnvironment(target, {
@@ -300,6 +306,12 @@ const layerCapabilities = Layer.effectContext(
             detail: "SSH environments are only available in the desktop app.",
           });
         }
+        if (input.target.manual && !bridge.sshConnectionCapabilities?.().manualProfiles)
+          return yield* new ConnectionBlockedError({
+            reason: "configuration",
+            detail:
+              "Update the desktop client to reconnect this manual SSH profile. Its saved source and authentication settings are unchanged.",
+          });
         const bootstrap = yield* Effect.tryPromise({
           try: () =>
             bridge.ensureSshEnvironment(input.target, {

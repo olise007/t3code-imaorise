@@ -75,7 +75,7 @@ export function parseSshResolveOutput(alias: string, stdout: string): DesktopSsh
 }
 
 export function targetConnectionKey(target: DesktopSshEnvironmentTarget): string {
-  const legacy = `${target.alias}\u0000${target.hostname}\u0000${target.username ?? ""}\u0000${target.port ?? ""}${target.manual ? `\u0000${JSON.stringify(target.manual)}` : ""}`;
+  const legacy = `${target.alias}\u0000${target.hostname}\u0000${target.username ?? ""}\u0000${target.port ?? ""}${target.manual ? `\u0000${JSON.stringify([target.manual.profileId, target.manual.name, target.manual.authentication.type, target.manual.authentication.type === "key" ? target.manual.authentication.identityFile : null])}` : ""}`;
   return target.executionSource?.type === "wsl"
     ? `wsl:${target.executionSource.distro}\u0000${legacy}`
     : legacy;
@@ -115,6 +115,19 @@ export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function
 ) {
   const manualArgs: string[] = [];
   if (target.manual) {
+    if (target.manual.authentication.type === "key") {
+      const file = target.manual.authentication.identityFile;
+      const windows =
+        target.executionSource?.type !== "wsl" && (yield* HostProcess.Platform) === "win32";
+      if (
+        /[\x00\r\n]/.test(file) ||
+        !(windows ? /^(?:[A-Za-z]:[\\/]|[\\/]{2}|~[\\/])/.test(file) : /^(?:\/|~\/)/.test(file))
+      )
+        return yield* new SshInvalidTargetError({
+          message:
+            "Enter a full private-key path inside the selected Windows or WSL SSH source, or a path beginning with ~/ .",
+        });
+    }
     // -F none excludes both user and system SSH configuration. Authentication
     // is owned by this T3 profile, never by a coincidentally matching alias.
     manualArgs.push(

@@ -12,7 +12,12 @@ $node = (Get-Command node.exe).Source
 $peer = Join-Path (Get-Location) 'apps/server/src/cli/testFixtures/sshManagedPeer.ts'
 $homeDirectory = Join-Path $fixtureRoot 'remote home'
 New-Item -ItemType Directory -Force $homeDirectory | Out-Null
+$authUsername = 't3ssh' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+$authPassword = 'Aa1!' + [Guid]::NewGuid().ToString('N')
+$keyPassphrase = 'Fixture passphrase with "quotes" and $;!'
 try {
+  New-LocalUser -Name $authUsername -Password (ConvertTo-SecureString $authPassword -AsPlainText -Force) -Description 'Disposable T3 SSH authentication fixture' | Out-Null
+  Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $authUsername
   $zip = Join-Path $fixtureRoot 'openssh.zip'
   Invoke-WebRequest 'https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64.zip' -OutFile $zip
   if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5') { throw 'OpenSSH fixture checksum mismatch.' }
@@ -20,16 +25,25 @@ try {
   $sshRoot = Join-Path $fixtureRoot 'OpenSSH-Win64'
   $key = Join-Path $fixtureRoot 'identity'
   $hostKey = Join-Path $fixtureRoot 'hostkey'
+  $authIdentity = Join-Path $fixtureRoot 'identity with spaces'
+  $differentHostKey = Join-Path $fixtureRoot 'different-hostkey'
   & "$sshRoot/ssh-keygen.exe" -t ed25519 -N '' -f $key -q
   if ($LASTEXITCODE -ne 0) { throw 'Client key generation failed.' }
   & "$sshRoot/ssh-keygen.exe" -t ed25519 -N '' -f $hostKey -q
   if ($LASTEXITCODE -ne 0) { throw 'Host key generation failed.' }
+  & "$sshRoot/ssh-keygen.exe" -t ed25519 -N $keyPassphrase -f $authIdentity -q
+  if ($LASTEXITCODE -ne 0) { throw 'Encrypted client key generation failed.' }
+  & "$sshRoot/ssh-keygen.exe" -t ed25519 -N '' -f $differentHostKey -q
+  if ($LASTEXITCODE -ne 0) { throw 'Alternate fixture host key generation failed.' }
   $authorized = Join-Path $fixtureRoot 'authorized_keys'
   Copy-Item "$key.pub" $authorized
-  foreach ($file in @($key, $hostKey, $authorized)) {
+  Get-Content "$authIdentity.pub" | Add-Content $authorized
+  foreach ($file in @($key, $hostKey, $authorized, $authIdentity, $differentHostKey)) {
     & icacls.exe $file /inheritance:r /grant:r "$($env:USERNAME):F" 'SYSTEM:F' 'Administrators:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not restrict SSH fixture key permissions.' }
   }
+  & icacls.exe $fixtureRoot /grant:r "$($authUsername):RX" | Out-Null
+  & icacls.exe $authorized /grant:r "$($authUsername):R" | Out-Null
   & icacls.exe $hostKey /remove:g "$env:USERNAME" | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Could not remove the host key user grant.' }
   & icacls.exe $hostKey /setowner '*S-1-5-18' | Out-Null
@@ -41,9 +55,9 @@ ListenAddress 127.0.0.1
 HostKey "$($hostKey.Replace('\','/'))"
 AuthorizedKeysFile "$($authorized.Replace('\','/'))"
 StrictModes no
-PasswordAuthentication no
+PasswordAuthentication yes
 PubkeyAuthentication yes
-AllowUsers $env:USERNAME
+AllowUsers $env:USERNAME $authUsername
 LogLevel ERROR
 "@ | Set-Content -LiteralPath $serverConfig -Encoding ascii
   $known = Join-Path $fixtureRoot 'known_hosts'
@@ -72,6 +86,25 @@ Host t3-fixture
     try { $socket.Connect('127.0.0.1',$port); $ready=$true; break } catch { Start-Sleep -Milliseconds 100 } finally { $socket.Dispose() }
   }
   if (!$ready) { if(Test-Path -LiteralPath $daemonLog){Get-Content -LiteralPath $daemonLog}; throw 'The isolated Windows SSH server did not start.' }
+  function Test-NativeAuthentication([string]$shellLabel) {
+    $info = [Diagnostics.ProcessStartInfo]::new($node)
+    $info.UseShellExecute = $false
+    $info.RedirectStandardInput = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.Environment['PATH'] = "$sshRoot;$env:PATH"
+    $info.ArgumentList.Add((Join-Path (Get-Location) 'scripts/imaorise/ssh-auth-windows-smoke.ts'))
+    $process = [Diagnostics.Process]::Start($info)
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $payload = @{ root=(Join-Path $fixtureRoot $shellLabel); port=$port; username=$authUsername; password=$authPassword; passphrase=$keyPassphrase; identity=$authIdentity; differentHostKey=(Get-Content "$differentHostKey.pub" -Raw).Trim() } | ConvertTo-Json -Compress
+    $process.StandardInput.WriteLine($payload)
+    $process.StandardInput.Close()
+    if (!$process.WaitForExit(120000)) { $process.Kill($true); throw 'Native SSH authentication fixture exceeded its deadline.' }
+    $details = ($stdout.Result + $stderr.Result).Replace($authPassword, '[redacted]').Replace($keyPassphrase, '[redacted]')
+    Write-Output $details
+    if ($process.ExitCode -ne 0) { throw 'Native SSH authentication fixture failed.' }
+  }
   function Invoke-Peer([string]$operation, [string]$keyValue) {
     $script = "`$env:HOME='$($homeDirectory.Replace("'","''"))'; `$env:USERPROFILE=`$env:HOME; & '$($node.Replace("'","''"))' '$($peer.Replace("'","''"))' '$operation' '$keyValue' '2.0.1-test'; if(`$LASTEXITCODE -ne 0){exit `$LASTEXITCODE}"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
@@ -94,6 +127,7 @@ Host t3-fixture
   New-Item -Path $registryPath -Force | Out-Null
   foreach ($shell in @("$env:SystemRoot/System32/cmd.exe", "$env:SystemRoot/System32/WindowsPowerShell/v1.0/powershell.exe")) {
     Set-ItemProperty -Path $registryPath -Name DefaultShell -Value $shell
+    Test-NativeAuthentication ([IO.Path]::GetFileNameWithoutExtension($shell))
     $keyValue = if ($shell.EndsWith('cmd.exe')) { '1111111111111111' } else { '2222222222222222' }
     try {
       $first = Invoke-Peer 'resume' $keyValue | ConvertFrom-Json
@@ -105,6 +139,7 @@ Host t3-fixture
     } finally { Invoke-Peer 'stop' $keyValue | Out-Null }
   }
 } finally {
+  Remove-LocalUser -Name $authUsername -ErrorAction SilentlyContinue
   Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
   if ($null -eq $oldShell) { Remove-ItemProperty -Path $registryPath -Name DefaultShell -ErrorAction SilentlyContinue } else { Set-ItemProperty -Path $registryPath -Name DefaultShell -Value $oldShell }

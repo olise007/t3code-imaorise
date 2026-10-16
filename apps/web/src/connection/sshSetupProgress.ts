@@ -23,10 +23,12 @@ export interface SshSetupAttempt {
     readonly text: string;
   }[];
   readonly truncated: boolean;
+  readonly completionSequence: number | null;
 }
 
 export function createSshSetupProgress() {
   let nextId = 0;
+  let nextCompletion = 0;
   let attempts: readonly SshSetupAttempt[] = [];
   let notification: ReturnType<typeof setTimeout> | undefined;
   const notify = () => {
@@ -56,7 +58,15 @@ export function createSshSetupProgress() {
       attempts = [
         ...attempts.filter((item) => item.status === "running"),
         ...attempts.filter((item) => item.status !== "running").slice(-10),
-        { id, target, startedAt: Date.now(), status: "running", lines: [], truncated: false },
+        {
+          id,
+          target,
+          startedAt: Date.now(),
+          status: "running",
+          lines: [],
+          truncated: false,
+          completionSequence: null,
+        },
       ];
       notify();
       return id;
@@ -92,11 +102,16 @@ export function createSshSetupProgress() {
       });
       notify();
     },
-    finish: (id: string, status: SshSetupAttempt["status"]) => {
-      const updated = attempts.map((item) => (item.id === id ? { ...item, status } : item));
+    finish: (id: string, status: Exclude<SshSetupAttempt["status"], "running">) => {
+      const updated = attempts.map((item) =>
+        item.id === id && item.status === "running"
+          ? { ...item, status, completionSequence: ++nextCompletion }
+          : item,
+      );
       const retained = new Set(
         updated
           .filter((item) => item.status !== "running")
+          .sort((a, b) => (a.completionSequence ?? 0) - (b.completionSequence ?? 0))
           .slice(-10)
           .map((item) => item.id),
       );
