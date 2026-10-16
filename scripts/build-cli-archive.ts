@@ -41,6 +41,7 @@ import {
   STAGE_INSTALL_ARGS,
 } from "./build-desktop-artifact.ts";
 import { selectCliRuntimeExternalDependencies } from "./lib/cli-external-packages.ts";
+import { writeRuntimeRequirements } from "./lib/runtime-requirements.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -518,6 +519,14 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   });
 
   const executablePath = path.join(contentDir, executableName);
+  if (input.arch === "x64" && input.platform !== "mac")
+    yield* Effect.promise(() =>
+      writeRuntimeRequirements(
+        contentDir,
+        input.platform === "win" ? "windows" : "linux",
+        input.version,
+      ),
+    );
   if (input.platform === "mac") {
     yield* signMacArchiveContents({ repoRoot, contentDir, executablePath });
   } else if (input.platform === "win") {

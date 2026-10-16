@@ -463,6 +463,7 @@ export const DesktopDiscoveredSshHostSchema = Schema.Struct({
 });
 
 export interface DesktopSshEnvironmentBootstrap {
+  selectedProviders?: readonly string[];
   target: DesktopSshEnvironmentTarget;
   httpBaseUrl: string;
   wsBaseUrl: string;
@@ -473,6 +474,7 @@ export interface DesktopSshEnvironmentBootstrap {
 }
 
 export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
+  selectedProviders: Schema.optionalKey(Schema.Array(Schema.String)),
   target: DesktopSshEnvironmentTargetSchema,
   httpBaseUrl: Schema.String,
   wsBaseUrl: Schema.String,
@@ -483,6 +485,8 @@ export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
 });
 
 export interface DesktopSshPasswordPromptRequest {
+  purpose?: "ssh" | "elevation" | "setup-review";
+  setupReview?: import("./sshSetup.ts").SshSetupReview;
   requestId: string;
   destination: string;
   username: string | null;
@@ -498,6 +502,7 @@ export const DesktopSshPasswordPromptCancelledResultSchema = Schema.Struct({
 });
 
 export const DesktopSshEnvironmentEnsureOptionsSchema = Schema.Struct({
+  supportsSetupReview: Schema.optionalKey(Schema.Boolean),
   issuePairingToken: Schema.optionalKey(Schema.Boolean),
   resumeStoppedServer: Schema.optionalKey(Schema.Boolean),
 });
@@ -1275,10 +1280,15 @@ export interface DesktopBridge {
   acknowledgeSnapShot?: (id: string) => Promise<void>;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
-    options?: { issuePairingToken?: boolean; resumeStoppedServer?: boolean },
+    options?: {
+      issuePairingToken?: boolean;
+      resumeStoppedServer?: boolean;
+      supportsSetupReview?: boolean;
+    },
   ) => Promise<DesktopSshEnvironmentBootstrap>;
   disconnectSshEnvironment: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   stopSshEnvironment?: (target: DesktopSshEnvironmentTarget) => Promise<void>;
+  cancelSshSetup?: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   fetchSshEnvironmentDescriptor: (httpBaseUrl: string) => Promise<ExecutionEnvironmentDescriptor>;
   bootstrapSshBearerSession: (
     httpBaseUrl: string,
@@ -1291,6 +1301,10 @@ export interface DesktopBridge {
   ) => Promise<AuthWebSocketTicketResult>;
   onSshPasswordPrompt: (listener: (request: DesktopSshPasswordPromptRequest) => void) => () => void;
   resolveSshPasswordPrompt: (requestId: string, password: string | null) => Promise<void>;
+  resolveSshSetupReview?: (
+    requestId: string,
+    approval: import("./sshSetup.ts").SshSetupApproval | null,
+  ) => Promise<void>;
   getServerExposureState: () => Promise<DesktopServerExposureState>;
   setServerExposureMode: (mode: DesktopServerExposureMode) => Promise<DesktopServerExposureState>;
   setTailscaleServeEnabled: (input: {

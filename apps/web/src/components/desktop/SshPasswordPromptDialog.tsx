@@ -47,6 +47,15 @@ export function SshPasswordPromptDialog() {
     return null;
   }
 
+  if (currentRequest.purpose === "setup-review" && currentRequest.setupReview)
+    return (
+      <SshSetupReviewDialog
+        key={currentRequest.requestId}
+        request={currentRequest}
+        onRemove={() => setQueue((queue) => queue.slice(1))}
+      />
+    );
+
   return (
     <ActiveSshPasswordPrompt
       key={currentRequest.requestId}
@@ -161,12 +170,19 @@ function ActiveSshPasswordPrompt({
           <DialogTitle>
             {request.prompt.startsWith("Verify SSH host key")
               ? "Verify SSH host key"
-              : "SSH authentication required"}
+              : request.purpose === "elevation"
+                ? "Remote package installation: sudo"
+                : "SSH authentication required"}
           </DialogTitle>
           <DialogDescription>
             {request.prompt.startsWith("Verify SSH host key") ? (
               <>
                 Check the fingerprint for <code>{target}</code> before trusting this host.
+              </>
+            ) : request.purpose === "elevation" ? (
+              <>
+                Enter the remote sudo password for the packages you approved. This credential is
+                separate from SSH authentication and is never saved.
               </>
             ) : (
               <>
@@ -214,7 +230,9 @@ function ActiveSshPasswordPrompt({
               <p className="text-sm text-destructive">{visibleResponseError}</p>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Use SSH keys to avoid repeated password prompts on new SSH sessions.
+                {request.purpose === "elevation"
+                  ? "Cancelling leaves completed package installations in place."
+                  : "Use SSH keys to avoid repeated password prompts on new SSH sessions."}
               </p>
             )}
           </form>
@@ -225,6 +243,154 @@ function ActiveSshPasswordPrompt({
           </Button>
           <Button disabled={isResponding || isExpired} form={formId} type="submit">
             Continue
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
+function SshSetupReviewDialog({
+  request,
+  onRemove,
+}: {
+  request: DesktopSshPasswordPromptRequest;
+  onRemove: () => void;
+}) {
+  const review = request.setupReview!;
+  const [selected, setSelected] = useState<readonly string[]>([]);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expired, setExpired] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setExpired(true),
+      Math.max(0, Date.parse(request.expiresAt) - Date.now()),
+    );
+    return () => window.clearTimeout(timer);
+  }, [request.expiresAt]);
+  const respond = async (approved: boolean) => {
+    if (pending) return;
+    setPending(true);
+    try {
+      await window.desktopBridge?.resolveSshSetupReview?.(
+        request.requestId,
+        approved ? { reviewId: review.reviewId, approved: true, providers: selected } : null,
+      );
+      onRemove();
+    } catch {
+      setError("This review expired or setup was cancelled. Start a new connection attempt.");
+    } finally {
+      setPending(false);
+    }
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) void respond(false);
+      }}
+    >
+      <DialogPopup className="max-w-2xl" showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>Review remote setup</DialogTitle>
+          <DialogDescription>
+            Approve requirements for {review.destination}. Provider account sign-in happens
+            separately after connection.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel scrollFade={false}>
+          <div className="space-y-4 text-sm">
+            <p>
+              {review.platform} · {review.architecture} · {review.distribution} ·{" "}
+              {review.packageManager}
+              <br />
+              Elevation: {review.elevation}. Runtime {review.requirements.runtimeVersion}, Node{" "}
+              {review.requirements.nodeVersion}.
+            </p>
+            <details>
+              <summary>SSH source and remote identity</summary>
+              <p className="break-all">
+                {review.source}
+                <br />
+                {review.remoteIdentity}
+              </p>
+            </details>
+            <ul className="space-y-1">
+              {review.items.map((item) => (
+                <li key={item.id}>
+                  {item.installed ? "✓" : "Missing:"} {item.label}
+                  {!item.installed ? ` — ${item.guidance}` : ""}
+                </li>
+              ))}
+            </ul>
+            <div>
+              <p>Approved system commands use the remote OS repositories:</p>
+              <pre className="overflow-x-auto whitespace-pre-wrap">
+                {review.commands.join("\n") || "No system package changes required."}
+              </pre>
+            </div>
+            <fieldset className="space-y-3">
+              <legend>Provider CLIs (optional)</legend>
+              {review.providers.map((provider) => (
+                <label key={provider.driver} className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(provider.driver)}
+                    disabled={!provider.available || pending || expired}
+                    onChange={(event) =>
+                      setSelected((current) =>
+                        event.target.checked
+                          ? [...current, provider.driver]
+                          : current.filter((id) => id !== provider.driver),
+                      )
+                    }
+                  />
+                  <span>
+                    {provider.label}
+                    {provider.version ? ` ${provider.version}` : ""}
+                    {provider.installed ? " — reuse existing executable" : ""}
+                    <br />
+                    <span className="text-muted-foreground">
+                      {provider.reason} {provider.source}
+                      {selected.includes(provider.driver) ? (
+                        <>
+                          <br />
+                          {provider.command}
+                          <br />
+                          {provider.dependencies.join(", ")}
+                        </>
+                      ) : null}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            {review.blockers.map((blocker) => (
+              <p key={blocker} className="text-destructive">
+                {blocker}
+              </p>
+            ))}
+            <p>
+              Cancellation stops setup and removes owned staging. Completed package installations
+              remain. T3 will not change the OS, firewall, SSH server, or restart this machine.
+            </p>
+            {error || expired ? (
+              <p className="text-destructive">
+                {error ?? "This review expired. Start a new connection attempt."}
+              </p>
+            ) : null}
+          </div>
+        </DialogPanel>
+        <DialogFooter>
+          <Button variant="outline" disabled={pending} onClick={() => void respond(false)}>
+            Cancel
+          </Button>
+          <Button
+            disabled={pending || expired || review.blockers.length > 0}
+            onClick={() => void respond(true)}
+          >
+            Approve and continue
           </Button>
         </DialogFooter>
       </DialogPopup>

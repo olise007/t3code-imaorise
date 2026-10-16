@@ -1064,6 +1064,11 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId }) => environmentId,
       },
     }),
+    installSelectedProviders: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:provider:install-selected",
+      tag: WS_METHODS.providerInstallSelected,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
     cancelProviderInstall: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:provider:install-cancel",
       tag: WS_METHODS.providerInstallCancel,

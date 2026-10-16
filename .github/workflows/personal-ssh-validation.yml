@@ -23,7 +23,7 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - name: Focused SSH tests
-        run: timeout 900 vp test run --maxWorkers 1 packages/ssh/src packages/client-runtime/src/connection/routes.test.ts packages/client-runtime/src/connection/resolver.test.ts apps/desktop/src/ssh apps/desktop/src/ipc/methods/sshEnvironment.test.ts apps/server/src/cli/sshManagedRuntime.test.ts apps/web/src/state/desktopSshHosts.test.ts apps/web/src/components/settings/ConnectionsSettings.logic.test.ts scripts/imaorise/publish-release.test.ts
+        run: timeout 900 vp test run --maxWorkers 1 packages/ssh/src packages/client-runtime/src/connection/routes.test.ts packages/client-runtime/src/connection/resolver.test.ts apps/desktop/src/ssh apps/desktop/src/ipc/methods/sshEnvironment.test.ts apps/server/src/cli/sshManagedRuntime.test.ts apps/web/src/state/desktopSshHosts.test.ts apps/web/src/components/settings/ConnectionsSettings.logic.test.ts scripts/imaorise/publish-release.test.ts apps/server/src/provider/providerInstallation.test.ts apps/server/src/provider/ManagedProviderArchives.test.ts apps/server/src/provider/CodexInstallation.test.ts apps/server/src/provider/AntigravityInstallation.test.ts packages/shared/src/nodeRuntime.test.ts scripts/build-desktop-artifact.test.ts
       - name: Isolated Linux OpenSSH session survival
         run: |
           apt-get update -qq
@@ -31,7 +31,10 @@ jobs:
           timeout 120 node scripts/imaorise/ssh-linux-smoke.ts
       - name: Contracts and SSH typechecks
         if: ${{ !cancelled() }}
-        run: vp run --filter @t3tools/contracts --filter @t3tools/ssh typecheck
+        run: |
+          vp run --filter @t3tools/contracts --filter @t3tools/ssh typecheck
+          vp run --filter @t3tools/shared typecheck
+          vp run --filter @t3tools/scripts typecheck
       - name: Client typechecks
         if: ${{ !cancelled() }}
         run: |
@@ -46,7 +49,7 @@ jobs:
         run: vp run --filter @t3tools/mobile typecheck
       - name: Scoped lint
         if: ${{ !cancelled() }}
-        run: vp lint apps/desktop/src/ssh/sshHostRequest.ts apps/desktop/src/ipc/methods/sshEnvironment.test.ts scripts/imaorise/ssh-packaged-smoke.ts packages/ssh/src/askpass.test.ts apps/desktop/src/ipc/DesktopIpcHandlers.ts apps/desktop/src/ipc/channels.ts apps/desktop/src/ipc/methods/sshEnvironment.ts apps/desktop/src/main.ts apps/desktop/src/preload.ts apps/desktop/src/ssh/DesktopSshDiscovery.test.ts apps/desktop/src/ssh/DesktopSshDiscovery.ts apps/desktop/src/ssh/DesktopSshEnvironment.ts apps/server/src/cli/sshHelper.ts apps/server/src/cli/sshManagedRuntime.test.ts apps/server/src/cli/sshManagedRuntime.ts apps/server/src/cli/testFixtures/sshManagedPeer.ts apps/web/src/components/desktop/SshPasswordPromptDialog.tsx apps/web/src/components/settings/ConnectionsSettings.tsx apps/web/src/components/settings/EnvironmentRow.tsx packages/client-runtime/src/connection/catalog.ts packages/client-runtime/src/connection/onboarding.ts packages/client-runtime/src/connection/resolver.ts packages/client-runtime/src/connection/routes.test.ts packages/client-runtime/src/connection/routes.ts packages/contracts/src/ipc.ts packages/ssh/src/auth.ts packages/ssh/src/bundledRuntime.test.ts packages/ssh/src/bundledRuntime.ts packages/ssh/src/command.test.ts packages/ssh/src/command.ts packages/ssh/src/config.test.ts packages/ssh/src/config.ts packages/ssh/src/source.test.ts packages/ssh/src/tunnel.test.ts packages/ssh/src/tunnel.ts scripts/build-desktop-artifact.ts scripts/imaorise/publish-release.test.ts scripts/imaorise/ssh-linux-smoke.ts
+        run: vp lint apps/desktop/src/ipc/DesktopIpcHandlers.ts apps/desktop/src/ipc/channels.ts apps/desktop/src/ipc/methods/sshEnvironment.ts apps/desktop/src/main.ts apps/desktop/src/preload.ts apps/desktop/src/ssh/DesktopSshEnvironment.ts apps/desktop/src/ssh/DesktopSshPasswordPrompts.ts apps/server/src/auth/RpcAuthorization.ts apps/server/src/cli/sshHelper.ts apps/server/src/cli/sshManagedRuntime.ts apps/server/src/provider/ManagedProviderArchives.test.ts apps/server/src/provider/ManagedProviderArchives.ts apps/server/src/provider/providerInstallation.test.ts apps/server/src/provider/providerInstallation.ts apps/server/src/server.ts apps/server/src/ws.ts apps/web/src/components/desktop/SshPasswordPromptDialog.tsx apps/web/src/connection/onboarding.ts apps/web/src/connection/platform.ts packages/client-runtime/src/connection/onboarding.ts packages/client-runtime/src/state/server.ts packages/contracts/src/clientRpcPermissions.ts packages/contracts/src/index.ts packages/contracts/src/ipc.ts packages/contracts/src/providerSetup.ts packages/contracts/src/rpc.ts packages/contracts/src/sshSetup.ts packages/shared/src/nodeRuntime.ts packages/shared/src/providerInstallRecipes.ts packages/ssh/src/auth.ts packages/ssh/src/bundledRuntime.test.ts packages/ssh/src/bundledRuntime.ts packages/ssh/src/prerequisites.test.ts packages/ssh/src/prerequisites.ts packages/ssh/src/tunnel.ts scripts/build-cli-archive.ts scripts/build-desktop-artifact.ts scripts/imaorise/ssh-prerequisites-smoke.ts scripts/lib/runtime-requirements.ts scripts/smoke-cli-archive.ts
   windows:
     if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
     runs-on: windows-latest
@@ -62,9 +65,27 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - name: Native Windows supervisor and source tests
-        run: vp test run --maxWorkers 1 packages/ssh/src/source.test.ts packages/ssh/src/askpass.test.ts packages/ssh/src/bundledRuntime.test.ts apps/desktop/src/ipc/methods/sshEnvironment.test.ts apps/server/src/cli/sshManagedRuntime.test.ts
+        run: vp test run --maxWorkers 1 packages/ssh/src/source.test.ts packages/ssh/src/askpass.test.ts packages/ssh/src/bundledRuntime.test.ts packages/ssh/src/prerequisites.test.ts apps/desktop/src/ipc/methods/sshEnvironment.test.ts apps/server/src/cli/sshManagedRuntime.test.ts
       - name: Isolated Windows OpenSSH default shells and reconnect
         if: ${{ !cancelled() }}
         timeout-minutes: 8
         shell: pwsh
         run: ./scripts/imaorise/ssh-windows-smoke.ps1
+
+  linux-prerequisites:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_OPTIONS: --max-old-space-size=2048
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Minimal Linux missing-libatomic review and installation
+        timeout-minutes: 10
+        run: node scripts/imaorise/ssh-prerequisites-smoke.ts

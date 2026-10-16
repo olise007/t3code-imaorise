@@ -7,7 +7,7 @@ import type {
 import * as NetService from "@t3tools/shared/Net";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as SshAuth from "@t3tools/ssh/auth";
-import { resolveSshTarget } from "@t3tools/ssh/command";
+import { resolveSshTarget, targetConnectionKey } from "@t3tools/ssh/command";
 import { discoverSshHosts } from "@t3tools/ssh/config";
 import {
   SshCommandError,
@@ -22,6 +22,9 @@ import * as SshTunnel from "@t3tools/ssh/tunnel";
 import * as Context from "effect/Context";
 import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
+import { SshSetupApproval } from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -52,6 +55,7 @@ export type DesktopSshEnvironmentDiscoverError = SshHostDiscoveryError;
 export class DesktopSshEnvironment extends Context.Service<
   DesktopSshEnvironment,
   {
+    readonly cancelSetup: (target: DesktopSshEnvironmentTarget) => Effect.Effect<void>;
     readonly discoverHosts: (input?: {
       readonly homeDir?: string;
     }) => Effect.Effect<readonly DesktopDiscoveredSshHost[], DesktopSshEnvironmentDiscoverError>;
@@ -61,7 +65,11 @@ export class DesktopSshEnvironment extends Context.Service<
     ) => Effect.Effect<DesktopSshEnvironmentTarget, SshCommandError | SshInvalidTargetError>;
     readonly ensureEnvironment: (
       target: DesktopSshEnvironmentTarget,
-      options?: { readonly issuePairingToken?: boolean; resumeStoppedServer?: boolean },
+      options?: {
+        readonly issuePairingToken?: boolean;
+        resumeStoppedServer?: boolean;
+        supportsSetupReview?: boolean;
+      },
     ) => Effect.Effect<DesktopSshEnvironmentBootstrap, DesktopSshEnvironmentOperationError>;
     readonly disconnectEnvironment: (
       target: DesktopSshEnvironmentTarget,
@@ -130,6 +138,29 @@ const makePasswordPrompt = (
   prompts: DesktopSshPasswordPrompts.DesktopSshPasswordPrompts["Service"],
 ): SshAuth.SshPasswordPrompt["Service"] => ({
   isAvailable: true,
+  reviewSetup: (review) =>
+    prompts
+      .request({
+        destination: review.destination,
+        username: null,
+        attempt: 1,
+        purpose: "setup-review",
+        setupReview: review,
+        prompt: "Review remote setup before installing requirements.",
+      })
+      .pipe(
+        Effect.mapError(toSshPasswordPromptError),
+        Effect.flatMap((value) =>
+          Schema.decodeUnknownEffect(Schema.fromJsonString(SshSetupApproval))(value),
+        ),
+        Effect.mapError(
+          (cause) =>
+            new SshPasswordPromptError({
+              message: "Remote setup review was cancelled or invalid.",
+              cause,
+            }),
+        ),
+      ),
   request: (request: SshAuth.SshPasswordRequest) =>
     prompts.request(request).pipe(Effect.mapError(toSshPasswordPromptError)),
 });
@@ -140,8 +171,17 @@ export const make = Effect.gen(function* () {
   const prompts = yield* DesktopSshPasswordPrompts.DesktopSshPasswordPrompts;
   const runtimeContext = yield* Effect.context<DesktopSshEnvironmentRuntimeServices>();
   const passwordPrompt = SshAuth.SshPasswordPrompt.of(makePasswordPrompt(prompts));
+  const setups = new Map<
+    string,
+    Fiber.Fiber<DesktopSshEnvironmentBootstrap, DesktopSshEnvironmentOperationError>
+  >();
 
   return DesktopSshEnvironment.of({
+    cancelSetup: (target) =>
+      Effect.gen(function* () {
+        const fiber = setups.get(targetConnectionKey(target));
+        if (fiber) yield* Fiber.interrupt(fiber);
+      }),
     discoverHosts: (input) =>
       discoverDesktopSshHostsEffect(input).pipe(
         Effect.provide(runtimeContext),
@@ -153,13 +193,25 @@ export const make = Effect.gen(function* () {
         Effect.withSpan("desktop.ssh.resolveHost"),
       ),
     ensureEnvironment: (target, ensureOptions) =>
-      manager
-        .ensureEnvironment(target, ensureOptions)
-        .pipe(
-          Effect.provideService(SshAuth.SshPasswordPrompt, passwordPrompt),
-          Effect.provide(runtimeContext),
-          Effect.withSpan("desktop.ssh.ensureEnvironment"),
-        ),
+      Effect.gen(function* () {
+        const key = targetConnectionKey(target);
+        const fiber = yield* manager
+          .ensureEnvironment(target, ensureOptions)
+          .pipe(
+            Effect.provideService(SshAuth.SshPasswordPrompt, passwordPrompt),
+            Effect.provide(runtimeContext),
+            Effect.withSpan("desktop.ssh.ensureEnvironment"),
+            Effect.forkChild,
+          );
+        setups.set(key, fiber);
+        return yield* Fiber.join(fiber).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (setups.get(key) === fiber) setups.delete(key);
+            }),
+          ),
+        );
+      }),
     stopEnvironment: (target) =>
       manager
         .stopEnvironment(target)

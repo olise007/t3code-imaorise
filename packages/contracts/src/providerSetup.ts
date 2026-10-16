@@ -13,6 +13,13 @@ export const ProviderSetupInput = Schema.Struct({
   instanceId: ProviderInstanceId,
 });
 export type ProviderSetupInput = typeof ProviderSetupInput.Type;
+export const ProviderInstallSelectedInput = Schema.Struct({
+  recipeRevision: Schema.Literal(1),
+  drivers: Schema.Array(ProviderDriverKind).check(Schema.isMaxLength(32)),
+});
+export const ProviderInstallSelectedResult = Schema.Array(
+  Schema.Struct({ driver: ProviderDriverKind, message: Schema.String }),
+);
 
 export const CodexAuthCallbackInput = Schema.Struct({
   authorizationUrl: Schema.String.check(Schema.isMaxLength(16_384)),

@@ -15,6 +15,8 @@ import * as NodeOS from "node:os";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { SshRuntimeRequirements } from "@t3tools/contracts";
 
 import * as Electron from "electron";
 
@@ -123,12 +125,22 @@ const resolveDesktopSshCliRunner = (
     const archive = (name: string) => {
       const archivePath = environment.path.join(environment.resourcesPath, name);
       let sha256 = "";
+      let requirements: SshRuntimeRequirements | undefined;
       try {
         sha256 = NodeFS.readFileSync(`${archivePath}.sha256`, "utf8").trim().split(/\s+/)[0] ?? "";
+        requirements = Schema.decodeUnknownSync(Schema.fromJsonString(SshRuntimeRequirements))(
+          NodeFS.readFileSync(`${archivePath}.requirements.json`, "utf8"),
+        );
+        if (
+          requirements.runtimeVersion !== environment.appVersion ||
+          requirements.platform !== (name.endsWith(".zip") ? "windows" : "linux")
+        )
+          sha256 = "";
       } catch {
+        sha256 = "";
         /* Setup reports missing artifacts without preventing desktop startup. */
       }
-      return { path: archivePath, sha256 };
+      return { path: archivePath, sha256, ...(requirements === undefined ? {} : { requirements }) };
     };
     return {
       bundles: {

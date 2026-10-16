@@ -40,6 +40,8 @@ import {
   ProviderInstallState,
   ProviderSetupError,
   ProviderSetupInput,
+  ProviderInstallSelectedInput,
+  ProviderInstallSelectedResult,
 } from "./providerSetup.ts";
 
 import {
@@ -420,6 +422,7 @@ export const WS_METHODS = {
   providerAuthLogout: "provider.auth.logout",
   providerAuthSubscribe: "provider.auth.subscribe",
   providerInstallStart: "provider.install.start",
+  providerInstallSelected: "provider.install.selected",
   providerInstallCancel: "provider.install.cancel",
   providerInstallSubscribe: "provider.install.subscribe",
   providerInstallRemove: "provider.install.remove",
@@ -714,6 +717,11 @@ const WsProviderAuthSubscribeRpc = Rpc.make(WS_METHODS.providerAuthSubscribe, {
 const WsProviderInstallStartRpc = Rpc.make(WS_METHODS.providerInstallStart, {
   payload: ProviderSetupInput,
   success: ProviderInstallState,
+  error: ProviderSetupRpcError,
+});
+const WsProviderInstallSelectedRpc = Rpc.make(WS_METHODS.providerInstallSelected, {
+  payload: ProviderInstallSelectedInput,
+  success: ProviderInstallSelectedResult,
   error: ProviderSetupRpcError,
 });
 
@@ -1910,6 +1918,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderAuthLogoutRpc,
   WsProviderAuthSubscribeRpc,
   WsProviderInstallStartRpc,
+  WsProviderInstallSelectedRpc,
   WsProviderInstallCancelRpc,
   WsProviderInstallSubscribeRpc,
   WsProviderInstallRemoveRpc,

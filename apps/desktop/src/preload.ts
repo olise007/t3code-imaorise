@@ -157,6 +157,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   stopSshEnvironment: (target) =>
     ipcRenderer.invoke(IpcChannels.STOP_SSH_ENVIRONMENT_CHANNEL, target),
+  cancelSshSetup: (target) => ipcRenderer.invoke(IpcChannels.CANCEL_SSH_SETUP_CHANNEL, target),
   ensureSshEnvironment: async (target, options) =>
     unwrapEnsureSshEnvironmentResult(
       await ipcRenderer.invoke(IpcChannels.ENSURE_SSH_ENVIRONMENT_CHANNEL, {
@@ -190,6 +191,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   resolveSshPasswordPrompt: (requestId, password) =>
     ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_PASSWORD_PROMPT_CHANNEL, { requestId, password }),
+  resolveSshSetupReview: (requestId, approval) =>
+    ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_SETUP_REVIEW_CHANNEL, { requestId, approval }),
   getServerExposureState: () => ipcRenderer.invoke(IpcChannels.GET_SERVER_EXPOSURE_STATE_CHANNEL),
   setServerExposureMode: (mode) =>
     ipcRenderer.invoke(IpcChannels.SET_SERVER_EXPOSURE_MODE_CHANNEL, mode),

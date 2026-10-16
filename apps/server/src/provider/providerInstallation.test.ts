@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
+import * as ManagedProviderArchives from "./ManagedProviderArchives.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import { makeProviderInstallation } from "./providerInstallation.ts";
@@ -65,6 +66,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
   const router = yield* makeProviderInstallation().pipe(
     Effect.provide(
       Layer.mergeAll(
+        Layer.mock(ManagedProviderArchives.ManagedProviderArchives)({}),
         ServerSettings.layerTest(input.settings),
         Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
           getInstance: (id) =>

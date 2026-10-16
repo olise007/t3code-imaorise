@@ -7,16 +7,32 @@ import { runSshCommand, getLastNonEmptyOutputLine } from "./command.ts";
 import type { SshAuthOptions } from "./auth.ts";
 import { isSshAuthFailure } from "./auth.ts";
 import { SshLaunchError } from "./errors.ts";
+import {
+  inspectAndPrepare,
+  linuxInspectionScript,
+  windowsInspectionScript,
+  runtimeRequirements,
+} from "./prerequisites.ts";
+import type { SshRuntimeRequirements } from "@t3tools/contracts";
 
 export interface BundledSshArchives {
   readonly version: string;
-  readonly linux: { readonly path: string; readonly sha256: string };
-  readonly windows: { readonly path: string; readonly sha256: string };
+  readonly linux: {
+    readonly path: string;
+    readonly sha256: string;
+    readonly requirements?: SshRuntimeRequirements;
+  };
+  readonly windows: {
+    readonly path: string;
+    readonly sha256: string;
+    readonly requirements?: SshRuntimeRequirements;
+  };
 }
 export interface PreparedSshRuntime {
   readonly platform: "linux" | "windows";
   readonly relativeExecutable: string;
   readonly version: string;
+  readonly selectedProviders?: readonly string[];
 }
 
 const quotePs = (value: string) => `'${value.replaceAll("'", "''")}'`;
@@ -109,6 +125,7 @@ if command -v sha256sum >/dev/null; then actual=$(sha256sum "$archive" | cut -d'
 [ "$actual" = '${hash}' ] || { printf 'Runtime checksum mismatch\\n' >&2; exit 1; }
 tar -xzf "$archive" -C "$stage" --strip-components=1
 "$stage/t3" --version >/dev/null
+"$stage/t3" __ssh-helper verify-runtime >/dev/null
 printf '%s' '${hash}' > "$stage/.archive-sha256"
 [ ! -e "$root" ] || { printf 'Existing runtime requires inspection\\n' >&2; exit 1; }
 mv "$stage" "$root"
@@ -131,6 +148,8 @@ try {
  if($entry.Count -ne 1){throw 'Runtime archive has no unique entry point'}
  & $entry[0].FullName --version | Out-Null
  if($LASTEXITCODE -ne 0){throw 'Runtime failed its readiness check'}
+ & $entry[0].FullName __ssh-helper verify-runtime | Out-Null
+ if($LASTEXITCODE -ne 0){throw 'Runtime native components failed their readiness check'}
  [IO.File]::WriteAllText((Join-Path $entry[0].DirectoryName '.archive-sha256'),'${hash}')
  if(Test-Path -LiteralPath $root){throw 'Existing runtime requires inspection'}
  Move-Item -LiteralPath $entry[0].DirectoryName -Destination $root
@@ -143,6 +162,7 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
   auth: SshAuthOptions,
   bundles: BundledSshArchives,
   progress: (stage: string) => Effect.Effect<void> = () => Effect.void,
+  setup: { readonly supportsReview?: boolean; readonly reviewRequested?: boolean } = {},
 ) {
   const platform = yield* detectRemotePlatform(target, auth);
   const archive = platform === "windows" ? bundles.windows : bundles.linux;
@@ -152,16 +172,6 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
       stdout: "",
     });
   const hash = archive.sha256;
-  const runtime: PreparedSshRuntime = {
-    platform,
-    relativeExecutable: `.t3-imaorise/runtime/sha256-${hash}/${platform === "windows" ? "t3.exe" : "t3"}`,
-    version: bundles.version,
-  };
-  yield* progress("Checking the installed remote runtime…");
-  const warm = yield* Effect.result(
-    runSshCommand(target, { ...auth, ...remoteRuntimeInvocation(runtime, ["--version"]) }),
-  );
-  if (warm._tag === "Success" && warm.success.stdout.includes(bundles.version)) return runtime;
   yield* progress("Verifying bundled runtime…");
   const fs = yield* FileSystem.FileSystem;
   const crypto = yield* Crypto.Crypto;
@@ -181,6 +191,32 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
       message: "The bundled SSH runtime failed checksum verification.",
       stdout: "",
     });
+  const selectedProviders = yield* inspectAndPrepare({
+    target,
+    auth,
+    requirements: archive.requirements ?? runtimeRequirements(platform, bundles.version),
+    supportsReview: setup.supportsReview === true,
+    reviewRequested: setup.reviewRequested === true,
+    progress,
+    windowsCommand: powershellFileArgs(),
+    inspect: () =>
+      runSshCommand(target, {
+        ...auth,
+        remoteCommandArgs: platform === "windows" ? powershellFileArgs() : ["sh", "-l", "-s"],
+        stdin: platform === "windows" ? windowsInspectionScript : linuxInspectionScript,
+      }),
+  });
+  const runtime: PreparedSshRuntime = {
+    platform,
+    relativeExecutable: `.t3-imaorise/runtime/sha256-${hash}/${platform === "windows" ? "t3.exe" : "t3"}`,
+    version: bundles.version,
+    selectedProviders,
+  };
+  yield* progress("Checking the installed remote runtime…");
+  const warm = yield* Effect.result(
+    runSshCommand(target, { ...auth, ...remoteRuntimeInvocation(runtime, ["--version"]) }),
+  );
+  if (warm._tag === "Success" && warm.success.stdout.includes(bundles.version)) return runtime;
   const suffix = `-${Hex.encode(yield* crypto.randomBytes(8).pipe(Effect.orDie))}`;
   yield* progress("Transferring the matching runtime over SSH…");
   const transfer =

@@ -24,6 +24,8 @@ describe("bundled SSH runtime installation", () => {
         if ((yield* HostProcess.Platform) !== "win32") return;
         const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-windows-ssh's home-"));
         const run = (script: string) => {
+          // Node stands in for the T3 executable; packaged smoke runs the real native verifier.
+          script = script.replaceAll("__ssh-helper verify-runtime", "--version");
           const [command, ...args] = powershellArgs(script);
           return NodeChildProcess.spawnSync(command!, args, {
             encoding: "utf8",

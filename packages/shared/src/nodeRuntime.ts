@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 
 import * as HostProcess from "./HostProcess.ts";
 import { CommandResolutionCache, resolveCommandPath } from "./shell.ts";
+import { NODE_PROVIDER_RUNTIME } from "./providerInstallRecipes.ts";
 
 const NodeRuntimeFeature = Schema.Literals([
   "Local device support",
@@ -82,6 +83,16 @@ export const resolveNodeExecutable = Effect.fn("nodeRuntime.resolveNodeExecutabl
   }).pipe(
     // Refresh immediately after the user installs Node and retries setup.
     Effect.provideService(CommandResolutionCache, new Map()),
+    Effect.catch(() =>
+      Effect.gen(function* () {
+        const home = yield* HostProcess.HomeDirectory;
+        const recipe = NODE_PROVIDER_RUNTIME[platform === "win32" ? "windows" : "linux"];
+        const root = path.join(home, ".t3-imaorise", "tools", "node", recipe.version);
+        if ((yield* fs.readFileString(path.join(root, ".recipe-integrity"))) !== recipe.integrity)
+          return yield* new NodeRuntimeUnavailableError({ feature });
+        return path.join(root, platform === "win32" ? "node.exe" : "bin/node");
+      }),
+    ),
     Effect.map((commandPath) => path.resolve(commandPath)),
     Effect.mapError((cause) => new NodeRuntimeUnavailableError({ feature, cause })),
   );

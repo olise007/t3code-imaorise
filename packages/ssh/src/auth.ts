@@ -9,8 +9,11 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 
 import { SshPasswordPromptError } from "./errors.ts";
+import type { SshSetupApproval, SshSetupReview } from "@t3tools/contracts";
 
 export interface SshPasswordRequest {
+  readonly purpose?: "ssh" | "elevation" | "setup-review";
+  readonly setupReview?: SshSetupReview;
   readonly destination: string;
   readonly username: string | null;
   readonly prompt: string;
@@ -36,6 +39,9 @@ export interface SshAuthOptions {
 }
 
 export interface SshPasswordPromptShape {
+  readonly reviewSetup?: (
+    review: SshSetupReview,
+  ) => Effect.Effect<SshSetupApproval, SshPasswordPromptError>;
   readonly isAvailable: boolean;
   readonly request: (
     request: SshPasswordRequest,

@@ -134,3 +134,5 @@ export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-lo
 
 export const GET_WSL_PAIRING_STATE_CHANNEL = "desktop:get-wsl-pairing-state";
 export const SET_WSL_PAIRING_ROUTE_CHANNEL = "desktop:set-wsl-pairing-route";
+export const RESOLVE_SSH_SETUP_REVIEW_CHANNEL = "desktop:resolve-ssh-setup-review";
+export const CANCEL_SSH_SETUP_CHANNEL = "desktop:cancel-ssh-setup";

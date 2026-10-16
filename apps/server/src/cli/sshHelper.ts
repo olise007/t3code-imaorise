@@ -155,7 +155,23 @@ const supervise = Command.make("supervise", {
   ),
 );
 
+const verifyRuntime = Command.make("verify-runtime").pipe(
+  Command.withHandler(() =>
+    Effect.flatMap(SshManagedRuntime.SshManagedRuntime, (service) => service.verifyRuntime).pipe(
+      Effect.provide(SshManagedRuntime.layer),
+    ),
+  ),
+);
+
 export const sshHelperCommand = Command.make("__ssh-helper").pipe(
   Command.unlisted,
-  Command.withSubcommands([pickPort, waitReady, runtimePort, managedStart, managedStop, supervise]),
+  Command.withSubcommands([
+    pickPort,
+    waitReady,
+    runtimePort,
+    managedStart,
+    managedStop,
+    supervise,
+    verifyRuntime,
+  ]),
 );

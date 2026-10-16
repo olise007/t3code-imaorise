@@ -2795,7 +2795,15 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
-      ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
+      ...(platform === "win" && wslRuntimeBundled
+        ? [
+            ...WSL_RUNTIME_EXTRA_RESOURCES,
+            {
+              from: "apps/desktop/prod-resources/wsl-runtime.tar.gz.requirements.json",
+              to: "wsl-runtime.tar.gz.requirements.json",
+            },
+          ]
+        : []),
       ...(platform === "win" && sshWindowsRuntimeBundled
         ? [
             {
@@ -2805,6 +2813,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
             {
               from: "apps/desktop/prod-resources/ssh-windows-runtime.zip.sha256",
               to: "ssh-windows-runtime.zip.sha256",
+            },
+            {
+              from: "apps/desktop/prod-resources/ssh-windows-runtime.zip.requirements.json",
+              to: "ssh-windows-runtime.zip.requirements.json",
             },
           ]
         : []),
@@ -3024,6 +3036,36 @@ export const stageWslRuntimeArchive = Effect.fn("stageWslRuntimeArchive")(functi
     .pipe(Stream.runForEach((chunk) => Effect.sync(() => hash.update(chunk))));
   const digest = hash.digest("hex");
   yield* fs.writeFileString(input.hashPath, `${digest}\n`);
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const archiveOutput = Effect.fn("readRuntimeMetadata")(function* (args: readonly string[]) {
+    const child = yield* spawner.spawn(
+      ChildProcess.make(
+        process.platform === "win32"
+          ? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\tar.exe`
+          : "tar",
+        args,
+      ),
+    );
+    const [output, , code] = yield* Effect.all(
+      [
+        child.stdout.pipe(Stream.decodeText(), Stream.mkString),
+        child.stderr.pipe(Stream.runDrain),
+        child.exitCode,
+      ],
+      { concurrency: "unbounded" },
+    );
+    if (code !== 0) return "";
+    return output;
+  });
+  const listing = yield* archiveOutput(["-tf", input.sourceArchivePath]);
+  const metadataEntry = listing
+    .split(/\r?\n/u)
+    .find((name) => /^[^/]+\/runtime-requirements\.json$/u.test(name));
+  if (metadataEntry)
+    yield* fs.writeFileString(
+      `${input.archivePath}.requirements.json`,
+      yield* archiveOutput(["-xOf", input.sourceArchivePath, metadataEntry]),
+    );
   yield* Effect.log(
     `[desktop-artifact] Staged WSL runtime archive at ${input.archivePath} (${digest}).`,
   );

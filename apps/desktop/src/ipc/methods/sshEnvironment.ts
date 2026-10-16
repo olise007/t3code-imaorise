@@ -27,6 +27,7 @@ import {
   AuthAccessTokenResult,
   AuthSessionState,
   AuthWebSocketTicketResult,
+  SshSetupApproval,
 } from "@t3tools/contracts";
 import { SshHttpBridgeError } from "@t3tools/ssh/errors";
 import { resolveLoopbackSshHttpBaseUrl } from "@t3tools/ssh/tunnel";
@@ -155,6 +156,15 @@ export const stopSshEnvironment = DesktopIpc.makeIpcMethod({
       service.stopEnvironment(target),
     ),
 });
+export const cancelSshSetup = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.CANCEL_SSH_SETUP_CHANNEL,
+  payload: DesktopSshEnvironmentTargetSchema,
+  result: Schema.Void,
+  handler: (target) =>
+    Effect.flatMap(DesktopSshEnvironment.DesktopSshEnvironment, (service) =>
+      service.cancelSetup(target),
+    ),
+});
 
 export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.ENSURE_SSH_ENVIRONMENT_CHANNEL,
@@ -259,4 +269,14 @@ export const resolveSshPasswordPrompt = DesktopIpc.makeIpcMethod({
     const prompts = yield* DesktopSshPasswordPrompts.DesktopSshPasswordPrompts;
     yield* prompts.resolve({ requestId, password });
   }),
+});
+
+export const resolveSshSetupReview = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.RESOLVE_SSH_SETUP_REVIEW_CHANNEL,
+  payload: Schema.Struct({ requestId: Schema.String, approval: Schema.NullOr(SshSetupApproval) }),
+  result: Schema.Void,
+  handler: ({ requestId, approval }) =>
+    Effect.flatMap(DesktopSshPasswordPrompts.DesktopSshPasswordPrompts, (prompts) =>
+      prompts.resolve({ requestId, password: approval === null ? null : JSON.stringify(approval) }),
+    ),
 });

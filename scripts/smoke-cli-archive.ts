@@ -124,6 +124,12 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
       detail: `exit ${String(version.exitCode)}\n${version.stdout}${version.stderr}`,
     });
   }
+  const native = yield* runExecutable(executable, ["__ssh-helper", "verify-runtime"], contentDir);
+  if (native.exitCode !== 0)
+    return yield* new CliArchiveSmokeError({
+      step: "checking native runtime requirements",
+      detail: `exit ${String(native.exitCode)}\n${native.stdout}${native.stderr}`,
+    });
 
   // Starting the server is what actually opens sqlite, loads the terminal
   // and search stacks (node-pty, fff, msgpackr-extract), and serves the

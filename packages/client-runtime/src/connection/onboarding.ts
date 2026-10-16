@@ -46,6 +46,11 @@ export interface PairingConnectionInput {
 }
 
 export interface SshConnectionInput {
+  /** One-shot setup continuation. Never persisted or replayed on reconnect. */
+  readonly afterRegistration?: (
+    environmentId: EnvironmentId,
+    selectedProviders: readonly string[],
+  ) => Effect.Effect<void, ConnectionAttemptError>;
   readonly target: DesktopSshEnvironmentTarget;
   readonly label?: string;
   /** Set when adding a route to a saved machine; see `PairingConnectionInput`. */
@@ -254,7 +259,7 @@ export const prepareBearerConnectionUpdate = Effect.fn(
   });
 });
 
-export const prepareSshRegistration = Effect.fn(
+const prepareSshRegistrationWithSetup = Effect.fn(
   "clientRuntime.connection.onboarding.prepareSshRegistration",
 )(function* (input: SshConnectionInput) {
   const gateway = yield* ClientCapabilities.SshEnvironmentGateway;
@@ -264,7 +269,7 @@ export const prepareSshRegistration = Effect.fn(
   const connectionId = `ssh:${provisioned.environmentId}:${sshTargetKey(provisioned.bootstrap.target)}`;
   const label = input.label?.trim() || provisioned.label || provisioned.bootstrap.target.alias;
 
-  return new SshConnectionRegistration({
+  const registration = new SshConnectionRegistration({
     target: new SshConnectionTarget({
       environmentId: provisioned.environmentId,
       label,
@@ -280,12 +285,16 @@ export const prepareSshRegistration = Effect.fn(
         : { setupWarnings: provisioned.bootstrap.setupWarnings }),
     }),
   });
+  return { registration, selectedProviders: provisioned.bootstrap.selectedProviders ?? [] };
 });
+
+export const prepareSshRegistration = (input: SshConnectionInput) =>
+  prepareSshRegistrationWithSetup(input).pipe(Effect.map((result) => result.registration));
 
 const registerSshConnection = Effect.fn(
   "clientRuntime.connection.onboarding.registerSshConnection",
 )(function* (input: SshConnectionInput) {
-  const registration = yield* prepareSshRegistration(input);
+  const { registration, selectedProviders } = yield* prepareSshRegistrationWithSetup(input);
   if (
     input.expectedEnvironmentId !== undefined &&
     registration.target.environmentId !== input.expectedEnvironmentId
@@ -294,6 +303,8 @@ const registerSshConnection = Effect.fn(
   }
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
   yield* registry.register(registration);
+  if (selectedProviders.length && input.afterRegistration)
+    yield* input.afterRegistration(registration.target.environmentId, selectedProviders);
   return registration.target.environmentId;
 });
 

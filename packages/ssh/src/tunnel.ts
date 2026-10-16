@@ -168,7 +168,11 @@ export interface SshEnvironmentManagerShape {
   ) => Effect.Effect<void, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
   readonly ensureEnvironment: (
     target: DesktopSshEnvironmentTarget,
-    options?: { readonly issuePairingToken?: boolean; resumeStoppedServer?: boolean },
+    options?: {
+      readonly issuePairingToken?: boolean;
+      resumeStoppedServer?: boolean;
+      supportsSetupReview?: boolean;
+    },
   ) => Effect.Effect<
     DesktopSshEnvironmentBootstrap,
     SshEnvironmentEffectError,
@@ -1700,7 +1704,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
 
   const ensureEnvironment = Effect.fn("ssh/tunnel.ensureEnvironment")(function* (
     target: DesktopSshEnvironmentTarget,
-    requestOptions?: { readonly issuePairingToken?: boolean; resumeStoppedServer?: boolean },
+    requestOptions?: {
+      readonly issuePairingToken?: boolean;
+      resumeStoppedServer?: boolean;
+      supportsSetupReview?: boolean;
+    },
   ): Effect.fn.Return<
     DesktopSshEnvironmentBootstrap,
     SshEnvironmentEffectError,
@@ -1740,8 +1748,17 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
                 key,
                 target: resolvedTarget,
                 operation: (auth) =>
-                  prepareBundledRuntime(resolvedTarget, auth, configuredRunner.bundles!, (stage) =>
-                    reportProgress(resolvedTarget, stage),
+                  prepareBundledRuntime(
+                    resolvedTarget,
+                    auth,
+                    configuredRunner.bundles!,
+                    (stage) => reportProgress(resolvedTarget, stage),
+                    {
+                      supportsReview: requestOptions?.supportsSetupReview === true,
+                      reviewRequested:
+                        requestOptions?.supportsSetupReview === true &&
+                        requestOptions?.issuePairingToken === true,
+                    },
                   ),
               }),
             }
@@ -1769,11 +1786,17 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           key,
           localPort: entry.localPort,
           remotePort: entry.remotePort,
+          ...(runner?.prepared?.selectedProviders?.length
+            ? { selectedProviders: runner.prepared.selectedProviders }
+            : {}),
           remoteServerKind: entry.remoteServerKind,
           issuedPairingToken: pairingToken !== null,
         });
         return {
           target: entry.target,
+          ...(runner?.prepared?.selectedProviders?.length
+            ? { selectedProviders: runner.prepared.selectedProviders }
+            : {}),
           httpBaseUrl: entry.httpBaseUrl,
           wsBaseUrl: entry.wsBaseUrl,
           pairingToken,

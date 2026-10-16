@@ -504,6 +504,10 @@
     "./listenPortConflict": {
       "types": "./src/listenPortConflict.ts",
       "import": "./src/listenPortConflict.ts"
+    },
+    "./providerInstallRecipes": {
+      "types": "./src/providerInstallRecipes.ts",
+      "import": "./src/providerInstallRecipes.ts"
     }
   },
   "scripts": {
