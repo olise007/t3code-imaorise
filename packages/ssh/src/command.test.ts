@@ -8,7 +8,8 @@ import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import {
   baseSshArgs,
@@ -67,6 +68,87 @@ const makeNeverFinishingProcess = () => {
 };
 
 describe("ssh command", () => {
+  it.effect.each(["local", "wsl"] as const)(
+    "routes %s archive transfers through the source's native SFTP client",
+    (source) => {
+      const commands: ChildProcess.Command[] = [];
+      const spawner = ChildProcessSpawner.make((command) => {
+        commands.push(command);
+        return Effect.succeed({
+          ...makeFailedProcess({ stdout: "" }),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        });
+      });
+      return Effect.gen(function* () {
+        const result = yield* runSshCommand(
+          {
+            alias: "2001:db8::1",
+            hostname: "2001:db8::1",
+            username: "ACME\\developer",
+            port: 2222,
+            executionSource:
+              source === "wsl" ? { type: "wsl", distro: "Ubuntu 26.04" } : { type: "local" },
+          },
+          {
+            upload: {
+              localPath: "C:/runtime's files/[archive].zip",
+              remotePath: "/D:/User home/runtime.zip",
+            },
+          },
+        );
+        assert.equal(result.stdout, "");
+        const command = commands[0]!;
+        assert.equal(command._tag, "StandardCommand");
+        if (command._tag !== "StandardCommand") return;
+        assert.equal(command.command, source === "wsl" ? "wsl.exe" : "scp.exe");
+        assert.include(command.args, source === "wsl" ? "scp" : "-s");
+        assert.include(command.args, "-P");
+        assert.include(command.args, "2222");
+        assert.equal(command.args.at(-2), "C:/runtime's files/[archive].zip");
+        assert.equal(
+          command.args.at(-1),
+          "ACME\\developer@[2001:db8::1]:/D:/User home/runtime.zip",
+        );
+        if (source === "wsl") assert.include(command.args, "Ubuntu 26.04");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          ),
+        ),
+        Effect.provideService(HostProcess.Platform, "win32"),
+      );
+    },
+  );
+
+  it.effect("explains a disabled remote SFTP subsystem without replaying transfer", () => {
+    let count = 0;
+    const spawner = ChildProcessSpawner.make(() => {
+      count++;
+      return Effect.succeed(
+        makeFailedProcess({ stdout: "", stderr: "subsystem request failed on channel 0" }),
+      );
+    });
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        runSshCommand(
+          { alias: "fixture", hostname: "fixture", username: null, port: 22 },
+          { upload: { localPath: "/tmp/archive.tar.gz", remotePath: "/home/user/runtime.tar.gz" } },
+        ),
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) assert.include(result.failure.message, "SFTP subsystem");
+      assert.equal(count, 1);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
+    );
+  });
   it.effect("keeps rejected credentials retryable after display sanitizing", () => {
     const spawner = ChildProcessSpawner.make(() =>
       Effect.succeed(

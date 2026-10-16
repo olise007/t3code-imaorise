@@ -23,6 +23,8 @@ try {
   if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5') { throw 'OpenSSH fixture checksum mismatch.' }
   Expand-Archive $zip -DestinationPath $fixtureRoot
   $sshRoot = Join-Path $fixtureRoot 'OpenSSH-Win64'
+  & icacls.exe $sshRoot /grant:r "$($authUsername):(OI)(CI)RX" /T | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Could not grant executable access to the disposable SFTP subsystem.' }
   $key = Join-Path $fixtureRoot 'identity'
   $hostKey = Join-Path $fixtureRoot 'hostkey'
   $authIdentity = Join-Path $fixtureRoot 'identity with spaces'
@@ -57,8 +59,9 @@ AuthorizedKeysFile "$($authorized.Replace('\','/'))"
 StrictModes no
 PasswordAuthentication yes
 PubkeyAuthentication yes
+Subsystem sftp "$($sshRoot.Replace('\','/'))/sftp-server.exe"
 AllowUsers $env:USERNAME $authUsername
-LogLevel ERROR
+LogLevel VERBOSE
 "@ | Set-Content -LiteralPath $serverConfig -Encoding ascii
   $known = Join-Path $fixtureRoot 'known_hosts'
   $public = (Get-Content "$hostKey.pub" -Raw).Trim()
@@ -100,7 +103,7 @@ Host t3-fixture
     $payload = @{ root=(Join-Path $fixtureRoot $shellLabel); port=$port; username=$authUsername; password=$authPassword; passphrase=$keyPassphrase; identity=$authIdentity; differentHostKey=(Get-Content "$differentHostKey.pub" -Raw).Trim() } | ConvertTo-Json -Compress
     $process.StandardInput.WriteLine($payload)
     $process.StandardInput.Close()
-    if (!$process.WaitForExit(120000)) {
+    if (!$process.WaitForExit(240000)) {
       $process.Kill($true)
       $process.WaitForExit()
       Write-Output (($stdout.Result + $stderr.Result).Replace($authPassword, '[redacted]').Replace($keyPassphrase, '[redacted]'))
@@ -108,7 +111,10 @@ Host t3-fixture
     }
     $details = ($stdout.Result + $stderr.Result).Replace($authPassword, '[redacted]').Replace($keyPassphrase, '[redacted]')
     Write-Output $details
-    if ($process.ExitCode -ne 0) { throw 'Native SSH authentication fixture failed.' }
+    if ($process.ExitCode -ne 0) {
+      if (Test-Path -LiteralPath $daemonLog) { Write-Output ((Get-Content -LiteralPath $daemonLog -Tail 30 | Out-String).Replace($authPassword, '[redacted]').Replace($keyPassphrase, '[redacted]')) }
+      throw 'Native SSH authentication fixture failed.'
+    }
   }
   function Invoke-Peer([string]$operation, [string]$keyValue) {
     $script = "`$env:HOME='$($homeDirectory.Replace("'","''"))'; `$env:USERPROFILE=`$env:HOME; & '$($node.Replace("'","''"))' '$($peer.Replace("'","''"))' '$operation' '$keyValue' '2.0.1-test'; if(`$LASTEXITCODE -ne 0){exit `$LASTEXITCODE}"

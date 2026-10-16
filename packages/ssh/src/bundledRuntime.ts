@@ -3,6 +3,9 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Crypto from "effect/Crypto";
 import * as Hex from "effect/encoding/Hex";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { runSshCommand, getLastNonEmptyOutputLine } from "./command.ts";
 import type { SshAuthOptions } from "./auth.ts";
 import { isSshAuthFailure } from "./auth.ts";
@@ -203,11 +206,104 @@ try {
 `;
 }
 
-export function windowsUploadScript(hash: string, suffix: string, byteLength: number) {
-  // Win32 OpenSSH can retain stdin after a large pipe write. The verified
-  // archive length frames this transfer without depending on a forwarded EOF.
-  return `$ErrorActionPreference='Stop'; $d=Join-Path $HOME '.t3-imaorise/runtime'; [IO.Directory]::CreateDirectory($d)|Out-Null; $f=[IO.File]::Open((Join-Path $d 'upload-${hash}${suffix}.zip'),[IO.FileMode]::Create); try { $inputStream=[Console]::OpenStandardInput(); $buffer=New-Object byte[] 65536; [long]$remaining=${byteLength}; while($remaining -gt 0) { $count=$inputStream.Read($buffer,0,[int][Math]::Min($buffer.Length,$remaining)); if($count -eq 0){throw 'Runtime transfer ended before the expected archive length'}; $f.Write($buffer,0,$count); $remaining-=$count } } finally { $f.Dispose() }`;
-}
+const sourceArchivePath = Effect.fn("ssh.runtime.sourceArchivePath")(function* (
+  target: DesktopSshEnvironmentTarget,
+  path: string,
+) {
+  const source = target.executionSource;
+  if (source?.type !== "wsl") return path;
+  if ((yield* HostProcess.Platform) !== "win32")
+    return yield* new SshLaunchError({
+      message: "The saved WSL SSH source requires Windows.",
+      stdout: "",
+    });
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const child = yield* spawner.spawn(
+        ChildProcess.make("wsl.exe", [
+          "--distribution",
+          source.distro,
+          "--exec",
+          "wslpath",
+          "-u",
+          path,
+        ]),
+      );
+      const [stdout, , code] = yield* Effect.all(
+        [
+          child.stdout.pipe(Stream.decodeText(), Stream.mkString),
+          child.stderr.pipe(Stream.runDrain),
+          child.exitCode,
+        ],
+        { concurrency: "unbounded" },
+      );
+      const resolved = stdout.trim();
+      if (code !== 0 || !resolved.startsWith("/") || /[\x00\r\n]/u.test(resolved))
+        return yield* new SshLaunchError({
+          message:
+            "The selected WSL distro cannot access the bundled runtime archive. Check Windows-drive access in that distro.",
+          stdout: "",
+        });
+      return resolved;
+    }),
+  ).pipe(
+    Effect.timeout("10 seconds"),
+    Effect.mapError(
+      (cause) =>
+        new SshLaunchError({
+          message:
+            "Could not resolve the runtime archive inside the saved WSL SSH source. Check that distro's Windows-drive access.",
+          stdout: "",
+          cause,
+        }),
+    ),
+  );
+});
+
+/** Native SFTP avoids PowerShell 5.1's large redirected-input stalls. */
+export const uploadRuntimeArchive = Effect.fn("ssh.runtime.upload")(function* (
+  target: DesktopSshEnvironmentTarget,
+  auth: SshAuthOptions,
+  platform: "linux" | "windows",
+  localPath: string,
+  hash: string,
+  suffix: string,
+) {
+  if (!/^[a-f0-9]{64}$/u.test(hash) || !/^[-a-zA-Z0-9]*$/u.test(suffix))
+    return yield* new SshLaunchError({
+      message: "The runtime upload identity is invalid.",
+      stdout: "",
+    });
+  const name = `upload-${hash}${suffix}.${platform === "windows" ? "zip" : "tar.gz"}`;
+  const destination = yield* runSshCommand(target, {
+    ...auth,
+    remoteCommandArgs: platform === "windows" ? powershellFileArgs() : ["sh", "-s"],
+    stdin:
+      platform === "windows"
+        ? `$ErrorActionPreference='Stop'; $d=Join-Path $HOME '.t3-imaorise/runtime'; [IO.Directory]::CreateDirectory($d)|Out-Null; [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Join-Path $d '${name}')))`
+        : `set -eu\numask 077\nmkdir -p "$HOME/.t3-imaorise/runtime"\nprintf '%s' "$HOME/.t3-imaorise/runtime/${name}" | base64 | tr -d '\\n'\nprintf '\\n'\n`,
+  });
+  const encoded = getLastNonEmptyOutputLine(destination.stdout) ?? "";
+  const path = Buffer.from(encoded, "base64").toString("utf8");
+  if (
+    !/^[A-Za-z0-9+/]+={0,2}$/u.test(encoded) ||
+    encoded.length > 65536 ||
+    /[\x00\r\n]/u.test(path) ||
+    !(platform === "windows" ? /^(?:[A-Za-z]:[\\/]|[\\/]{2})/u.test(path) : path.startsWith("/"))
+  )
+    return yield* new SshLaunchError({
+      message: "SSH returned an invalid runtime destination for the login user.",
+      stdout: "",
+    });
+  const remotePath =
+    platform === "windows" ? path.replaceAll("\\", "/").replace(/^([A-Za-z]:)/u, "/$1") : path;
+  yield* runSshCommand(target, {
+    ...auth,
+    upload: { localPath: yield* sourceArchivePath(target, localPath), remotePath },
+    timeoutMs: 300_000,
+  });
+});
 
 export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* (
   target: DesktopSshEnvironmentTarget,
@@ -292,21 +388,8 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
     stdin: runtimeStorageScript(platform, bytes.length, archive.requirements),
   });
   yield* progress("Transferring the matching runtime over SSH…");
-  const transfer =
-    platform === "windows"
-      ? powershellArgs(windowsUploadScript(hash, suffix, bytes.length))
-      : [
-          "sh",
-          "-c",
-          `'umask 077; mkdir -p "$HOME/.t3-imaorise/runtime" && head -c ${bytes.length} > "$HOME/.t3-imaorise/runtime/upload-${hash}${suffix}.tar.gz"'`,
-        ];
   yield* Effect.gen(function* () {
-    yield* runSshCommand(target, {
-      ...auth,
-      remoteCommandArgs: transfer,
-      stdinBytes: bytes,
-      timeoutMs: 300_000,
-    });
+    yield* uploadRuntimeArchive(target, auth, platform, archive.path, hash, suffix);
     yield* progress("Verifying and installing remote runtime…");
     yield* runSshCommand(target, {
       ...auth,

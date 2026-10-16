@@ -44,6 +44,8 @@ export interface SshCommandResult {
 }
 
 export interface RunSshCommandOptions extends SshAuthOptions {
+  /** Internal file transfer: OpenSSH SCP's SFTP mode, with the same source and authentication. */
+  readonly upload?: { readonly localPath: string; readonly remotePath: string };
   /** Only enable for installer output, never authentication or pairing protocols. */
   readonly onDetails?: (line: string) => Effect.Effect<void>;
   /** Suppress remote diagnostics for operations consuming an elevation secret. */
@@ -113,13 +115,18 @@ ASKPASS
 chmod 700 "$helper/askpass"
 export SSH_ASKPASS="$helper/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=t3code
 unset secret trusted
-ssh "$@"
+program=$1
+shift
+"$program" "$@"
 `;
 
 export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function* (
   target: DesktopSshEnvironmentTarget,
   args: ReadonlyArray<string>,
-  input: SshAuthOptions & { readonly stdin?: Stream.Stream<Uint8Array> },
+  input: SshAuthOptions & {
+    readonly stdin?: Stream.Stream<Uint8Array>;
+    readonly sourceCommand?: "ssh" | "scp";
+  },
 ) {
   const manualArgs: string[] = [];
   if (target.manual) {
@@ -185,6 +192,7 @@ export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function
         "-lc",
         WSL_SSH_WRAPPER,
         "t3-ssh",
+        input.sourceCommand ?? "ssh",
         ...sshArgs,
       ],
       env: {},
@@ -199,7 +207,12 @@ export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function
     };
   }
   return {
-    command: yield* resolveSshCommand,
+    command:
+      input.sourceCommand === "scp"
+        ? (yield* HostProcess.Platform) === "win32"
+          ? "scp.exe"
+          : "scp"
+        : yield* resolveSshCommand,
     args: sshArgs,
     env: yield* buildSshChildEnvironment(input),
     stdin: input.stdin ?? Stream.empty,
@@ -367,16 +380,36 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     ...(input.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
     ...(input.authSecret === undefined ? {} : { authSecret: input.authSecret }),
   };
-  const args = [
-    ...baseSshArgs(target, {
-      batchMode: input.batchMode ?? (input.interactiveAuth ? "no" : "yes"),
-    }),
-    ...(input.preHostArgs ?? []),
-    hostSpec,
-    ...(input.remoteCommandArgs ?? []),
-  ];
+  const host = target.manual
+    ? target.hostname.trim()
+    : target.alias.trim() || target.hostname.trim();
+  const bracketedHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  const transferHost = target.username ? `${target.username}@${bracketedHost}` : bracketedHost;
+  const args = input.upload
+    ? [
+        "-s",
+        "-o",
+        `BatchMode=${input.batchMode ?? (input.interactiveAuth ? "no" : "yes")}`,
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "StrictHostKeyChecking=ask",
+        ...(target.port === null ? [] : ["-P", String(target.port)]),
+        "--",
+        input.upload.localPath,
+        `${transferHost}:${input.upload.remotePath}`,
+      ]
+    : [
+        ...baseSshArgs(target, {
+          batchMode: input.batchMode ?? (input.interactiveAuth ? "no" : "yes"),
+        }),
+        ...(input.preHostArgs ?? []),
+        hostSpec,
+        ...(input.remoteCommandArgs ?? []),
+      ];
   const prepared = yield* prepareSshSpawn(target, args, {
     ...auth,
+    ...(input.upload ? { sourceCommand: "scp" as const } : {}),
     stdin:
       input.stdinBytes === undefined ? stdinStream(input.stdin) : Stream.make(input.stdinBytes),
   }).pipe(
@@ -458,7 +491,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     Effect.mapError(
       (cause) =>
         new SshCommandError({
-          command: ["ssh", ...args],
+          command: [sshCommand, ...args],
           exitCode: null,
           stderr: "",
           message:
@@ -475,24 +508,26 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       : redactSshErrorOutput(stderr, input.interactiveAuth === true);
     yield* Effect.logWarning("ssh.command.failed", {
       ...sshTargetLogFields(target),
-      command: ["ssh", ...args],
+      command: [sshCommand, ...args],
       exitCode,
       stdout: diagnosticStdout,
       stderr: sanitizeSetupOutput(diagnosticStderr),
     });
     return yield* new SshCommandError({
-      command: ["ssh", ...args],
+      command: [sshCommand, ...args],
       exitCode,
       stdout: diagnosticStdout,
       stderr: diagnosticStderr,
       message:
         !input.sensitiveInput && isSshAuthFailure(new Error(stderr))
           ? "SSH authentication failed. Check the selected user and authentication method."
-          : normalizeSshErrorMessage({
-              stdout: diagnosticStdout,
-              stderr: diagnosticStderr,
-              fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
-            }),
+          : input.upload && /subsystem request failed|sftp-server.*not found/iu.test(stderr)
+            ? "The remote SSH server could not start SFTP. Enable its standard OpenSSH SFTP subsystem before retrying runtime setup."
+            : normalizeSshErrorMessage({
+                stdout: diagnosticStdout,
+                stderr: diagnosticStderr,
+                fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
+              }),
     });
   }
 
@@ -511,7 +546,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
 
   yield* Effect.logDebug("ssh.command.succeeded", {
     ...sshTargetLogFields(target),
-    command: ["ssh", ...args],
+    command: [sshCommand, ...args],
   });
   return { stdout, stderr };
 });

@@ -14,7 +14,7 @@ import {
   powershellArgs,
   powershellFileArgs,
   runtimeStorageScript,
-  windowsUploadScript,
+  uploadRuntimeArchive,
 } from "../../packages/ssh/src/bundledRuntime.ts";
 import { runtimeRequirements } from "../../packages/ssh/src/prerequisites.ts";
 import * as Effect from "effect/Effect";
@@ -75,7 +75,9 @@ const program = Effect.gen(function* () {
         testOnly: true,
         ...(secret === undefined ? {} : { authSecret: secret }),
       })
-      .pipe(Effect.provideService(SshAuth.SshPasswordPrompt, prompt), Effect.timeout("35 seconds"));
+      // A new Windows account may need its profile created on first logon.
+      // Let the production command's 60s deadline report transport failures.
+      .pipe(Effect.provideService(SshAuth.SshPasswordPrompt, prompt), Effect.timeout("75 seconds"));
   yield* Effect.logInfo("SSH fixture: unfamiliar host and password");
   const first = yield* authenticate(target);
   NodeAssert.equal(first.httpBaseUrl, "");
@@ -90,12 +92,16 @@ const program = Effect.gen(function* () {
   });
   const payload = new Uint8Array(4 * 1024 * 1024).fill(37);
   const digest = NodeCrypto.createHash("sha256").update(payload).digest("hex");
-  yield* runSshCommand(target, {
-    interactiveAuth: true,
-    authSecret: input.password,
-    remoteCommandArgs: powershellArgs(windowsUploadScript(digest, "-fixture", payload.length)),
-    stdinBytes: payload,
-  });
+  const archive = NodePath.join(input.root, "source's runtime [archive].zip");
+  yield* Effect.promise(() => NodeFSP.writeFile(archive, payload));
+  yield* uploadRuntimeArchive(
+    target,
+    { interactiveAuth: true, authSecret: input.password },
+    "windows",
+    archive,
+    digest,
+    "-fixture",
+  );
   const upload = yield* runSshCommand(target, {
     interactiveAuth: true,
     authSecret: input.password,
