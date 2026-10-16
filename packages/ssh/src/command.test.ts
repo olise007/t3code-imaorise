@@ -66,6 +66,32 @@ const makeNeverFinishingProcess = () => {
 };
 
 describe("ssh command", () => {
+  it.effect("bounds extraction errors and summarizes an exhausted destination", () => {
+    const stderr =
+      "tar: No space left on device\n" +
+      "tar: Cannot mkdir: No such file or directory\n".repeat(15_000);
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed(makeFailedProcess({ stdout: "", stderr })),
+    );
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        runSshCommand({ alias: "fixture", hostname: "fixture", username: null, port: 22 }),
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.include(result.failure.message, "ran out of storage");
+        assert.isBelow(result.failure.message.length, 600);
+        assert.isBelow(result.failure.stderr.length, 4100);
+      }
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
+    );
+  });
   it.effect("withholds diagnostics when a privileged operation consumes a secret", () => {
     const spawner = ChildProcessSpawner.make(() =>
       Effect.succeed(

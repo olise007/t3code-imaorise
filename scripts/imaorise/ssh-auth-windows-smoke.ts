@@ -2,12 +2,20 @@
 import * as NodeAssert from "node:assert/strict";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NetService from "@t3tools/shared/Net";
 import * as SshAuth from "../../packages/ssh/src/auth.ts";
 import * as SshTunnel from "../../packages/ssh/src/tunnel.ts";
+import { runSshCommand } from "../../packages/ssh/src/command.ts";
+import {
+  powershellArgs,
+  powershellFileArgs,
+  runtimeStorageScript,
+} from "../../packages/ssh/src/bundledRuntime.ts";
+import { runtimeRequirements } from "../../packages/ssh/src/prerequisites.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { DesktopSshEnvironmentTarget } from "../../packages/contracts/src/ipc.ts";
@@ -72,6 +80,37 @@ const program = Effect.gen(function* () {
   NodeAssert.equal(first.httpBaseUrl, "");
   NodeAssert.ok(requests.some((request) => request.challenge === "host-key"));
   NodeAssert.ok(requests.some((request) => request.challenge === "password"));
+  yield* Effect.logInfo("SSH fixture: destination capacity and binary upload");
+  yield* runSshCommand(target, {
+    interactiveAuth: true,
+    authSecret: input.password,
+    remoteCommandArgs: powershellFileArgs(),
+    stdin: runtimeStorageScript("windows", 4 * 1024 * 1024, runtimeRequirements("windows", "test")),
+  });
+  const payload = new Uint8Array(4 * 1024 * 1024).fill(37);
+  const upload = yield* runSshCommand(target, {
+    interactiveAuth: true,
+    authSecret: input.password,
+    remoteCommandArgs: powershellArgs(
+      "$hash=[Security.Cryptography.SHA256]::Create(); try { [BitConverter]::ToString($hash.ComputeHash([Console]::OpenStandardInput())).Replace('-','').ToLowerInvariant() } finally { $hash.Dispose() }",
+    ),
+    stdinBytes: payload,
+  });
+  NodeAssert.ok(
+    upload.stdout.includes(NodeCrypto.createHash("sha256").update(payload).digest("hex")),
+  );
+  const closed = yield* Effect.result(
+    runSshCommand(target, {
+      interactiveAuth: true,
+      authSecret: input.password,
+      remoteCommandArgs: powershellArgs(
+        "[Console]::Error.WriteLine('No space left on device'); exit 74",
+      ),
+      stdinBytes: new Uint8Array(32 * 1024 * 1024),
+    }),
+  );
+  NodeAssert.equal(closed._tag, "Failure");
+  if (closed._tag === "Failure") NodeAssert.match(closed.failure.message, /ran out of storage/);
   const retry = {
     ...target,
     manual: { ...target.manual!, profileId: "incorrect-password-fixture" },

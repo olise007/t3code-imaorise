@@ -14,9 +14,137 @@ import {
   remoteRuntimeInvocation,
   windowsInstallScript,
   powershellArgs,
+  runtimeStorageScript,
 } from "./bundledRuntime.ts";
+import { runtimeRequirements } from "./prerequisites.ts";
 
 describe("bundled SSH runtime installation", () => {
+  it.effect(
+    "checks storage on the login user's runtime filesystem before upload",
+    () =>
+      Effect.gen(function* () {
+        const platform = (yield* HostProcess.Platform) === "win32" ? "windows" : "linux";
+        const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-storage's home-"));
+        try {
+          const requirements = {
+            ...runtimeRequirements(platform, "test"),
+            unpackedBytes: 1024,
+            unpackedEntries: 30,
+          };
+          const script = (size: number) => runtimeStorageScript(platform, size, requirements);
+          const invoke = (size: number) => {
+            if (platform === "windows") {
+              const [exe, ...args] = powershellArgs(
+                script(size).replaceAll("$HOME", "$env:T3_TEST_REMOTE_HOME"),
+              );
+              return NodeChildProcess.spawnSync(exe!, args, {
+                encoding: "utf8",
+                env: { ...process.env, T3_TEST_REMOTE_HOME: home },
+                timeout: 15_000,
+              });
+            }
+            return NodeChildProcess.spawnSync("sh", ["-s"], {
+              input: script(size),
+              encoding: "utf8",
+              env: { ...process.env, HOME: home },
+              timeout: 5000,
+            });
+          };
+          expect(invoke(1024).status).toBe(0);
+          const tooLarge = invoke(2 ** 52);
+          expect(tooLarge.status).not.toBe(0);
+          expect(tooLarge.stderr).toContain("Insufficient remote runtime storage");
+          expect(NodeFS.existsSync(NodePath.join(home, ".t3-imaorise"))).toBe(false);
+        } finally {
+          NodeFS.rmSync(home, { recursive: true, force: true });
+        }
+      }),
+    40_000,
+  );
+
+  it.effect("checks free inodes at the runtime path inside a linked Linux home", () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return;
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-storage-inodes-"));
+      try {
+        const actualHome = NodePath.join(directory, "mounted-home");
+        const home = NodePath.join(directory, "login-home");
+        const runtime = NodePath.join(actualHome, ".t3-imaorise", "runtime");
+        NodeFS.mkdirSync(runtime, { recursive: true });
+        NodeFS.symlinkSync(actualHome, home, "dir");
+        const bin = NodePath.join(directory, "bin");
+        NodeFS.mkdirSync(bin);
+        NodeFS.writeFileSync(
+          NodePath.join(bin, "df"),
+          `#!/bin/sh\nprintf '%s\\n' "$2" >> "$T3_TEST_DF_PATHS"\nprintf 'Filesystem blocks used available capacity mount\\n'\ncase "$1" in -Pi) printf 'fixture 100 99 1 99%% /home-volume\\n';; *) printf 'fixture 900000000 0 900000000 0%% /home-volume\\n';; esac\n`,
+          { mode: 0o700 },
+        );
+        const paths = NodePath.join(directory, "paths");
+        const result = NodeChildProcess.spawnSync("sh", ["-s"], {
+          input: runtimeStorageScript("linux", 1024, {
+            ...runtimeRequirements("linux", "test"),
+            unpackedBytes: 1024,
+            unpackedEntries: 100,
+          }),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            HOME: home,
+            PATH: `${bin}:${process.env.PATH}`,
+            T3_TEST_DF_PATHS: paths,
+          },
+        });
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("inodes");
+        expect(NodeFS.readFileSync(paths, "utf8").trim().split("\n")).toEqual([
+          NodePath.join(home, ".t3-imaorise", "runtime"),
+          NodePath.join(home, ".t3-imaorise", "runtime"),
+        ]);
+        expect(NodeFS.readdirSync(runtime)).toEqual([]);
+      } finally {
+        NodeFS.rmSync(directory, { recursive: true, force: true });
+      }
+    }),
+  );
+
+  it.effect("cleans only the failed Linux attempt after extraction or staging fails", () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return;
+      const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-storage-cleanup-"));
+      try {
+        const parent = NodePath.join(home, ".t3-imaorise", "runtime");
+        const bin = NodePath.join(home, "bin");
+        NodeFS.mkdirSync(parent, { recursive: true });
+        NodeFS.mkdirSync(bin);
+        const bytes = Buffer.from("disposable archive");
+        const hash = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+        const archive = NodePath.join(parent, `upload-${hash}-fixture.tar.gz`);
+        NodeFS.writeFileSync(NodePath.join(parent, "existing-server"), "preserve");
+        NodeFS.writeFileSync(
+          NodePath.join(bin, "tar"),
+          "#!/bin/sh\nprintf 'No space left on device\\n' >&2\nexit 1\n",
+          { mode: 0o700 },
+        );
+        const run = () =>
+          NodeChildProcess.spawnSync("sh", ["-s"], {
+            input: linuxInstallScript(hash, "-fixture"),
+            encoding: "utf8",
+            env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` },
+          });
+        NodeFS.writeFileSync(archive, bytes);
+        const result = run();
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("No space left");
+        expect(NodeFS.readdirSync(parent)).toEqual(["existing-server"]);
+        NodeFS.writeFileSync(NodePath.join(bin, "mktemp"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+        NodeFS.writeFileSync(archive, bytes);
+        expect(run().status).not.toBe(0);
+        expect(NodeFS.readdirSync(parent)).toEqual(["existing-server"]);
+      } finally {
+        NodeFS.rmSync(home, { recursive: true, force: true });
+      }
+    }),
+  );
   it.effect(
     "installs and reuses a Windows server archive in a path containing spaces and apostrophes",
     () =>

@@ -10,6 +10,8 @@ export const SshRuntimeRequirements = Schema.Struct({
   minimumGlibcxx: Schema.String,
   minimumKernel: Schema.String,
   libraries: Schema.Array(Schema.String),
+  unpackedBytes: Schema.optional(Schema.Number),
+  unpackedEntries: Schema.optional(Schema.Number),
 });
 export type SshRuntimeRequirements = typeof SshRuntimeRequirements.Type;
 

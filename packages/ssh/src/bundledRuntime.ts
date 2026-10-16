@@ -119,6 +119,7 @@ archive="$HOME/.t3-imaorise/runtime/upload-${hash}${suffix}.tar.gz"
 if [ -x "$root/t3" ] && [ "$(cat "$root/.archive-sha256" 2>/dev/null)" = '${hash}' ]; then "$root/t3" --version >/dev/null; "$root/t3" __ssh-helper verify-runtime >/dev/null; exit 0; fi
 mkdir -p "$HOME/.t3-imaorise/runtime"
 if ! mkdir "$root.lock" 2>/dev/null; then printf 'Another runtime setup is in progress; retry when it finishes.\\n' >&2; exit 1; fi
+trap 'rmdir "$root.lock" 2>/dev/null || true; rm -f "$archive"' EXIT
 stage=$(mktemp -d "$HOME/.t3-imaorise/runtime/.stage-XXXXXX")
 trap 'rm -rf "$stage" "$root.lock"; rm -f "$archive"' EXIT
 trap 'exit 130' HUP INT TERM
@@ -130,6 +131,50 @@ tar -xzf "$archive" -C "$stage" --strip-components=1
 printf '%s' '${hash}' > "$stage/.archive-sha256"
 [ ! -e "$root" ] || { printf 'Existing runtime requires inspection\\n' >&2; exit 1; }
 mv "$stage" "$root"
+`;
+}
+
+/** Check the destination filesystem before uploading; activation never removes old runtimes. */
+export function runtimeStorageScript(
+  platform: "linux" | "windows",
+  archiveBytes: number,
+  requirements?: SshRuntimeRequirements,
+) {
+  // Older sidecars lack payload measurements. Use a conservative estimate for
+  // those archives; current builds ship measured logical sizes and entry counts.
+  const unpackedBytes = requirements?.unpackedBytes;
+  const entries = requirements?.unpackedEntries;
+  const validEntries =
+    entries !== undefined && Number.isSafeInteger(entries) && entries >= 0 ? entries : 0;
+  const requiredBytes = Math.ceil(
+    archiveBytes +
+      (unpackedBytes !== undefined && Number.isSafeInteger(unpackedBytes) && unpackedBytes >= 0
+        ? unpackedBytes
+        : archiveBytes * 8) +
+      validEntries * 4096 +
+      64 * 1024 * 1024,
+  );
+  if (platform === "windows")
+    return `$ErrorActionPreference='Stop'
+$probe=Join-Path $HOME '.t3-imaorise/runtime'
+while(!(Test-Path -LiteralPath $probe -PathType Container)){$probe=Split-Path -LiteralPath $probe}
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; namespace T3 { public static class RuntimeStorage { [DllImport("kernel32.dll", EntryPoint="GetDiskFreeSpaceExW", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool Available(string path, out ulong free, out ulong total, out ulong totalFree); } }'
+[UInt64]$free=0; [UInt64]$total=0; [UInt64]$totalFree=0
+if(![T3.RuntimeStorage]::Available($probe,[ref]$free,[ref]$total,[ref]$totalFree)){throw 'Cannot determine free space for the remote runtime destination. Check home-directory access.'}
+if($free -lt ${requiredBytes}){throw "Insufficient remote runtime storage: need ${requiredBytes} bytes free, available $free bytes. Free space on the destination drive and retry setup."}
+`;
+  return `set -eu
+probe="$HOME/.t3-imaorise/runtime"
+while [ ! -d "$probe" ]; do probe=$(dirname "$probe"); done
+available=$(LC_ALL=C df -Pk "$probe" | awk 'NR == 2 {print $4}')
+case "$available" in ''|*[!0-9]*) printf 'Cannot determine free space for the remote runtime. Check the destination filesystem.\\n' >&2; exit 1;; esac
+if [ "$available" -lt ${Math.ceil(requiredBytes / 1024)} ]; then printf 'Insufficient remote runtime storage: need ${Math.ceil(requiredBytes / 1024)} KiB free; available %s KiB. Free space on the destination filesystem and retry setup.\\n' "$available" >&2; exit 1; fi
+${
+  validEntries > 0
+    ? `available=$(LC_ALL=C df -Pi "$probe" 2>/dev/null | awk 'NR == 2 {print $4}')
+case "$available" in ''|*[!0-9]*) ;; *) if [ "$available" -lt ${validEntries + 64} ]; then printf 'Insufficient free file entries (inodes) for the remote runtime: need ${validEntries + 64}; available %s. Free file entries and retry setup.\\n' "$available" >&2; exit 1; fi;; esac`
+    : ""
+}
 `;
 }
 
@@ -234,6 +279,12 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
     return runtime;
   }
   const suffix = `-${Hex.encode(yield* crypto.randomBytes(8).pipe(Effect.orDie))}`;
+  yield* progress("Checking remote storage capacity…");
+  yield* runSshCommand(target, {
+    ...auth,
+    remoteCommandArgs: platform === "windows" ? powershellFileArgs() : ["sh", "-s"],
+    stdin: runtimeStorageScript(platform, bytes.length, archive.requirements),
+  });
   yield* progress("Transferring the matching runtime over SSH…");
   const transfer =
     platform === "windows"

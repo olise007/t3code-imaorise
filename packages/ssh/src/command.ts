@@ -5,6 +5,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
+import * as Result from "effect/Result";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
@@ -286,15 +288,27 @@ export const collectProcessOutput = <E>(
     Stream.decodeText(),
     Stream.runFold(
       () => "",
-      (acc, chunk) => acc + chunk,
+      (acc, chunk) => (acc + chunk).slice(-1024 * 1024),
     ),
   );
 
-function redactSshErrorOutput(output: string): string {
-  const redacted = output.replace(
-    /("(?:access_token|bearerToken|credential|pairingToken|token)"\s*:\s*")[^"]+(")/giu,
-    "$1[redacted]$2",
-  );
+function redactSshErrorOutput(output: string, preserveAuthEvidence = false): string {
+  // The authentication layer consumes these internal challenge records. They
+  // must survive in the typed error, but never in display messages or logs.
+  const evidence = preserveAuthEvidence
+    ? [...output.matchAll(/^T3_SSH_(?:AUTH_)?PROMPT:[A-Za-z0-9+/=]{1,3000}$/gmu)].map(
+        (match) => match[0],
+      )
+    : [];
+  const redacted = [
+    ...evidence,
+    sanitizeSetupOutput(
+      output.replace(
+        /("(?:access_token|bearerToken|credential|pairingToken|token)"\s*:\s*")[^"]+(")/giu,
+        "$1[redacted]$2",
+      ),
+    ),
+  ].join("\n");
   return redacted.length > MAX_SSH_ERROR_OUTPUT_LENGTH
     ? `${redacted.slice(0, MAX_SSH_ERROR_OUTPUT_LENGTH)}\n[truncated]`
     : redacted;
@@ -305,7 +319,14 @@ function normalizeSshErrorMessage(input: {
   readonly stderr: string;
   readonly fallbackMessage: string;
 }): string {
-  const cleanedStderr = input.stderr.trim();
+  const cleanedStderr = sanitizeSetupOutput(input.stderr).trim();
+  if (
+    /no space left on device|not enough space on (?:the )?disk|disk (?:is )?full/iu.test(
+      cleanedStderr,
+    )
+  ) {
+    return "The remote host ran out of storage while preparing the runtime. Free space and file entries on the filesystem containing the remote user's .t3-imaorise directory, then retry setup. Existing servers have not been replaced.";
+  }
   if (cleanedStderr.length > 0) {
     return cleanedStderr;
   }
@@ -382,10 +403,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       ChildProcess.make(sshCommand, prepared.args, {
         env: prepared.env,
         extendEnv: true,
-        stdin: {
-          stream: prepared.stdin,
-          endOnDone: true,
-        },
+        stdin: "pipe",
       }),
     )
     .pipe(
@@ -405,6 +423,12 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       ),
     );
 
+  // Observe input failures rather than letting the spawner's detached input
+  // fiber fail silently. Read stderr through exit before reporting pipe errors.
+  const inputFiber = yield* Stream.run(prepared.stdin, child.stdin).pipe(
+    Effect.result,
+    Effect.forkIn(commandScope),
+  );
   const collect = (stream: typeof child.stdout) =>
     Effect.gen(function* () {
       if (!input.onDetails || input.sensitiveInput) return yield* collectProcessOutput(stream);
@@ -446,13 +470,13 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     const diagnosticStdout = input.sensitiveInput ? "" : redactSshErrorOutput(stdout);
     const diagnosticStderr = input.sensitiveInput
       ? "Remote operation failed; sensitive diagnostics withheld."
-      : stderr;
+      : redactSshErrorOutput(stderr, input.interactiveAuth === true);
     yield* Effect.logWarning("ssh.command.failed", {
       ...sshTargetLogFields(target),
       command: ["ssh", ...args],
       exitCode,
       stdout: diagnosticStdout,
-      stderr: diagnosticStderr,
+      stderr: sanitizeSetupOutput(diagnosticStderr),
     });
     return yield* new SshCommandError({
       command: ["ssh", ...args],
@@ -464,6 +488,19 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
         stderr: diagnosticStderr,
         fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
       }),
+    });
+  }
+
+  const inputResult = yield* Fiber.join(inputFiber);
+  if (Result.isFailure(inputResult)) {
+    return yield* new SshCommandError({
+      command: [sshCommand, ...args],
+      exitCode,
+      stdout: input.sensitiveInput ? "" : redactSshErrorOutput(stdout),
+      stderr: input.sensitiveInput ? "" : redactSshErrorOutput(stderr),
+      message:
+        "SSH closed its input before the transfer completed. Check the remote destination's free space and write permissions, then retry setup.",
+      cause: inputResult.failure,
     });
   }
 

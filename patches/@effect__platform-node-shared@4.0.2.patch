@@ -1,27 +1,3 @@
-diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
---- a/dist/NodeChildProcessSpawner.js
-+++ b/dist/NodeChildProcessSpawner.js
-@@ -44,9 +44,17 @@
-     return false;
-   }
- };
--const taskkill = (childProcess, onExit = () => {}) => NodeChildProcess.execFile("taskkill", ["/pid", String(childProcess.pid), "/T", "/F"], {
--  windowsHide: true
--}, onExit);
-+const taskkill = (childProcess, onExit = () => {}) => {
-+  // Once Node observes the leader's exit, taskkill /T cannot reclaim orphaned
-+  // descendants through its PID, which may be reused. Skip stale-PID cleanup.
-+  if (childProcess.exitCode !== null || childProcess.signalCode !== null) {
-+    onExit(null);
-+    return;
-+  }
-+  NodeChildProcess.execFile("taskkill", ["/pid", String(childProcess.pid), "/T", "/F"], {
-+    windowsHide: true
-+  }, onExit);
-+};
- const make = /*#__PURE__*/Effect.gen(function* () {
-   const fs = yield* FileSystem.FileSystem;
-   const path = yield* Path.Path;
 diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
 --- a/src/NodeChildProcessSpawner.ts
 +++ b/src/NodeChildProcessSpawner.ts
@@ -58,3 +34,102 @@ diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
 
  const make = Effect.gen(function*() {
    const fs = yield* FileSystem.FileSystem
+@@ -375,6 +384,14 @@
+         command.args,
+         spawnOptions
+       )
++      // Pending writes may fail after the stdin sink's scope has closed. Keep
++      // the pipe guarded until Node closes it; active sinks still report errors.
++      if (handle.stdin) {
++        const stdin = handle.stdin
++        const onInputError = () => {}
++        stdin.on("error", onInputError)
++        stdin.once("close", () => stdin.off("error", onInputError))
++      }
+       handle.on("error", (error) => {
+         resume(Effect.fail(toPlatformError("spawn", error, command)))
+       })
+diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
+--- a/dist/NodeChildProcessSpawner.js
++++ b/dist/NodeChildProcessSpawner.js
+@@ -44,9 +44,17 @@
+     return false;
+   }
+ };
+-const taskkill = (childProcess, onExit = () => {}) => NodeChildProcess.execFile("taskkill", ["/pid", String(childProcess.pid), "/T", "/F"], {
+-  windowsHide: true
+-}, onExit);
++const taskkill = (childProcess, onExit = () => {}) => {
++  // Once Node observes the leader's exit, taskkill /T cannot reclaim orphaned
++  // descendants through its PID, which may be reused. Skip stale-PID cleanup.
++  if (childProcess.exitCode !== null || childProcess.signalCode !== null) {
++    onExit(null);
++    return;
++  }
++  NodeChildProcess.execFile("taskkill", ["/pid", String(childProcess.pid), "/T", "/F"], {
++    windowsHide: true
++  }, onExit);
++};
+ const make = /*#__PURE__*/Effect.gen(function* () {
+   const fs = yield* FileSystem.FileSystem;
+   const path = yield* Path.Path;
+@@ -262,6 +270,13 @@
+   const spawn = (command, spawnOptions) => Effect.callback(resume => {
+     const deferred = Deferred.makeUnsafe();
+     const handle = NodeChildProcess.spawn(command.command, command.args, spawnOptions);
++    // Guard late pipe errors after the stdin sink's scope has closed.
++    if (handle.stdin) {
++      const stdin = handle.stdin;
++      const onInputError = () => {};
++      stdin.on("error", onInputError);
++      stdin.once("close", () => stdin.off("error", onInputError));
++    }
+     handle.on("error", error => {
+       resume(Effect.fail(toPlatformError("spawn", error, command)));
+     });
+diff --git a/src/NodeSink.ts b/src/NodeSink.ts
+--- a/src/NodeSink.ts
++++ b/src/NodeSink.ts
+@@ -131,9 +131,18 @@
+       identity,
+     Effect.raceFirst(Effect.callback<never, E>((resume) => {
+       const onError = (error: unknown) => resume(Effect.fail(options.onError(error)))
+-      options.writable.once("error", onError)
++      const onClose = () => onError(new Error("Writable closed before all input was delivered"))
++      if (options.writable.errored) {
++        onError(options.writable.errored)
++      } else if (options.writable.closed) {
++        onClose()
++      } else {
++        options.writable.once("error", onError)
++        options.writable.once("close", onClose)
++      }
+       return Effect.sync(() => {
+         options.writable.off("error", onError)
++        options.writable.off("close", onClose)
+       })
+     }))
+   )
+diff --git a/dist/NodeSink.js b/dist/NodeSink.js
+--- a/dist/NodeSink.js
++++ b/dist/NodeSink.js
+@@ -91,9 +91,18 @@
+   });
+ }) : identity, Effect.raceFirst(Effect.callback(resume => {
+   const onError = error => resume(Effect.fail(options.onError(error)));
+-  options.writable.once("error", onError);
++  const onClose = () => onError(new Error("Writable closed before all input was delivered"));
++  if (options.writable.errored) {
++    onError(options.writable.errored);
++  } else if (options.writable.closed) {
++    onClose();
++  } else {
++    options.writable.once("error", onError);
++    options.writable.once("close", onClose);
++  }
+   return Effect.sync(() => {
+     options.writable.off("error", onError);
++    options.writable.off("close", onClose);
+   });
+ })));
+ //# sourceMappingURL=NodeSink.js.map

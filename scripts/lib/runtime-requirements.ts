@@ -23,29 +23,31 @@ export async function writeRuntimeRequirements(
   version: string,
   architecture = "x64",
 ) {
+  let unpackedBytes = 0;
+  let unpackedEntries = 0;
   const glibc: string[] = [],
     glibcxx: string[] = [];
-  if (platform === "linux") {
-    for (const entry of await NodeFSP.readdir(directory, {
-      recursive: true,
-      withFileTypes: true,
-    })) {
-      if (!entry.isFile()) continue;
-      const file = NodePath.join(entry.parentPath, entry.name);
-      const handle = await NodeFSP.open(file, "r");
-      const magic = Buffer.alloc(4);
-      try {
-        await handle.read(magic, 0, 4, 0);
-      } finally {
-        await handle.close();
-      }
-      if (!magic.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) continue;
-      const { stdout } = await execFile("readelf", ["--version-info", file], {
-        maxBuffer: 8 * 1024 * 1024,
-      });
-      glibc.push(...[...stdout.matchAll(/Name: GLIBC_([\d.]+)/gu)].map((m) => m[1]!));
-      glibcxx.push(...[...stdout.matchAll(/Name: GLIBCXX_([\d.]+)/gu)].map((m) => m[1]!));
+  for (const entry of await NodeFSP.readdir(directory, {
+    recursive: true,
+    withFileTypes: true,
+  })) {
+    unpackedEntries++;
+    const file = NodePath.join(entry.parentPath, entry.name);
+    unpackedBytes += (await NodeFSP.lstat(file)).size;
+    if (platform !== "linux" || !entry.isFile()) continue;
+    const handle = await NodeFSP.open(file, "r");
+    const magic = Buffer.alloc(4);
+    try {
+      await handle.read(magic, 0, 4, 0);
+    } finally {
+      await handle.close();
     }
+    if (!magic.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) continue;
+    const { stdout } = await execFile("readelf", ["--version-info", file], {
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    glibc.push(...[...stdout.matchAll(/Name: GLIBC_([\d.]+)/gu)].map((m) => m[1]!));
+    glibcxx.push(...[...stdout.matchAll(/Name: GLIBCXX_([\d.]+)/gu)].map((m) => m[1]!));
   }
   const metadata = {
     schemaVersion: 1,
@@ -56,6 +58,9 @@ export async function writeRuntimeRequirements(
     minimumGlibc: maximum(glibc, "2.28"),
     minimumGlibcxx: maximum(glibcxx, "3.4.25"),
     minimumKernel: "4.18",
+    // Include room for this metadata file, written after measuring the payload.
+    unpackedBytes: unpackedBytes + 1024 * 1024,
+    unpackedEntries: unpackedEntries + 1,
     libraries:
       platform === "linux"
         ? ["libatomic.so.1", "libstdc++.so.6", "libgcc_s.so.1"]
