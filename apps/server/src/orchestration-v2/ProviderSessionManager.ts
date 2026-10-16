@@ -16,6 +16,7 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -173,6 +174,9 @@ export interface ProviderSessionManagerV2Shape {
     providerSessionId: ProviderSessionId,
   ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
   /** Closes every live runtime owned by one provider instance. */
+  readonly prepareInstallation?: (
+    instanceIds: readonly ProviderInstanceId[],
+  ) => Effect.Effect<void, never, Scope.Scope>;
   readonly closeInstance: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<void, ProviderSessionManagerV2Error>;
@@ -430,6 +434,8 @@ export const layerWithOptions = (
         readonly providerSessionId: ProviderSessionId;
         readonly threadId: ThreadId;
       }) => `${input.providerSessionId}\u0000${input.threadId}`;
+      const installationWaiters = new Set<ProviderInstanceId>();
+      const processingEvents = new Set<ProviderAdapter.ProviderAdapterV2SessionRuntime>();
       const idleTimeoutMs = Math.max(1, options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS);
       const maxIdlePinMs = Math.max(0, options.maxIdlePinMs ?? DEFAULT_MAX_IDLE_PIN_MS);
       interface PreparedMcpCredential {
@@ -1060,6 +1066,34 @@ export const layerWithOptions = (
           ) {
             return;
           }
+          if (installationWaiters.has(entry.runtime.instanceId)) {
+            if (processingEvents.has(entry.runtime)) return;
+            const active = yield* Effect.gen(function* () {
+              for (const threadId of entry.attachedThreadIds) {
+                const records = yield* projectionStore.getThreadRecords(threadId, [
+                  "runs",
+                  "runtimeRequests",
+                ]);
+                if (
+                  records.runs.some(
+                    (run) =>
+                      run.providerInstanceId === entry.runtime.instanceId &&
+                      ["preparing", "starting", "running", "waiting"].includes(run.status),
+                  ) ||
+                  records.runtimeRequests.some(
+                    (request) =>
+                      request.status === "pending" &&
+                      request.responseCapability.type === "live" &&
+                      request.responseCapability.providerSessionId ===
+                        entry.runtime.providerSessionId,
+                  )
+                )
+                  return true;
+              }
+              return false;
+            }).pipe(Effect.orElseSucceed(() => true));
+            if (active) return;
+          }
           // Capture runtime identity before yielding: a replacement session
           // can reuse the same providerSessionId while this fiber is parked.
           const probedRuntime = entry.runtime;
@@ -1067,8 +1101,11 @@ export const layerWithOptions = (
             probedRuntime.hasPendingBackgroundWork === undefined
               ? false
               : yield* probedRuntime.hasPendingBackgroundWork.pipe(
-                  Effect.catchCause(() => Effect.succeed(false)),
+                  Effect.catchCause(() =>
+                    Effect.succeed(installationWaiters.has(probedRuntime.instanceId)),
+                  ),
                 );
+          if (hasPendingWork && installationWaiters.has(probedRuntime.instanceId)) return;
           if (hasPendingWork) {
             const now = yield* Clock.currentTimeMillis;
             const pinnedSinceMs = entry.pinnedSinceMs ?? now;
@@ -1116,6 +1153,7 @@ export const layerWithOptions = (
             reason: "idle_timeout",
             cancelIdleFiber: false,
             onlyIfIdleGeneration: input.generation,
+            gracefulSubscribers: installationWaiters.has(probedRuntime.instanceId),
           }).pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("orchestration-v2.driver-session.idle-release-failed", {
@@ -1158,7 +1196,13 @@ export const layerWithOptions = (
 
           yield* cancelIdleFiber(entry.idleFiber);
           const generation = entry.idleGeneration + 1;
-          const idleFiber = yield* Effect.sleep(Duration.millis(idleTimeoutMs)).pipe(
+          const armed = yield* Deferred.make<void>();
+          const idleFiber = yield* Deferred.await(armed).pipe(
+            Effect.andThen(
+              installationWaiters.has(entry.runtime.instanceId)
+                ? Effect.void
+                : Effect.sleep(Duration.millis(idleTimeoutMs)),
+            ),
             Effect.andThen(releaseIfStillIdle({ providerSessionId, generation })),
             Effect.forkIn(layerScope),
           );
@@ -1178,6 +1222,7 @@ export const layerWithOptions = (
             });
             return updated;
           });
+          yield* Deferred.succeed(armed, undefined);
         });
 
       const scheduleIdleRelease = (providerSessionId: ProviderSessionId) =>
@@ -1899,6 +1944,7 @@ export const layerWithOptions = (
             ) {
               stoppedByProvider = true;
             }
+            processingEvents.add(entry.runtime);
             return observeActivity(
               entry.runtime.providerSessionId,
               event.type === "turn.terminal"
@@ -1949,6 +1995,19 @@ export const layerWithOptions = (
                   }
                   yield* publishToSubscribers(entry.eventSubscribers, { type: "event", event });
                 }),
+              ),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  processingEvents.delete(entry.runtime);
+                }).pipe(
+                  Effect.andThen(
+                    Effect.suspend(() =>
+                      installationWaiters.has(entry.runtime.instanceId)
+                        ? scheduleIdleReleaseInternal(entry.runtime.providerSessionId)
+                        : Effect.void,
+                    ),
+                  ),
+                ),
               ),
             );
           }),
@@ -2250,6 +2309,46 @@ export const layerWithOptions = (
                 }),
             ),
           ),
+        prepareInstallation: (instanceIds) =>
+          Effect.gen(function* () {
+            const reschedule = Effect.gen(function* () {
+              for (const entry of (yield* Ref.get(sessions)).values())
+                if (instanceIds.includes(entry.runtime.instanceId)) {
+                  yield* scheduleIdleReleaseInternal(entry.runtime.providerSessionId);
+                  if (installationWaiters.has(entry.runtime.instanceId)) {
+                    const current = (yield* Ref.get(sessions)).get(
+                      sessionKey(entry.runtime.providerSessionId),
+                    );
+                    if (current?.idleFiber && current.busyTurns.size === 0)
+                      yield* Fiber.join(current.idleFiber);
+                  }
+                }
+            });
+            yield* Effect.acquireRelease(
+              Effect.sync(() => {
+                for (const id of instanceIds) installationWaiters.add(id);
+              }),
+              () =>
+                Effect.sync(() => {
+                  for (const id of instanceIds) installationWaiters.delete(id);
+                }).pipe(Effect.andThen(reschedule)),
+            );
+            // Root completion follows provider terminal ingestion and checkpointing.
+            // Subscribe before inspecting so that completion cannot fall into a gap.
+            const afterSequence = yield* eventSink
+              .latestSequence()
+              .pipe(Effect.orElseSucceed(() => 0));
+            yield* eventSink.stream({ afterSequence, bounded: false }).pipe(
+              Stream.filter(
+                ({ event }) =>
+                  event.type === "run.updated" || event.type === "runtime-request.updated",
+              ),
+              Stream.runForEach(() => reschedule),
+              Effect.ignoreCause({ log: true }),
+              Effect.forkScoped,
+            );
+            yield* reschedule;
+          }),
         closeInstance: (instanceId) =>
           Effect.gen(function* () {
             const active = [...(yield* Ref.get(sessions)).values()].filter(

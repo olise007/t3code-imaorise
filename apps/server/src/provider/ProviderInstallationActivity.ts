@@ -47,22 +47,10 @@ const leave = (id: string) =>
     else counts.delete(id);
     changed();
   });
-export const withProviderInstallationIdle = <A, E, R>(
+export const reserveProviderInstallationIdle = <E = never, R = never>(
   ids: readonly ProviderInstanceId[],
-  effect: Effect.Effect<A, E, R>,
+  prepare: Effect.Effect<void, E, R> = Effect.void,
 ) =>
-  Effect.acquireUseRelease(
-    Effect.sync(() => {
-      for (const id of ids) blocked.add(id);
-    }),
-    () => wait(() => ids.every((id) => !counts.has(id))).pipe(Effect.andThen(effect)),
-    () =>
-      Effect.sync(() => {
-        for (const id of ids) blocked.delete(id);
-        changed();
-      }),
-  );
-export const reserveProviderInstallationIdle = (ids: readonly ProviderInstanceId[]) =>
   Effect.acquireRelease(
     Effect.sync(() => {
       for (const id of ids) blocked.add(id);
@@ -72,7 +60,13 @@ export const reserveProviderInstallationIdle = (ids: readonly ProviderInstanceId
         for (const id of ids) blocked.delete(id);
         changed();
       }),
-  ).pipe(Effect.andThen(wait(() => ids.every((id) => !counts.has(id)))));
+  ).pipe(Effect.andThen(prepare), Effect.andThen(wait(() => ids.every((id) => !counts.has(id)))));
+
+export const withProviderInstallationIdle = <A, E, R, E2 = never, R2 = never>(
+  ids: readonly ProviderInstanceId[],
+  effect: Effect.Effect<A, E, R>,
+  prepare: Effect.Effect<void, E2, R2> = Effect.void,
+) => Effect.scoped(reserveProviderInstallationIdle(ids, prepare).pipe(Effect.andThen(effect)));
 
 export const trackProviderInstallationWork = <A, E, R>(
   id: ProviderInstanceId,

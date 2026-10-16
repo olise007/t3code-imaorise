@@ -4723,3 +4723,156 @@ it.effect(
       assert.isFalse(denied?.capabilities?.has("device"));
     }),
 );
+
+it.effect.each([false, true])(
+  "provider installation drains cached sessions after root completion without the idle timeout (active root: %s)",
+  (activeRoot) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      yield* Effect.gen(function* () {
+        const sink = yield* EventSink.EventSinkV2;
+        const ids = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make(`installation-drain-${activeRoot}`);
+        const providerSessionId = yield* ids.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* sink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator: ids, threadId, now })],
+        });
+        yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        const run = {
+          id: ids.derive.run({ threadId, ordinal: 1 }),
+          threadId,
+          ordinal: 1,
+          providerInstanceId: modelSelection.instanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: yield* ids.allocate.message({ threadId, ordinal: 1 }),
+          rootNodeId: null,
+          activeAttemptId: null,
+          status: "running" as const,
+          requestedAt: now,
+          startedAt: now,
+          completedAt: null,
+          checkpointId: null,
+          contextHandoffId: null,
+        };
+        if (activeRoot)
+          yield* sink.write({
+            events: [
+              {
+                id: yield* ids.allocate.event({ threadId }),
+                type: "run.created",
+                threadId,
+                occurredAt: now,
+                payload: run,
+              },
+            ],
+          });
+        const sequence = yield* sink.latestSequence();
+        yield* manager.prepareInstallation!([modelSelection.instanceId]);
+        if (activeRoot) {
+          assert.equal((yield* Ref.get(state)).closeCount, 0);
+          yield* sink.write({
+            events: [
+              {
+                id: yield* ids.allocate.event({ threadId }),
+                type: "run.updated",
+                threadId,
+                occurredAt: now,
+                payload: { ...run, status: "completed", completedAt: now },
+              },
+            ],
+          });
+        }
+        yield* sink.stream({ afterSequence: sequence, eventType: "provider-session.updated" }).pipe(
+          Stream.filter(
+            ({ event }) =>
+              event.type === "provider-session.updated" &&
+              event.payload.id === providerSessionId &&
+              event.payload.status === "stopped",
+          ),
+          Stream.runHead,
+        );
+        assert.equal((yield* Ref.get(state)).closeCount, 1);
+      }).pipe(Effect.scoped, Effect.provide(layerTest({ state, idleTimeoutMs: 30 * 60 * 1000 })));
+    }),
+);
+
+it.effect(
+  "provider installation preserves background work and delivers terminal output before retiring its idle runtime",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const pending = yield* Ref.make(true);
+      yield* Effect.gen(function* () {
+        const sink = yield* EventSink.EventSinkV2;
+        const ids = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("installation-background-drain");
+        const providerSessionId = yield* ids.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* sink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator: ids, threadId, now })],
+        });
+        const runtime = yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const subscription = yield* runtime.subscribeEvents!;
+        const events = yield* subscription.events.pipe(Stream.runCollect, Effect.forkScoped);
+        const sequence = yield* sink.latestSequence();
+        yield* manager.prepareInstallation!([modelSelection.instanceId]);
+        assert.equal((yield* Ref.get(state)).closeCount, 0);
+        yield* Ref.set(pending, false);
+        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
+        yield* Queue.offer(queue!, {
+          type: "turn.terminal",
+          driver: CODEX_DRIVER,
+          providerThreadId: ids.derive.providerThread({
+            driver: CODEX_DRIVER,
+            nativeThreadId: "background-drain-thread",
+          }),
+          providerTurnId: ids.derive.providerTurn({
+            driver: CODEX_DRIVER,
+            nativeTurnId: "background-drain-turn",
+          }),
+          runOrdinal: 1,
+          status: "completed",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* sink.stream({ afterSequence: sequence, eventType: "provider-session.updated" }).pipe(
+          Stream.filter(
+            ({ event }) =>
+              event.type === "provider-session.updated" &&
+              event.payload.id === providerSessionId &&
+              event.payload.status === "stopped",
+          ),
+          Stream.runHead,
+        );
+        assert.equal((yield* Ref.get(state)).closeCount, 1);
+        assert.deepEqual(
+          (yield* Fiber.join(events)).map((event) => event.type),
+          ["turn.terminal"],
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 30 * 60 * 1000,
+            hasPendingBackgroundWork: Ref.get(pending),
+          }),
+        ),
+      );
+    }),
+);

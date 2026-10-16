@@ -27,6 +27,7 @@ import { resolveCommandPath } from "@t3tools/shared/shell";
 import { PROVIDER_RECIPE_CATALOG } from "@t3tools/shared/providerInstallRecipes";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as ServerConfig from "../config.ts";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
@@ -51,6 +52,13 @@ const decodeCodexRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(Codex
 /** Coordinates approval, immutable staging, ownership checks, and activation in the destination environment. */
 export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make")(function* () {
   const catalog = yield* makeProviderVersionCatalog();
+  const sessionManager = yield* Effect.serviceOption(
+    ProviderSessionManager.ProviderSessionManagerV2,
+  );
+  const prepareIdle = (ids: readonly ProviderInstanceId[]) =>
+    Option.isSome(sessionManager)
+      ? (sessionManager.value.prepareInstallation?.(ids) ?? Effect.void)
+      : Effect.void;
   const http = yield* HttpClient.HttpClient;
   const crypto = yield* Crypto.Crypto;
   const settings = yield* ServerSettings.ServerSettingsService;
@@ -471,6 +479,7 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
                       Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.ignore)),
                     );
                 }),
+                prepareIdle(initial.affected),
               );
             } else if (selected.artifact!.kind === "codex" && installation.kind === "codex") {
               if (!codex.startVersion)
@@ -484,7 +493,10 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
                 input.allowUnknownCompatibility === true,
                 Effect.gen(function* () {
                   yield* state("Ready—waiting for running work");
-                  yield* reserveProviderInstallationIdle(initial.affected);
+                  yield* reserveProviderInstallationIdle(
+                    initial.affected,
+                    prepareIdle(initial.affected),
+                  );
                   yield* verifySettings;
                 }).pipe(
                   Effect.mapError(
@@ -579,7 +591,10 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
                 asset,
                 Effect.gen(function* () {
                   yield* state("Ready—waiting for running work");
-                  yield* reserveProviderInstallationIdle(initial.affected);
+                  yield* reserveProviderInstallationIdle(
+                    initial.affected,
+                    prepareIdle(initial.affected),
+                  );
                   yield* verifySettings;
                 }).pipe(Effect.mapError(activationError)),
                 Effect.gen(function* () {
@@ -659,6 +674,7 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
                     replacements,
                   );
                 }),
+                prepareIdle(initial.affected),
               );
             } else
               return yield* new ServerProviderUpdateError({
