@@ -6,7 +6,11 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
-import type { DesktopSshExecutionSource } from "@t3tools/contracts";
+import {
+  DesktopSshEnvironmentTargetSchema,
+  type DesktopSshExecutionSource,
+} from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { DesktopSshEnvironment } from "../../ssh/DesktopSshEnvironment.ts";
 import { sshHostRequest } from "../../ssh/sshHostRequest.ts";
 
@@ -92,9 +96,11 @@ describe("SSH environment IPC", () => {
             alias: "shared",
             source: { type: "wsl", distro: "Debian" },
           },
-        ];
+        ] as const;
         for (const expected of cases) {
-          const result = yield* resolveSshHost.handler(expected.input);
+          const result = yield* resolveSshHost
+            .handler(expected.input)
+            .pipe(Effect.flatMap(Schema.decodeUnknownEffect(DesktopSshEnvironmentTargetSchema)));
           assert.deepEqual(calls.at(-1), { alias: expected.alias, source: expected.source });
           assert.deepEqual(result.executionSource, expected.source);
         }
