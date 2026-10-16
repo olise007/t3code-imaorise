@@ -4,7 +4,7 @@ export const SshRuntimeRequirements = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   runtimeVersion: Schema.String,
   platform: Schema.Literals(["linux", "windows"]),
-  architecture: Schema.Literal("x64"),
+  architecture: Schema.Literals(["x64", "arm64"]),
   nodeVersion: Schema.String,
   minimumGlibc: Schema.String,
   minimumGlibcxx: Schema.String,

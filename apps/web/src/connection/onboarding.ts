@@ -9,6 +9,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { ProviderDriverKind, type DesktopSshEnvironmentTarget } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Crypto from "effect/Crypto";
 import * as Stream from "effect/Stream";
 import { serverEnvironment } from "../state/server";
 
@@ -16,8 +17,9 @@ import { connectionAtomRuntime } from "./runtime";
 
 const onboardingScheduler = createAtomCommandScheduler();
 const setupCancellations = new Map<string, () => Promise<unknown>>();
+const setupKey = (target: DesktopSshEnvironmentTarget) => JSON.stringify(target);
 export const cancelSshEnvironmentSetup = async (target: DesktopSshEnvironmentTarget) => {
-  await setupCancellations.get(JSON.stringify(target))?.();
+  await setupCancellations.get(setupKey(target))?.();
 };
 
 export const connectPairing = createRuntimeCommand(connectionAtomRuntime, {
@@ -42,7 +44,7 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
   },
   execute: (input: ConnectionOnboarding.SshConnectionInput, atoms) =>
     Effect.gen(function* () {
-      const key = JSON.stringify(input.target);
+      const key = setupKey(input.target);
       let cancelled = false;
       let cancelCurrent = () =>
         window.desktopBridge?.cancelSshSetup?.(input.target) ?? Promise.resolve();
@@ -58,7 +60,8 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
           ...input,
           afterRegistration: (environmentId, selectedProviders) =>
             Effect.gen(function* () {
-              const operationId = crypto.randomUUID();
+              const crypto = yield* Crypto.Crypto;
+              const operationId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
               cancelCurrent = async () => {
                 const result = await serverEnvironment.cancelSelectedProviderInstall.run(atoms, {
                   environmentId,

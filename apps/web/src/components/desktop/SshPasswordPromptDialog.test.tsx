@@ -88,7 +88,7 @@ beforeEach(async () => {
   resolvePassword.mockClear();
   unsubscribe.mockClear();
   window.desktopBridge = {
-    onSshPasswordPrompt: (callback) => {
+    onSshPasswordPrompt: (callback: (request: DesktopSshPasswordPromptRequest) => void) => {
       listener = callback;
       return unsubscribe;
     },

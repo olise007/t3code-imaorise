@@ -13,6 +13,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import { PROVIDER_RECIPE_CATALOG } from "@t3tools/shared/providerInstallRecipes";
 
 export class SshManagedRuntimeError extends Schema.TaggedError<SshManagedRuntimeError>()(
   "SshManagedRuntimeError",
@@ -385,9 +386,14 @@ export async function startManagedSsh(
 }
 
 async function providerSetupWarnings(platform: NodeJS.Platform) {
-  const commands = ["codex", "claude", "cursor-agent", "agent", "grok", "opencode", "antigravity"];
+  const commands = [
+    ...new Set([
+      ...PROVIDER_RECIPE_CATALOG.map((entry) => entry.command).filter(Boolean),
+      "cursor-agent",
+    ]),
+  ];
   const guidance = [
-    "No provider CLI was found on the remote SSH session's PATH. Install and sign in to your provider on that machine, then check Settings → Providers.",
+    "Review provider setup and sign in in this environment's provider settings. Managed or custom executables do not need to be on the SSH PATH.",
   ];
   if (platform === "win32") {
     const found = await new Promise<boolean>((resolve) => {

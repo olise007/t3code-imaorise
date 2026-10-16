@@ -10,6 +10,9 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as NodeAssert from "node:assert/strict";
 import { makeManagedProviderArchives } from "../ManagedProviderArchives.ts";
 import * as ServerConfig from "../../config.ts";
+import * as CodexInstallation from "../CodexInstallation.ts";
+import * as AntigravityInstallation from "../AntigravityInstallation.ts";
+import * as ModelManifest from "../ModelManifest.ts";
 
 if (process.env.GITHUB_ACTIONS !== "true")
   throw new Error("Vendor smoke runs only in hosted fixtures.");
@@ -51,6 +54,47 @@ await Effect.runPromise(
     process.stdout.write(
       "Antigravity dependency: pinned private Node verified; npm not installed. Authentication was not attempted.\n",
     );
+    const platform = yield* HostProcess.Platform;
+    const environment = {
+      PATH:
+        platform === "win32"
+          ? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32`
+          : "/usr/bin:/bin",
+      SystemRoot: process.env.SystemRoot,
+      TEMP: root,
+      TMPDIR: root,
+      HOME: root,
+      USERPROFILE: root,
+    };
+    const codex = yield* CodexInstallation.makeCodexInstallation({ baseDir: root }).pipe(
+      Effect.provideService(HostProcess.Environment, environment),
+      Effect.provideService(ModelManifest.ModelManifest, {
+        current: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+        refresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+        forceRefresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+        refreshInBackground: Effect.void,
+      }),
+    );
+    const antigravity = yield* AntigravityInstallation.makeAntigravityInstallation({
+      baseDir: root,
+    }).pipe(Effect.provideService(HostProcess.Environment, environment));
+    for (const { driver, installation } of [
+      { driver: "codex", installation: codex },
+      { driver: "antigravity", installation: antigravity },
+    ]) {
+      yield* installation.start;
+      const done = Option.getOrThrow(
+        yield* installation.changes.pipe(
+          Stream.filter((s) => ["succeeded", "failed", "cancelled"].includes(s.phase)),
+          Stream.runHead,
+        ),
+      );
+      NodeAssert.equal(done.phase, "succeeded", `${driver}: ${done.message}`);
+      NodeAssert.equal(done.source, "managed");
+      process.stdout.write(
+        `${driver}: existing managed installer verified its pinned vendor runtime. No sign-in requested.\n`,
+      );
+    }
   }).pipe(
     Effect.scoped,
     Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici)),

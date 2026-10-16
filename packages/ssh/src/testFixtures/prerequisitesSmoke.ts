@@ -8,7 +8,7 @@ import {
   linuxPackageInstallScript,
   parseInspection,
   runtimeRequirements,
-} from "../../packages/ssh/src/prerequisites.ts";
+} from "../prerequisites.ts";
 import { NODE_PROVIDER_RUNTIME } from "@t3tools/shared/providerInstallRecipes";
 
 if (process.env.GITHUB_ACTIONS !== "true")

@@ -66,7 +66,7 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
   const arch = yield* HostProcess.Architecture;
   const home = yield* HostProcess.HomeDirectory;
   const environment = yield* HostProcess.Environment;
-  const http = yield* HttpClient.HttpClient;
+  const http = HttpClient.followRedirects(yield* HttpClient.HttpClient, 5);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const scope = yield* Effect.scope;
   const states = yield* SubscriptionRef.make(new Map<string, ProviderInstallState>());
@@ -77,29 +77,30 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
     SubscriptionRef.update(states, (current) =>
       new Map(current).set(driver, { ...(current.get(driver) ?? idle(driver)), ...patch }),
     );
-  const run = Effect.fn("ManagedProviderArchives.run")(function* (
-    command: string,
-    args: readonly string[],
-  ) {
-    const child = yield* spawner.spawn(
-      ChildProcess.make(command, args, { cwd: home, env: environment, extendEnv: false }),
-    );
-    const [stdout, , code] = yield* Effect.all(
-      [
-        child.stdout.pipe(Stream.decodeText(), Stream.mkString),
-        child.stderr.pipe(Stream.runDrain),
-        child.exitCode,
-      ],
-      { concurrency: "unbounded" },
-    );
-    if (code !== 0)
-      return yield* failure(
-        "provider",
-        "verify",
-        "The downloaded provider could not be unpacked or started. Check its platform requirements.",
+  const run = Effect.fn("ManagedProviderArchives.run")(
+    function* (command: string, args: readonly string[]) {
+      const child = yield* spawner.spawn(
+        ChildProcess.make(command, args, { cwd: home, env: environment, extendEnv: false }),
       );
-    return stdout;
-  }, Effect.scoped);
+      const [stdout, , code] = yield* Effect.all(
+        [
+          child.stdout.pipe(Stream.decodeText(), Stream.mkString),
+          child.stderr.pipe(Stream.runDrain),
+          child.exitCode,
+        ],
+        { concurrency: "unbounded" },
+      );
+      if (code !== 0)
+        return yield* failure(
+          "provider",
+          "verify",
+          "The downloaded provider could not be unpacked or started. Check its platform requirements.",
+        );
+      return stdout;
+    },
+    Effect.scoped,
+    Effect.timeout("60 seconds"),
+  );
   const install = Effect.fn("ManagedProviderArchives.install")(
     function* (recipe: ProviderArchiveRecipe, node = false) {
       if (arch !== "x64" || (platform !== "linux" && platform !== "win32"))
@@ -116,7 +117,7 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
         ? platform === "win32"
           ? "node.exe"
           : "bin/node"
-        : "provider" + (platform === "win32" ? ".exe" : "");
+        : path.basename(recipe.executable).replace(/\.br$/u, "");
       const binary = path.join(destination, executableName);
       const marker = path.join(destination, ".recipe-integrity");
       if ((yield* fs.exists(marker)) && (yield* fs.readFileString(marker)) === recipe.integrity) {
@@ -267,6 +268,7 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
       return binary;
     },
     Effect.scoped,
+    Effect.timeout("10 minutes"),
     Effect.mapError((cause) =>
       Schema.is(ProviderSetupError)(cause)
         ? cause

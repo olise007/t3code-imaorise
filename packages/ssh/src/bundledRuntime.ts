@@ -43,7 +43,7 @@ export const powershellArgs = (script: string) => [
   "-NonInteractive",
   "-EncodedCommand",
   Buffer.from(
-    `$env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; [Console]::InputEncoding=New-Object Text.UTF8Encoding($false); [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); $OutputEncoding=[Console]::OutputEncoding; ${script}`,
+    `$env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; $env:Path+=';'+[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); [Console]::InputEncoding=New-Object Text.UTF8Encoding($false); [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); $OutputEncoding=[Console]::OutputEncoding; ${script}`,
     "utf16le",
   ).toString("base64"),
 ];
@@ -116,11 +116,12 @@ export function linuxInstallScript(hash: string, suffix = "") {
 umask 077
 root="$HOME/.t3-imaorise/runtime/sha256-${hash}"
 archive="$HOME/.t3-imaorise/runtime/upload-${hash}${suffix}.tar.gz"
-if [ -x "$root/t3" ] && [ "$(cat "$root/.archive-sha256" 2>/dev/null)" = '${hash}' ]; then "$root/t3" --version >/dev/null; exit 0; fi
+if [ -x "$root/t3" ] && [ "$(cat "$root/.archive-sha256" 2>/dev/null)" = '${hash}' ]; then "$root/t3" --version >/dev/null; "$root/t3" __ssh-helper verify-runtime >/dev/null; exit 0; fi
 mkdir -p "$HOME/.t3-imaorise/runtime"
 if ! mkdir "$root.lock" 2>/dev/null; then printf 'Another runtime setup is in progress; retry when it finishes.\\n' >&2; exit 1; fi
 stage=$(mktemp -d "$HOME/.t3-imaorise/runtime/.stage-XXXXXX")
 trap 'rm -rf "$stage" "$root.lock"; rm -f "$archive"' EXIT
+trap 'exit 130' HUP INT TERM
 if command -v sha256sum >/dev/null; then actual=$(sha256sum "$archive" | cut -d' ' -f1); else actual=$(shasum -a 256 "$archive" | cut -d' ' -f1); fi
 [ "$actual" = '${hash}' ] || { printf 'Runtime checksum mismatch\\n' >&2; exit 1; }
 tar -xzf "$archive" -C "$stage" --strip-components=1
@@ -137,7 +138,7 @@ export function windowsInstallScript(hash: string, suffix = "") {
 $parent=Join-Path $HOME '.t3-imaorise/runtime'
 $root=Join-Path $parent 'sha256-${hash}'
 $archive=Join-Path $parent 'upload-${hash}${suffix}.zip'
-if((Test-Path -LiteralPath "$root/t3.exe") -and (Test-Path -LiteralPath "$root/.archive-sha256") -and ((Get-Content -LiteralPath "$root/.archive-sha256" -Raw) -eq '${hash}')){ & "$root/t3.exe" --version | Out-Null; if($LASTEXITCODE -ne 0){throw 'Runtime failed its readiness check'}; exit 0 }
+if((Test-Path -LiteralPath "$root/t3.exe") -and (Test-Path -LiteralPath "$root/.archive-sha256") -and ((Get-Content -LiteralPath "$root/.archive-sha256" -Raw) -eq '${hash}')){ & "$root/t3.exe" --version | Out-Null; if($LASTEXITCODE -ne 0){throw 'Runtime failed its readiness check'}; & "$root/t3.exe" __ssh-helper verify-runtime | Out-Null; if($LASTEXITCODE -ne 0){throw 'Runtime native components failed their readiness check'}; exit 0 }
 $lock=Join-Path $parent 'sha256-${hash}.lock'
 $handle=[IO.File]::Open($lock,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
 $stage=Join-Path $parent ('.stage-'+[Guid]::NewGuid().ToString())
@@ -216,7 +217,13 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
   const warm = yield* Effect.result(
     runSshCommand(target, { ...auth, ...remoteRuntimeInvocation(runtime, ["--version"]) }),
   );
-  if (warm._tag === "Success" && warm.success.stdout.includes(bundles.version)) return runtime;
+  if (warm._tag === "Success" && warm.success.stdout.includes(bundles.version)) {
+    yield* runSshCommand(target, {
+      ...auth,
+      ...remoteRuntimeInvocation(runtime, ["__ssh-helper", "verify-runtime"]),
+    });
+    return runtime;
+  }
   const suffix = `-${Hex.encode(yield* crypto.randomBytes(8).pipe(Effect.orDie))}`;
   yield* progress("Transferring the matching runtime over SSH…");
   const transfer =

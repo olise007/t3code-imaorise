@@ -483,7 +483,12 @@ export const inspectAndPrepare = Effect.fn("ssh.prerequisites.prepare")(function
               ],
               stdin: `${password}\n`,
             };
-    yield* runSshCommand(input.target, { ...input.auth, ...command, timeoutMs: 1_200_000 }).pipe(
+    yield* runSshCommand(input.target, {
+      ...input.auth,
+      ...command,
+      sensitiveInput: password !== null,
+      timeoutMs: 1_200_000,
+    }).pipe(
       Effect.mapError(
         (cause) =>
           new SshLaunchError({

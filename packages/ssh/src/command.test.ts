@@ -65,6 +65,39 @@ const makeNeverFinishingProcess = () => {
 };
 
 describe("ssh command", () => {
+  it.effect("withholds diagnostics when a privileged operation consumes a secret", () => {
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed(
+        makeFailedProcess({ stdout: "sudo-fixture-secret", stderr: "sudo-fixture-secret" }),
+      ),
+    );
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        runSshCommand(
+          { alias: "fixture", hostname: "fixture", username: null, port: 22 },
+          {
+            sensitiveInput: true,
+            stdin: "sudo-fixture-secret\n",
+            remoteCommandArgs: ["sudo", "-S"],
+          },
+        ),
+      );
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.instanceOf(result.failure, SshCommandError);
+        assert.equal(result.failure.stdout, "");
+        assert.notInclude(result.failure.message, "sudo-fixture-secret");
+        assert.notInclude(result.failure.stderr, "sudo-fixture-secret");
+      }
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
+    );
+  });
   it.effect("parses resolved ssh config output into a target", () =>
     Effect.sync(() => {
       assert.deepEqual(

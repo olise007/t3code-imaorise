@@ -990,6 +990,7 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/windows-server/**/*",
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
+  "!apps/desktop/prod-resources/wsl-runtime.tar.gz.requirements.json",
   "!apps/desktop/gnome-extension",
   "!apps/desktop/gnome-extension/**/*",
 ] as const;
@@ -3057,12 +3058,15 @@ export const stageWslRuntimeArchive = Effect.fn("stageWslRuntimeArchive")(functi
   const listing = yield* archiveOutput(["-tf", input.sourceArchivePath]);
   const metadataEntry = listing
     .split(/\r?\n/u)
-    .find((name) => /^[^/]+\/runtime-requirements\.json$/u.test(name));
-  if (metadataEntry)
-    yield* fs.writeFileString(
-      `${input.archivePath}.requirements.json`,
-      yield* archiveOutput(["-xOf", input.sourceArchivePath, metadataEntry]),
-    );
+    .find((name) => /^(?:\.\/)?[^/]+\/runtime-requirements\.json$/u.test(name));
+  if (!metadataEntry)
+    return yield* new WslRuntimeArchiveMissingError({
+      archivePath: `${input.sourceArchivePath}:runtime-requirements.json`,
+    });
+  yield* fs.writeFileString(
+    `${input.archivePath}.requirements.json`,
+    yield* archiveOutput(["-xOf", input.sourceArchivePath, metadataEntry]),
+  );
   yield* Effect.log(
     `[desktop-artifact] Staged WSL runtime archive at ${input.archivePath} (${digest}).`,
   );

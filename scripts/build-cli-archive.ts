@@ -519,12 +519,13 @@ const buildCliArchive = Effect.fn("buildCliArchive")(function* (input: {
   });
 
   const executablePath = path.join(contentDir, executableName);
-  if (input.arch === "x64" && input.platform !== "mac")
+  if (input.platform !== "mac")
     yield* Effect.promise(() =>
       writeRuntimeRequirements(
         contentDir,
         input.platform === "win" ? "windows" : "linux",
         input.version,
+        input.arch,
       ),
     );
   if (input.platform === "mac") {

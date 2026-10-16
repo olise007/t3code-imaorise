@@ -35,6 +35,8 @@ export interface SshCommandResult {
 }
 
 export interface RunSshCommandOptions extends SshAuthOptions {
+  /** Suppress remote diagnostics for operations consuming an elevation secret. */
+  readonly sensitiveInput?: boolean;
   readonly preHostArgs?: ReadonlyArray<string>;
   readonly remoteCommandArgs?: ReadonlyArray<string>;
   readonly stdin?: string;
@@ -355,22 +357,25 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
   );
 
   if (exitCode !== 0) {
-    const diagnosticStdout = redactSshErrorOutput(stdout);
+    const diagnosticStdout = input.sensitiveInput ? "" : redactSshErrorOutput(stdout);
+    const diagnosticStderr = input.sensitiveInput
+      ? "Remote operation failed; sensitive diagnostics withheld."
+      : stderr;
     yield* Effect.logWarning("ssh.command.failed", {
       ...sshTargetLogFields(target),
       command: ["ssh", ...args],
       exitCode,
       stdout: diagnosticStdout,
-      stderr,
+      stderr: diagnosticStderr,
     });
     return yield* new SshCommandError({
       command: ["ssh", ...args],
       exitCode,
       stdout: diagnosticStdout,
-      stderr,
+      stderr: diagnosticStderr,
       message: normalizeSshErrorMessage({
         stdout: diagnosticStdout,
-        stderr,
+        stderr: diagnosticStderr,
         fallbackMessage: `SSH command failed for ${hostSpec} (exit ${exitCode}).`,
       }),
     });

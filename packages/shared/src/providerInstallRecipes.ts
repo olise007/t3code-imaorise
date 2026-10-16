@@ -163,7 +163,7 @@ const native: Readonly<Record<string, readonly ProviderArchiveRecipe[]>> = {
       url: "https://github.com/earendil-works/pi/releases/download/v1.3.0/pi-windows-x64.zip",
       integrity: "sha256:daf0ef45fd08f13dbb64c62d559e332c2d3d3087f8ae022ec5a1b9b655b59894",
       format: "zip",
-      executable: "pi/pi.exe",
+      executable: "pi.exe",
     },
   ],
 };

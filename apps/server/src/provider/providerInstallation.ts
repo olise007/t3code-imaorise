@@ -15,6 +15,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Option from "effect/Option";
 import * as Fiber from "effect/Fiber";
+import * as Exit from "effect/Exit";
 import * as ManagedProviderArchives from "./ManagedProviderArchives.ts";
 import { PROVIDER_RECIPE_CATALOG } from "@t3tools/shared/providerInstallRecipes";
 
@@ -208,46 +209,41 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
           if (existingNode._tag === "Failure") yield* archives.ensureNode;
         }
         const installation = driver === "codex" ? codexInstallation : antigravityInstallation;
-        const started = yield* installation.start.pipe(Effect.mapError(failure(instanceId)));
-        installed = ["succeeded", "failed", "cancelled"].includes(started.phase)
-          ? started
-          : Option.getOrUndefined(
-              yield* installation.changes
-                .pipe(
+        installed = yield* Effect.acquireUseRelease(
+          installation.start.pipe(Effect.mapError(failure(instanceId))),
+          (started) =>
+            ["succeeded", "failed", "cancelled"].includes(started.phase)
+              ? Effect.succeed(started)
+              : installation.changes.pipe(
                   Stream.filter((state) =>
                     ["succeeded", "failed", "cancelled"].includes(state.phase),
                   ),
                   Stream.runHead,
-                )
-                .pipe(
-                  Effect.onInterrupt(() =>
-                    started.operationId === null
-                      ? Effect.void
-                      : installation.cancel(started.operationId).pipe(Effect.ignore),
-                  ),
+                  Effect.map(Option.getOrUndefined),
                 ),
-            );
+          (started, exit) =>
+            Exit.isFailure(exit) && started.operationId !== null
+              ? installation.cancel(started.operationId).pipe(Effect.ignore)
+              : Effect.void,
+        );
       } else {
-        const started = yield* archives.start(driver);
-        installed = ["succeeded", "failed", "cancelled"].includes(started.phase)
-          ? started
-          : Option.getOrUndefined(
-              yield* archives
-                .changes(driver)
-                .pipe(
+        installed = yield* Effect.acquireUseRelease(
+          archives.start(driver),
+          (started) =>
+            ["succeeded", "failed", "cancelled"].includes(started.phase)
+              ? Effect.succeed(started)
+              : archives.changes(driver).pipe(
                   Stream.filter((state) =>
                     ["succeeded", "failed", "cancelled"].includes(state.phase),
                   ),
                   Stream.runHead,
-                )
-                .pipe(
-                  Effect.onInterrupt(() =>
-                    started.operationId === null
-                      ? Effect.void
-                      : archives.cancel(driver, started.operationId).pipe(Effect.asVoid),
-                  ),
+                  Effect.map(Option.getOrUndefined),
                 ),
-            );
+          (started, exit) =>
+            Exit.isFailure(exit) && started.operationId !== null
+              ? archives.cancel(driver, started.operationId).pipe(Effect.asVoid)
+              : Effect.void,
+        );
       }
       if (installed?.phase !== "succeeded" || !installed.executablePath)
         return yield* new ProviderSetupError({

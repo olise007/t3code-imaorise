@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "composite": false },
+  "include": [
+    "build-cli-archive.ts",
+    "build-desktop-artifact.ts",
+    "build-desktop-artifact.test.ts",
+    "smoke-cli-archive.ts",
+    "lib/runtime-requirements.ts"
+  ]
+}

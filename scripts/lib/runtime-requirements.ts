@@ -21,6 +21,7 @@ export async function writeRuntimeRequirements(
   directory: string,
   platform: "linux" | "windows",
   version: string,
+  architecture = "x64",
 ) {
   const glibc: string[] = [],
     glibcxx: string[] = [];
@@ -50,7 +51,7 @@ export async function writeRuntimeRequirements(
     schemaVersion: 1,
     runtimeVersion: version,
     platform,
-    architecture: "x64",
+    architecture,
     nodeVersion: "26.8.2",
     minimumGlibc: maximum(glibc, "2.28"),
     minimumGlibcxx: maximum(glibcxx, "3.4.25"),
