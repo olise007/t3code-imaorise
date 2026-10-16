@@ -186,8 +186,10 @@ function ActiveSshPasswordPrompt({
               </>
             ) : (
               <>
-                Enter the SSH password or key passphrase for <code>{target}</code>. It is passed to
-                the selected SSH client and is not saved by T3 Code.
+                Enter the{" "}
+                {request.challenge === "key-passphrase" ? "private key passphrase" : "SSH password"}{" "}
+                for <code>{target}</code>. It is passed to the selected SSH client and is not saved
+                by T3 Code.
               </>
             )}
           </DialogDescription>

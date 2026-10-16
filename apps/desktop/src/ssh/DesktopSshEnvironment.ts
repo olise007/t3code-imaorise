@@ -23,6 +23,9 @@ import * as Context from "effect/Context";
 import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import * as CryptoRuntime from "effect/Crypto";
+import * as Hex from "effect/encoding/Hex";
 import * as Schema from "effect/Schema";
 import { SshSetupApproval } from "@t3tools/contracts";
 import * as FileSystem from "effect/FileSystem";
@@ -32,6 +35,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as DesktopSshPasswordPrompts from "./DesktopSshPasswordPrompts.ts";
+import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 
 export type DesktopSshEnvironmentRuntimeServices =
   | ChildProcessSpawner.ChildProcessSpawner
@@ -66,6 +70,9 @@ export class DesktopSshEnvironment extends Context.Service<
     readonly ensureEnvironment: (
       target: DesktopSshEnvironmentTarget,
       options?: {
+        authSecret?: string;
+        rememberSecret?: boolean;
+        testOnly?: boolean;
         readonly issuePairingToken?: boolean;
         resumeStoppedServer?: boolean;
         supportsSetupReview?: boolean;
@@ -171,6 +178,29 @@ export const make = Effect.gen(function* () {
   const prompts = yield* DesktopSshPasswordPrompts.DesktopSshPasswordPrompts;
   const runtimeContext = yield* Effect.context<DesktopSshEnvironmentRuntimeServices>();
   const passwordPrompt = SshAuth.SshPasswordPrompt.of(makePasswordPrompt(prompts));
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const home = yield* HostProcess.HomeDirectory;
+  const crypto = yield* CryptoRuntime.Crypto;
+  const storage = yield* Effect.serviceOption(ElectronSafeStorage.ElectronSafeStorage);
+  const safeStorage = Option.getOrUndefined(storage);
+  const canSave = safeStorage
+    ? yield* safeStorage.isEncryptionAvailable.pipe(
+        Effect.flatMap((available) =>
+          safeStorage.selectedStorageBackend.pipe(
+            Effect.map((backend) => available && Option.getOrUndefined(backend) !== "basic_text"),
+          ),
+        ),
+        Effect.orElseSucceed(() => false),
+      )
+    : false;
+  const secretPath = (target: DesktopSshEnvironmentTarget) =>
+    crypto.digest("SHA-256", new TextEncoder().encode(targetConnectionKey(target))).pipe(
+      Effect.map((hash) =>
+        path.join(home, ".t3-imaorise", "ssh", "secrets", `${Hex.encode(hash)}.encrypted`),
+      ),
+      Effect.orDie,
+    );
   const setups = new Map<
     string,
     Fiber.Fiber<DesktopSshEnvironmentBootstrap, DesktopSshEnvironmentOperationError>
@@ -195,8 +225,19 @@ export const make = Effect.gen(function* () {
     ensureEnvironment: (target, ensureOptions) =>
       Effect.gen(function* () {
         const key = targetConnectionKey(target);
+        const file = yield* secretPath(target);
+        const savedSecret =
+          canSave && safeStorage && target.manual
+            ? yield* fs
+                .readFile(file)
+                .pipe(Effect.flatMap(safeStorage.decryptString), Effect.option)
+            : Option.none<string>();
+        const authSecret = ensureOptions?.authSecret ?? Option.getOrUndefined(savedSecret);
         const fiber = yield* manager
-          .ensureEnvironment(target, ensureOptions)
+          .ensureEnvironment(target, {
+            ...ensureOptions,
+            ...(authSecret === undefined ? {} : { authSecret }),
+          })
           .pipe(
             Effect.provideService(SshAuth.SshPasswordPrompt, passwordPrompt),
             Effect.provide(runtimeContext),
@@ -204,13 +245,40 @@ export const make = Effect.gen(function* () {
             Effect.forkChild,
           );
         setups.set(key, fiber);
-        return yield* Fiber.join(fiber).pipe(
+        const result = yield* Fiber.join(fiber).pipe(
           Effect.ensuring(
             Effect.sync(() => {
               if (setups.get(key) === fiber) setups.delete(key);
             }),
           ),
         );
+        const verifiedSecret = manager.authenticatedSecret?.(result.target);
+        if (target.manual && ensureOptions?.rememberSecret && verifiedSecret !== undefined) {
+          const saved =
+            canSave && safeStorage
+              ? yield* Effect.gen(function* () {
+                  const encrypted = yield* safeStorage.encryptString(verifiedSecret);
+                  yield* fs.makeDirectory(path.dirname(file), { recursive: true, mode: 0o700 });
+                  const temporary = `${file}.${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}.partial`;
+                  yield* fs
+                    .writeFile(temporary, encrypted, { mode: 0o600 })
+                    .pipe(
+                      Effect.andThen(fs.rename(temporary, file)),
+                      Effect.ensuring(fs.remove(temporary).pipe(Effect.ignore)),
+                    );
+                  return true;
+                }).pipe(Effect.orElseSucceed(() => false))
+              : false;
+          if (!saved)
+            return {
+              ...result,
+              setupWarnings: [
+                ...(result.setupWarnings ?? []),
+                "Secure credential storage is unavailable. The credential was not saved; you will be asked again.",
+              ],
+            };
+        }
+        return result;
       }),
     stopEnvironment: (target) =>
       manager

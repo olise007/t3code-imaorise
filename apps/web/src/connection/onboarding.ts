@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 import { serverEnvironment } from "../state/server";
 
 import { connectionAtomRuntime } from "./runtime";
+import { sshSetupProgress } from "./sshSetupProgress";
 
 const onboardingScheduler = createAtomCommandScheduler();
 const setupCancellations = new Map<string, () => Promise<unknown>>();
@@ -42,25 +43,74 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
     mode: "serial",
     key: (input: { readonly target: DesktopSshEnvironmentTarget }) => JSON.stringify(input.target),
   },
-  execute: (input: ConnectionOnboarding.SshConnectionInput, atoms) =>
+  execute: (
+    input: ConnectionOnboarding.SshConnectionInput & {
+      readonly credentials?: { readonly secret: string; readonly remember: boolean };
+    },
+    atoms,
+  ) =>
     Effect.gen(function* () {
       const key = setupKey(input.target);
+      const progressId = sshSetupProgress.begin(input.target);
+      sshSetupProgress.append(progressId, "Starting SSH environment setup");
+      const unsubscribe = window.desktopBridge?.onSshConnectionProgress?.(({ target, stage }) => {
+        if (
+          target.alias === input.target.alias &&
+          JSON.stringify(target.executionSource ?? { type: "local" }) ===
+            JSON.stringify(input.target.executionSource ?? { type: "local" }) &&
+          target.manual?.profileId === input.target.manual?.profileId
+        )
+          sshSetupProgress.append(
+            progressId,
+            stage === "Connected" ? "Environment connected" : stage,
+          );
+      });
       let cancelled = false;
       let cancelCurrent = () =>
         window.desktopBridge?.cancelSshSetup?.(input.target) ?? Promise.resolve();
       const cancel = async () => {
         cancelled = true;
+        sshSetupProgress.append(
+          progressId,
+          "Cancellation requested; completed installations are retained.",
+        );
         await cancelCurrent();
       };
       setupCancellations.set(key, cancel);
       const environments = yield* EnvironmentRegistry.EnvironmentRegistry;
       const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
       const crypto = yield* Crypto.Crypto;
-      return yield* onboarding
-        .registerSsh({
-          ...input,
+      return yield* Effect.gen(function* () {
+        if (input.credentials && window.desktopBridge) {
+          const bootstrap = yield* Effect.tryPromise({
+            try: () =>
+              window.desktopBridge!.ensureSshEnvironment(input.target, {
+                testOnly: true,
+                ...(input.credentials!.secret ? { authSecret: input.credentials!.secret } : {}),
+                rememberSecret: input.credentials!.remember,
+              }),
+            catch: () =>
+              new ConnectionTransientError({
+                reason: "remote-unavailable",
+                detail:
+                  "SSH authentication failed or was cancelled. Check the host fingerprint, username, and selected authentication method.",
+              }),
+          });
+          for (const warning of bootstrap.setupWarnings ?? [])
+            sshSetupProgress.append(progressId, warning);
+        }
+        return yield* onboarding.registerSsh({
+          target: input.target,
+          label: input.label,
+          ...(input.expectedEnvironmentId
+            ? { expectedEnvironmentId: input.expectedEnvironmentId }
+            : {}),
           afterRegistration: (environmentId, selectedProviders) =>
             Effect.gen(function* () {
+              sshSetupProgress.append(
+                progressId,
+                `Installing selected providers: ${selectedProviders.join(", ")}. Account sign-in is separate.`,
+              );
               const operationId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
               cancelCurrent = async () => {
                 const result = await serverEnvironment.cancelSelectedProviderInstall.run(atoms, {
@@ -107,14 +157,39 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
                   detail:
                     "Environment saved, but selected provider setup did not complete. Open this environment's provider settings to review and retry. Sign-in is separate.",
                 });
+              sshSetupProgress.append(
+                progressId,
+                "Selected provider installation complete. Sign in under this environment's provider settings.",
+              );
             }),
-        })
-        .pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (setupCancellations.get(key) === cancel) setupCancellations.delete(key);
-            }),
-          ),
-        );
+        });
+      }).pipe(
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (exit._tag === "Success")
+              sshSetupProgress.append(
+                progressId,
+                "Setup complete. Provider sign-in may still be required.",
+              );
+            else
+              sshSetupProgress.append(
+                progressId,
+                cancelled
+                  ? "Setup cancelled"
+                  : "Setup failed. Review the connection error; completed work is retained.",
+              );
+            sshSetupProgress.finish(
+              progressId,
+              cancelled ? "cancelled" : exit._tag === "Success" ? "succeeded" : "failed",
+            );
+            unsubscribe?.();
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (setupCancellations.get(key) === cancel) setupCancellations.delete(key);
+          }),
+        ),
+      );
     }),
 });

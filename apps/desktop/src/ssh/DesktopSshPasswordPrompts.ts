@@ -321,6 +321,7 @@ export const make = Effect.fn("desktop.sshPasswordPrompts.make")(function* (
       DateTime.add(now, { milliseconds: passwordPromptTimeoutMs }),
     );
     const promptRequest: DesktopSshPasswordPromptRequest = {
+      ...(input.challenge === undefined ? {} : { challenge: input.challenge }),
       ...(input.purpose === undefined ? {} : { purpose: input.purpose }),
       ...(input.setupReview === undefined ? {} : { setupReview: input.setupReview }),
       requestId,

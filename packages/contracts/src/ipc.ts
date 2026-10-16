@@ -443,6 +443,16 @@ export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
   username: Schema.NullOr(Schema.String),
   port: Schema.NullOr(Schema.Number),
   executionSource: Schema.optionalKey(DesktopSshExecutionSourceSchema),
+  manual: Schema.optionalKey(
+    Schema.Struct({
+      profileId: Schema.NonEmptyString,
+      name: Schema.String,
+      authentication: Schema.Union([
+        Schema.Struct({ type: Schema.Literal("password") }),
+        Schema.Struct({ type: Schema.Literal("key"), identityFile: Schema.NonEmptyString }),
+      ]),
+    }),
+  ),
 });
 export type DesktopSshEnvironmentTarget = typeof DesktopSshEnvironmentTargetSchema.Type;
 
@@ -485,6 +495,7 @@ export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
 });
 
 export interface DesktopSshPasswordPromptRequest {
+  challenge?: "host-key" | "password" | "key-passphrase";
   purpose?: "ssh" | "elevation" | "setup-review";
   setupReview?: import("./sshSetup.ts").SshSetupReview;
   requestId: string;
@@ -502,6 +513,9 @@ export const DesktopSshPasswordPromptCancelledResultSchema = Schema.Struct({
 });
 
 export const DesktopSshEnvironmentEnsureOptionsSchema = Schema.Struct({
+  authSecret: Schema.optionalKey(Schema.String),
+  rememberSecret: Schema.optionalKey(Schema.Boolean),
+  testOnly: Schema.optionalKey(Schema.Boolean),
   supportsSetupReview: Schema.optionalKey(Schema.Boolean),
   issuePairingToken: Schema.optionalKey(Schema.Boolean),
   resumeStoppedServer: Schema.optionalKey(Schema.Boolean),
@@ -1281,6 +1295,9 @@ export interface DesktopBridge {
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: {
+      authSecret?: string;
+      rememberSecret?: boolean;
+      testOnly?: boolean;
       issuePairingToken?: boolean;
       resumeStoppedServer?: boolean;
       supportsSetupReview?: boolean;

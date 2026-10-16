@@ -12,6 +12,7 @@ import { SshPasswordPromptError } from "./errors.ts";
 import type { SshSetupApproval, SshSetupReview } from "@t3tools/contracts";
 
 export interface SshPasswordRequest {
+  readonly challenge?: "host-key" | "password" | "key-passphrase";
   readonly purpose?: "ssh" | "elevation" | "setup-review";
   readonly setupReview?: SshSetupReview;
   readonly destination: string;
@@ -81,15 +82,15 @@ function joinSshAskpassPath(
 
 const ASKPASS_POSIX_SCRIPT = `#!/bin/sh
 # Invoked by ssh via SSH_ASKPASS when T3 Code re-runs ssh with a cached password
-# from the renderer's in-app prompt. We never expose a native dialog here - if
-# T3_SSH_AUTH_SECRET is missing, that's a caller bug and we fail loudly.
+# from the renderer's in-app prompt. Missing credentials request a typed
+# challenge during authentication preflight; they are not a launcher failure.
 if [ -n "\${T3_SSH_TRUST_PROMPT:-}" ] && [ "$*" = "$T3_SSH_TRUST_PROMPT" ]; then printf 'yes\\n'; exit 0; fi
-case "$*" in *'yes/no'*) printf 'T3_SSH_PROMPT:%s\\n' "$(printf '%s' "$*" | base64 | tr -d '\\n')" >&2; exit 1 ;; esac
+case "$*" in *'yes/no'*|*'SHA256:'*) printf 'T3_SSH_PROMPT:%s\\n' "$(printf '%s' "$*" | base64 | tr -d '\\n')" >&2; exit 1 ;; esac
 if [ "\${T3_SSH_AUTH_SECRET+x}" = "x" ]; then
   printf "%s\\n" "$T3_SSH_AUTH_SECRET"
   exit 0
 fi
-printf 'T3 Code ssh-askpass invoked without T3_SSH_AUTH_SECRET.\\n' >&2
+printf 'T3_SSH_AUTH_PROMPT:%s\\n' "$(printf '%s' "$*" | base64 | tr -d '\\n')" >&2
 exit 1
 `;
 
@@ -104,12 +105,12 @@ const ASKPASS_WINDOWS_SCRIPT = `# Invoked by ssh via SSH_ASKPASS (through ssh-as
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)\r
 $promptText = $args -join ' '\r
 if ($env:T3_SSH_TRUST_PROMPT -and $promptText -eq $env:T3_SSH_TRUST_PROMPT) { [Console]::Out.WriteLine('yes'); exit 0 }\r
-if ($promptText.Contains('yes/no')) { [Console]::Error.WriteLine('T3_SSH_PROMPT:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($promptText))); exit 1 }\r
+if ($env:SSH_ASKPASS_PROMPT -eq 'confirm' -or $promptText.Contains('yes/no') -or $promptText.Contains('SHA256:')) { [Console]::Error.WriteLine('T3_SSH_PROMPT:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($promptText))); exit 1 }\r
 if ($null -ne $env:T3_SSH_AUTH_SECRET) {\r
   [Console]::Out.WriteLine($env:T3_SSH_AUTH_SECRET)\r
   exit 0\r
 }\r
-[Console]::Error.WriteLine("T3 Code ssh-askpass invoked without T3_SSH_AUTH_SECRET.")\r
+[Console]::Error.WriteLine('T3_SSH_AUTH_PROMPT:'+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($promptText)))\r
 exit 1\r
 `;
 

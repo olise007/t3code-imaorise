@@ -13,6 +13,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { buildSshChildEnvironment, type SshAuthOptions } from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
+import { createSetupDetails } from "./setupDetails.ts";
 
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
 const MAX_SSH_ERROR_OUTPUT_LENGTH = 4_000;
@@ -35,6 +36,8 @@ export interface SshCommandResult {
 }
 
 export interface RunSshCommandOptions extends SshAuthOptions {
+  /** Only enable for installer output, never authentication or pairing protocols. */
+  readonly onDetails?: (line: string) => Effect.Effect<void>;
   /** Suppress remote diagnostics for operations consuming an elevation secret. */
   readonly sensitiveInput?: boolean;
   readonly preHostArgs?: ReadonlyArray<string>;
@@ -72,7 +75,7 @@ export function parseSshResolveOutput(alias: string, stdout: string): DesktopSsh
 }
 
 export function targetConnectionKey(target: DesktopSshEnvironmentTarget): string {
-  const legacy = `${target.alias}\u0000${target.hostname}\u0000${target.username ?? ""}\u0000${target.port ?? ""}`;
+  const legacy = `${target.alias}\u0000${target.hostname}\u0000${target.username ?? ""}\u0000${target.port ?? ""}${target.manual ? `\u0000${JSON.stringify(target.manual)}` : ""}`;
   return target.executionSource?.type === "wsl"
     ? `wsl:${target.executionSource.distro}\u0000${legacy}`
     : legacy;
@@ -84,6 +87,7 @@ const WSL_SSH_WRAPPER = String.raw`set -eu
 IFS= read -r secret
 IFS= read -r trusted
 umask 077
+mkdir -p "$HOME/.t3-imaorise/ssh"
 helper=$(mktemp -d)
 cleanup() { rm -rf "$helper"; }
 trap cleanup EXIT HUP INT TERM
@@ -93,8 +97,9 @@ cat > "$helper/askpass" <<'ASKPASS'
 #!/bin/sh
 folder=$(dirname "$0")
 if [ -s "$folder/trust" ] && [ "$*" = "$(cat "$folder/trust")" ]; then printf 'yes\n'; exit 0; fi
-case "$*" in *'yes/no'*) printf 'T3_SSH_PROMPT:%s\n' "$(printf '%s' "$*" | base64 | tr -d '\n')" >&2; exit 1 ;; esac
+case "$*" in *'yes/no'*|*'SHA256:'*) printf 'T3_SSH_PROMPT:%s\n' "$(printf '%s' "$*" | base64 | tr -d '\n')" >&2; exit 1 ;; esac
 if [ -s "$folder/secret" ]; then cat "$folder/secret"; exit 0; fi
+printf 'T3_SSH_AUTH_PROMPT:%s\n' "$(printf '%s' "$*" | base64 | tr -d '\n')" >&2
 exit 1
 ASKPASS
 chmod 700 "$helper/askpass"
@@ -108,6 +113,41 @@ export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function
   args: ReadonlyArray<string>,
   input: SshAuthOptions & { readonly stdin?: Stream.Stream<Uint8Array> },
 ) {
+  const manualArgs: string[] = [];
+  if (target.manual) {
+    // -F none excludes both user and system SSH configuration. Authentication
+    // is owned by this T3 profile, never by a coincidentally matching alias.
+    manualArgs.push(
+      "-F",
+      "none",
+      "-o",
+      "IdentityAgent=none",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "GlobalKnownHostsFile=none",
+    );
+    if (target.manual.authentication.type === "password")
+      manualArgs.push("-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no");
+    else
+      manualArgs.push(
+        "-o",
+        "PreferredAuthentications=publickey",
+        "-i",
+        target.manual.authentication.identityFile,
+      );
+    const path = yield* Path.Path;
+    const fs = yield* FileSystem.FileSystem;
+    const home = yield* HostProcess.HomeDirectory;
+    const trust = path.join(home, ".t3-imaorise", "ssh");
+    if (target.executionSource?.type !== "wsl")
+      yield* fs.makeDirectory(trust, { recursive: true, mode: 0o700 }).pipe(Effect.orDie);
+    manualArgs.push(
+      "-o",
+      `UserKnownHostsFile=${target.executionSource?.type === "wsl" ? "~/.t3-imaorise/ssh/known_hosts" : path.join(trust, "known_hosts")}`,
+    );
+  }
+  const sshArgs = [...manualArgs, ...args];
   if (target.executionSource?.type === "wsl") {
     if ((yield* HostProcess.Platform) !== "win32") {
       return yield* new SshInvalidTargetError({
@@ -124,7 +164,7 @@ export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function
         "-lc",
         WSL_SSH_WRAPPER,
         "t3-ssh",
-        ...args,
+        ...sshArgs,
       ],
       env: {},
       stdin: Stream.concat(
@@ -139,7 +179,7 @@ export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function
   }
   return {
     command: yield* resolveSshCommand,
-    args: [...args],
+    args: sshArgs,
     env: yield* buildSshChildEnvironment(input),
     stdin: input.stdin ?? Stream.empty,
   };
@@ -157,7 +197,9 @@ export const remoteStateKey = Effect.fn("ssh/command.remoteStateKey")(function* 
 });
 
 function buildSshHostSpec(target: DesktopSshEnvironmentTarget): string {
-  const destination = target.alias.trim() || target.hostname.trim();
+  const destination = target.manual
+    ? target.hostname.trim()
+    : target.alias.trim() || target.hostname.trim();
   if (destination.length === 0) {
     throw new Error("SSH target is missing its alias/hostname.");
   }
@@ -165,6 +207,8 @@ function buildSshHostSpec(target: DesktopSshEnvironmentTarget): string {
     destination.startsWith("-") ||
     target.username?.startsWith("-") ||
     /[\x00-\x1f]/.test(destination) ||
+    (target.port !== null &&
+      (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535)) ||
     (target.username !== null && /[\x00-\x1f]/.test(target.username))
   ) {
     throw new Error(
@@ -335,12 +379,28 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       ),
     );
 
+  const collect = (stream: typeof child.stdout) =>
+    Effect.gen(function* () {
+      if (!input.onDetails || input.sensitiveInput) return yield* collectProcessOutput(stream);
+      const lines: string[] = [];
+      const details = createSetupDetails((line) => lines.push(line));
+      let result = "";
+      yield* stream.pipe(
+        Stream.decodeText(),
+        Stream.runForEach((chunk) =>
+          Effect.gen(function* () {
+            result += chunk;
+            details.push(chunk);
+            for (const line of lines.splice(0)) yield* input.onDetails!(line);
+          }),
+        ),
+      );
+      details.finish();
+      for (const line of lines) yield* input.onDetails(line);
+      return result;
+    });
   const [stdout, stderr, exitCode] = yield* Effect.all(
-    [
-      collectProcessOutput(child.stdout),
-      collectProcessOutput(child.stderr),
-      child.exitCode.pipe(Effect.map(Number)),
-    ],
+    [collect(child.stdout), collect(child.stderr), child.exitCode.pipe(Effect.map(Number))],
     { concurrency: "unbounded" },
   ).pipe(
     Effect.mapError(

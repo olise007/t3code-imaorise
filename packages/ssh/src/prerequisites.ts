@@ -519,6 +519,7 @@ export const inspectAndPrepare = Effect.fn("ssh.prerequisites.prepare")(function
       ...input.auth,
       ...command,
       sensitiveInput: password !== null,
+      onDetails: (line) => input.progress(`Details: ${line}`),
       timeoutMs: 1_200_000,
     }).pipe(
       Effect.mapError(

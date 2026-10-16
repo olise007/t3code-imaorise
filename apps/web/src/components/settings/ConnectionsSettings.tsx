@@ -5,6 +5,7 @@ import {
   revokeOtherEnvironmentClients,
 } from "~/rpc/environmentAccess";
 import { SessionPermissions } from "./SessionPermissions";
+import { SshSetupProgress } from "./SshSetupProgress";
 import { BackendStartupSettings } from "./BackendStartupSettings";
 import { useEnvironmentSessionState } from "~/state/session";
 import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
@@ -2521,6 +2522,13 @@ export function ConnectionsSettings() {
   const [savedBackendHost, setSavedBackendHost] = useState("");
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
+  const [sshManual, setSshManual] = useState(false);
+  const [sshProfileId, setSshProfileId] = useState(() => crypto.randomUUID());
+  const [sshName, setSshName] = useState("");
+  const [sshAuthentication, setSshAuthentication] = useState<"password" | "key">("password");
+  const [sshIdentityFile, setSshIdentityFile] = useState("");
+  const [sshSecret, setSshSecret] = useState("");
+  const [sshRememberSecret, setSshRememberSecret] = useState(false);
   const [sshSource, setSshSource] = useState<DesktopSshExecutionSource>({ type: "local" });
   const [isRefreshingSshHosts, setIsRefreshingSshHosts] = useState(false);
   const [sshProgress, setSshProgress] = useState<string | null>(null);
@@ -2918,13 +2926,17 @@ export function ConnectionsSettings() {
 
   // Shared by manual SSH submission and discovered-host selection.
   const connectSavedBackendSshTarget = useCallback(
-    async (target: DesktopSshEnvironmentTarget) => {
+    async (
+      target: DesktopSshEnvironmentTarget,
+      credentials?: { secret: string; remember: boolean },
+    ) => {
       activeSshSetupTarget.current = target;
       setIsAddingSavedBackend(true);
       setSavedBackendError(null);
       const result = await connectSshEnvironment({
         target,
-        label: "",
+        ...(credentials ? { credentials } : {}),
+        label: target.manual?.name ?? "",
         ...(routeTarget ? { expectedEnvironmentId: routeTarget.environmentId } : {}),
       });
       activeSshSetupTarget.current = null;
@@ -2968,7 +2980,35 @@ export function ConnectionsSettings() {
         return;
       }
 
-      await connectSavedBackendSshTarget({ ...target, executionSource: sshSource });
+      const selectedTarget: DesktopSshEnvironmentTarget = {
+        ...target,
+        executionSource: sshSource,
+        ...(sshManual
+          ? {
+              manual: {
+                profileId: sshProfileId,
+                name: sshName.trim() || target.hostname,
+                authentication:
+                  sshAuthentication === "password"
+                    ? { type: "password" as const }
+                    : { type: "key" as const, identityFile: sshIdentityFile.trim() },
+              },
+            }
+          : {}),
+      };
+      if (sshManual) {
+        if (!target.username || (sshAuthentication === "key" && !sshIdentityFile.trim())) {
+          setSavedBackendError(
+            "Enter a username and, for private-key authentication, a key path in the selected SSH source.",
+          );
+          return;
+        }
+      }
+      const credentials = sshManual
+        ? { secret: sshSecret, remember: sshRememberSecret }
+        : undefined;
+      setSshSecret("");
+      await connectSavedBackendSshTarget(selectedTarget, credentials);
       return;
     }
 
@@ -3046,6 +3086,14 @@ export function ConnectionsSettings() {
     sshSource,
     savedBackendSshPort,
     savedBackendSshUsername,
+    sshManual,
+    sshProfileId,
+    sshName,
+    sshAuthentication,
+    sshIdentityFile,
+    sshSecret,
+    sshRememberSecret,
+    desktopBridge,
   ]);
 
   const handleSavedBackendSshFieldKeyDown = useCallback(
@@ -3427,6 +3475,34 @@ export function ConnectionsSettings() {
   );
   const renderSshFields = () => (
     <div className="space-y-4">
+      <label className="block">
+        <span className="mb-1.5 block text-xs font-medium">Connection details</span>
+        <Select
+          value={sshManual ? "manual" : "config"}
+          onValueChange={(value) => {
+            setSshManual(value === "manual");
+            setSshSecret("");
+          }}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectPopup>
+            <SelectItem value="config">SSH config host</SelectItem>
+            <SelectItem value="manual">Manual server</SelectItem>
+          </SelectPopup>
+        </Select>
+      </label>
+      {sshManual ? (
+        <label className="block">
+          <span className="mb-1.5 block text-xs font-medium">Name</span>
+          <Input
+            value={sshName}
+            onChange={(event) => setSshName(event.target.value)}
+            disabled={isAddingSavedBackend}
+          />
+        </label>
+      ) : null}
       {isAddingSavedBackend && sshProgress ? (
         <p role="status" className="text-sm text-muted-foreground">
           {sshProgress}
@@ -3434,7 +3510,7 @@ export function ConnectionsSettings() {
       ) : null}
       <label className="block">
         <span className="mb-1.5 block text-xs font-medium text-foreground">
-          SSH configuration source
+          SSH execution source
         </span>
         <Select
           value={sshSource.type === "wsl" ? `wsl:${sshSource.distro}` : "local"}
@@ -3483,26 +3559,28 @@ export function ConnectionsSettings() {
           </SelectPopup>
         </Select>
       </label>
-      <div className="flex gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={isAddingSavedBackend || isRefreshingSshHosts}
-          onClick={() => void refreshSshConnections()}
-        >
-          {isRefreshingSshHosts ? "Refreshing…" : "Refresh hosts"}
-        </Button>
-        {sshSource.type === "wsl" ? (
+      {!sshManual ? (
+        <div className="flex gap-2">
           <Button
             variant="outline"
             size="sm"
             disabled={isAddingSavedBackend || isRefreshingSshHosts}
-            onClick={() => void refreshSshConnections(sshSource.distro)}
+            onClick={() => void refreshSshConnections()}
           >
-            Load hosts
+            {isRefreshingSshHosts ? "Refreshing…" : "Refresh hosts"}
           </Button>
-        ) : null}
-      </div>
+          {sshSource.type === "wsl" ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isAddingSavedBackend || isRefreshingSshHosts}
+              onClick={() => void refreshSshConnections(sshSource.distro)}
+            >
+              Load hosts
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {sshReport?.sources
         .filter(
           (source) =>
@@ -3526,77 +3604,93 @@ export function ConnectionsSettings() {
             htmlFor="saved-backend-ssh-host"
             className="mb-1.5 block text-xs font-medium text-foreground"
           >
-            SSH host or alias
+            {sshManual ? "Hostname or IP address" : "SSH host or alias"}
           </label>
-          <Autocomplete
-            items={filteredDiscoveredSshHosts}
-            itemToStringValue={(target) => target.alias}
-            mode="none"
-            openOnInputClick
-            open={sshHostSuggestionsOpen}
-            onOpenChange={setSshHostSuggestionsOpen}
-            onItemHighlighted={(target) => {
-              highlightedSshHostRef.current = target;
-            }}
-            value={savedBackendSshHost}
-            onValueChange={(value, eventDetails) => {
-              setSavedBackendSshHost(value);
-              if (eventDetails.reason !== "item-press") return;
-
-              const target = filteredDiscoveredSshHosts.find((host) => host.alias === value);
-              if (target) void handleSelectSshHostSuggestion(target);
-            }}
-          >
-            <AutocompleteInput
+          {sshManual ? (
+            <Input
               id="saved-backend-ssh-host"
-              onKeyDown={handleSavedBackendSshHostKeyDown}
-              placeholder="Search hosts or type devbox"
+              value={savedBackendSshHost}
+              onChange={(event) => setSavedBackendSshHost(event.target.value)}
               disabled={isAddingSavedBackend}
               spellCheck={false}
             />
-            {hasSshHostSuggestionContent ? (
-              <AutocompletePopup>
-                {isLoadingDiscoveredSshHosts ? (
-                  <div className="px-3 py-2 text-xs text-muted-foreground">Loading hosts…</div>
-                ) : filteredDiscoveredSshHosts.length > 0 ? (
-                  <AutocompleteList className="max-h-72">
-                    {filteredDiscoveredSshHosts.map((target, index) => {
-                      const address = formatDesktopSshTarget(target);
-                      const shortcutCommand = index < 9 ? threadJumpCommandForIndex(index) : null;
-                      const shortcutLabel = shortcutCommand
-                        ? shortcutLabelForCommand(keybindings, shortcutCommand, navigator.platform)
-                        : null;
-                      return (
-                        <AutocompleteItem
-                          key={`${target.executionSource?.type === "wsl" ? target.executionSource.distro : "local"}:${target.alias}:${target.hostname}:${target.port ?? ""}`}
-                          value={target}
-                          className="h-8 min-h-8 whitespace-nowrap"
-                        >
-                          <span className="min-w-0 truncate text-sm font-medium">
-                            {target.alias}
-                          </span>
-                          {address !== target.alias ? (
-                            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                              {address}
+          ) : (
+            <Autocomplete
+              items={filteredDiscoveredSshHosts}
+              itemToStringValue={(target) => target.alias}
+              mode="none"
+              openOnInputClick
+              open={sshHostSuggestionsOpen}
+              onOpenChange={setSshHostSuggestionsOpen}
+              onItemHighlighted={(target) => {
+                highlightedSshHostRef.current = target;
+              }}
+              value={savedBackendSshHost}
+              onValueChange={(value, eventDetails) => {
+                setSavedBackendSshHost(value);
+                if (eventDetails.reason !== "item-press") return;
+
+                const target = filteredDiscoveredSshHosts.find((host) => host.alias === value);
+                if (target) void handleSelectSshHostSuggestion(target);
+              }}
+            >
+              <AutocompleteInput
+                id="saved-backend-ssh-host"
+                onKeyDown={handleSavedBackendSshHostKeyDown}
+                placeholder="Search hosts or type devbox"
+                disabled={isAddingSavedBackend}
+                spellCheck={false}
+              />
+              {hasSshHostSuggestionContent ? (
+                <AutocompletePopup>
+                  {isLoadingDiscoveredSshHosts ? (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">Loading hosts…</div>
+                  ) : filteredDiscoveredSshHosts.length > 0 ? (
+                    <AutocompleteList className="max-h-72">
+                      {filteredDiscoveredSshHosts.map((target, index) => {
+                        const address = formatDesktopSshTarget(target);
+                        const shortcutCommand = index < 9 ? threadJumpCommandForIndex(index) : null;
+                        const shortcutLabel = shortcutCommand
+                          ? shortcutLabelForCommand(
+                              keybindings,
+                              shortcutCommand,
+                              navigator.platform,
+                            )
+                          : null;
+                        return (
+                          <AutocompleteItem
+                            key={`${target.executionSource?.type === "wsl" ? target.executionSource.distro : "local"}:${target.alias}:${target.hostname}:${target.port ?? ""}`}
+                            value={target}
+                            className="h-8 min-h-8 whitespace-nowrap"
+                          >
+                            <span className="min-w-0 truncate text-sm font-medium">
+                              {target.alias}
                             </span>
-                          ) : (
-                            <span className="flex-1" />
-                          )}
-                          {shortcutLabel ? (
-                            <CommandShortcut className="shrink-0">{shortcutLabel}</CommandShortcut>
-                          ) : null}
-                        </AutocompleteItem>
-                      );
-                    })}
-                  </AutocompleteList>
-                ) : (
-                  <AutocompleteEmpty className="break-all">
-                    No hosts match "{savedBackendSshHost.trim()}".
-                  </AutocompleteEmpty>
-                )}
-              </AutocompletePopup>
-            ) : null}
-          </Autocomplete>
+                            {address !== target.alias ? (
+                              <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                                {address}
+                              </span>
+                            ) : (
+                              <span className="flex-1" />
+                            )}
+                            {shortcutLabel ? (
+                              <CommandShortcut className="shrink-0">
+                                {shortcutLabel}
+                              </CommandShortcut>
+                            ) : null}
+                          </AutocompleteItem>
+                        );
+                      })}
+                    </AutocompleteList>
+                  ) : (
+                    <AutocompleteEmpty className="break-all">
+                      No hosts match "{savedBackendSshHost.trim()}".
+                    </AutocompleteEmpty>
+                  )}
+                </AutocompletePopup>
+              ) : null}
+            </Autocomplete>
+          )}
         </div>
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_7rem]">
           <label className="block">
@@ -3623,7 +3717,63 @@ export function ConnectionsSettings() {
             />
           </label>
         </div>
-        {savedBackendError || discoveredSshHostsError ? (
+        {sshManual ? (
+          <div className="space-y-3">
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium">Authentication</span>
+              <Select
+                value={sshAuthentication}
+                onValueChange={(value) => {
+                  setSshAuthentication(value === "key" ? "key" : "password");
+                  setSshSecret("");
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup>
+                  <SelectItem value="password">Password</SelectItem>
+                  <SelectItem value="key">Private key</SelectItem>
+                </SelectPopup>
+              </Select>
+            </label>
+            {sshAuthentication === "key" ? (
+              <label className="block">
+                <span className="mb-1.5 block text-xs font-medium">
+                  Private key path in {sshSource.type === "wsl" ? sshSource.distro : "Windows"}
+                </span>
+                <Input
+                  value={sshIdentityFile}
+                  onChange={(event) => setSshIdentityFile(event.target.value)}
+                  spellCheck={false}
+                  disabled={isAddingSavedBackend}
+                />
+              </label>
+            ) : null}
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium">
+                {sshAuthentication === "key" ? "Key passphrase (if encrypted)" : "Password"}
+              </span>
+              <Input
+                type="password"
+                autoComplete="off"
+                value={sshSecret}
+                onChange={(event) => setSshSecret(event.target.value)}
+                disabled={isAddingSavedBackend}
+              />
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={sshRememberSecret}
+                onChange={(event) => setSshRememberSecret(event.target.checked)}
+                disabled={isAddingSavedBackend}
+              />
+              Remember securely on this computer after successful authentication
+            </label>
+          </div>
+        ) : null}
+        {savedBackendError || (!sshManual && discoveredSshHostsError) ? (
           <Alert variant="error">
             <AlertDescription>{savedBackendError ?? discoveredSshHostsError}</AlertDescription>
           </Alert>
@@ -4168,11 +4318,11 @@ export function ConnectionsSettings() {
             <Dialog
               open={addBackendDialogOpen}
               onOpenChange={(open) => {
-                if (!open && isAddingSavedBackend && activeSshSetupTarget.current)
-                  void cancelSshEnvironmentSetup(activeSshSetupTarget.current).catch(() => {});
                 setAddBackendDialogOpen(open);
                 if (open) {
                   setRouteTarget(null);
+                  setSshProfileId(crypto.randomUUID());
+                  setSshSecret("");
                 } else {
                   setSavedBackendError(null);
                 }
@@ -4233,6 +4383,7 @@ export function ConnectionsSettings() {
           </div>
         }
       >
+        <SshSetupProgress />
         {listedEnvironments.map((environment) => (
           <SavedBackendListRow
             key={environment.environmentId}

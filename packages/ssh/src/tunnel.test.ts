@@ -506,6 +506,8 @@ describe("ssh tunnel scripts", () => {
       const spawner = ChildProcessSpawner.make((command) =>
         Effect.sync(() => {
           const args = commandArgs(command);
+          if (args.includes("echo T3_SSH_AUTH_OK"))
+            return makeSuccessfulProcess("T3_SSH_AUTH_OK\n");
           spawnedCommands.push(args);
           if (args.includes("-N")) {
             return makeRunningProcess(() => {
@@ -622,6 +624,8 @@ describe("ssh tunnel scripts", () => {
         const spawner = ChildProcessSpawner.make((command) =>
           Effect.gen(function* () {
             const args = commandArgs(command);
+            if (args.includes("echo T3_SSH_AUTH_OK"))
+              return makeSuccessfulProcess("T3_SSH_AUTH_OK\n");
             const isTarget = args.includes(target.alias);
             if (args.includes("-G")) {
               if (isTarget && ++resolutions === 4) {

@@ -150,6 +150,7 @@ function sshRunnerLogFields(runner: RemoteT3RunnerOptions | undefined) {
 }
 
 interface SshAuthOperationInput<T> {
+  readonly allowPrompt?: boolean;
   readonly key: string;
   readonly target: DesktopSshEnvironmentTarget;
   readonly operation: (
@@ -163,12 +164,15 @@ interface SshAuthAttemptInput<T> extends SshAuthOperationInput<T> {
 }
 
 export interface SshEnvironmentManagerShape {
+  readonly authenticatedSecret?: (target: DesktopSshEnvironmentTarget) => string | undefined;
   readonly stopEnvironment: (
     target: DesktopSshEnvironmentTarget,
   ) => Effect.Effect<void, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
   readonly ensureEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: {
+      authSecret?: string;
+      testOnly?: boolean;
       readonly issuePairingToken?: boolean;
       resumeStoppedServer?: boolean;
       supportsSetupReview?: boolean;
@@ -1457,6 +1461,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       attempt,
     });
     const password = yield* promptService.request({
+      challenge: "password",
       attempt,
       destination: target.alias.trim() || target.hostname.trim(),
       username: target.username,
@@ -1488,11 +1493,13 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         input.error instanceof SshCommandError
           ? input.error.stderr.match(/T3_SSH_PROMPT:([A-Za-z0-9+/=]+)/)?.[1]
           : undefined;
+      if (!input.allowPrompt) return yield* input.error;
       if (evidence && !trustedHostPrompts.has(input.key)) {
         const prompt = Buffer.from(evidence, "base64").toString("utf8");
-        if (prompt.includes("yes/no") && /SHA256:[A-Za-z0-9+/]+/.test(prompt)) {
+        if (/SHA256:[A-Za-z0-9+/]+/.test(prompt)) {
           const service = yield* SshAuth.SshPasswordPrompt;
           const answer = yield* service.request({
+            challenge: "host-key",
             destination: input.target.alias,
             username: input.target.username,
             attempt: 1,
@@ -1506,7 +1513,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           return yield* runWithSshAuthAttempt(input);
         }
       }
-      if (!SshAuth.isSshAuthFailure(input.error)) {
+      const challenge =
+        input.error instanceof SshCommandError
+          ? input.error.stderr.match(/T3_SSH_AUTH_PROMPT:([A-Za-z0-9+/=]+)/)?.[1]
+          : undefined;
+      if (!challenge && !SshAuth.isSshAuthFailure(input.error)) {
         return yield* input.error;
       }
 
@@ -1528,7 +1539,22 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       }
 
       const nextPromptCount = input.promptCount + 1;
-      const nextAuthSecret = yield* promptForPassword(input.target, nextPromptCount);
+      const service = yield* SshAuth.SshPasswordPrompt;
+      const isPassphrase =
+        input.target.manual?.authentication.type === "key" ||
+        (challenge !== undefined &&
+          /passphrase/i.test(Buffer.from(challenge, "base64").toString("utf8")));
+      const nextAuthSecret = isPassphrase
+        ? yield* service.request({
+            destination: input.target.hostname,
+            username: input.target.username,
+            attempt: nextPromptCount,
+            challenge: "key-passphrase",
+            prompt: "Enter the passphrase for the selected SSH private key.",
+          })
+        : yield* promptForPassword(input.target, nextPromptCount);
+      if (nextAuthSecret === null)
+        return yield* new SshPasswordPromptError({ message: "SSH authentication cancelled." });
       authSecrets.set(input.key, nextAuthSecret);
       return yield* runWithSshAuthAttempt({
         ...input,
@@ -1705,6 +1731,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const ensureEnvironment = Effect.fn("ssh/tunnel.ensureEnvironment")(function* (
     target: DesktopSshEnvironmentTarget,
     requestOptions?: {
+      authSecret?: string;
+      testOnly?: boolean;
       readonly issuePairingToken?: boolean;
       resumeStoppedServer?: boolean;
       supportsSetupReview?: boolean;
@@ -1718,10 +1746,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       ...sshTargetLogFields(target),
       issuePairingToken: requestOptions?.issuePairingToken === true,
     });
-    const baseResolved = yield* resolveSshTarget(
-      target.alias || target.hostname,
-      target.executionSource,
-    );
+    const baseResolved = target.manual
+      ? target
+      : yield* resolveSshTarget(target.alias || target.hostname, target.executionSource);
     const resolvedTarget: DesktopSshEnvironmentTarget = {
       ...baseResolved,
       ...(target.username !== null ? { username: target.username } : {}),
@@ -1738,6 +1765,39 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return yield* withTargetLock(
       key,
       Effect.gen(function* () {
+        if (requestOptions?.authSecret !== undefined)
+          authSecrets.set(key, requestOptions.authSecret);
+        // Only this harmless preflight may retry authentication. Never replay
+        // a mutating runtime/package command after a credential failure.
+        yield* reportProgress(resolvedTarget, "Authenticating SSH connection…");
+        const authenticated = yield* runWithSshAuth({
+          key,
+          target: resolvedTarget,
+          allowPrompt: true,
+          operation: (auth) =>
+            runSshCommand(resolvedTarget, {
+              ...auth,
+              remoteCommandArgs: ["echo T3_SSH_AUTH_OK"],
+              timeoutMs: 240_000,
+            }),
+        });
+        if (!authenticated.stdout.split(/\r?\n/).some((line) => line.trim() === "T3_SSH_AUTH_OK"))
+          return yield* new SshCommandError({
+            command: ["ssh"],
+            exitCode: null,
+            stderr: "",
+            message: "SSH authentication preflight returned an unexpected response.",
+          });
+        if (requestOptions?.testOnly)
+          return {
+            target: resolvedTarget,
+            httpBaseUrl: "",
+            wsBaseUrl: "",
+            pairingToken: null,
+            setupWarnings: [
+              "Authentication succeeded. No remote runtime was installed or started.",
+            ],
+          };
         const runner = configuredRunner?.bundles
           ? {
               ...configuredRunner,
@@ -1812,10 +1872,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     target: DesktopSshEnvironmentTarget,
   ): Effect.fn.Return<void, SshEnvironmentEffectError, SshEnvironmentEffectContext> {
     yield* Effect.logInfo("ssh.environment.disconnect.start", sshTargetLogFields(target));
-    const baseResolved = yield* resolveSshTarget(
-      target.alias || target.hostname,
-      target.executionSource,
-    );
+    const baseResolved = target.manual
+      ? target
+      : yield* resolveSshTarget(target.alias || target.hostname, target.executionSource);
     const resolvedTarget: DesktopSshEnvironmentTarget = {
       ...baseResolved,
       ...(target.username !== null ? { username: target.username } : {}),
@@ -1847,14 +1906,14 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   });
 
   return SshEnvironmentManager.of({
+    authenticatedSecret: (target) => authSecrets.get(targetConnectionKey(target)),
     ensureEnvironment,
     disconnectEnvironment,
     stopEnvironment: (target) =>
       Effect.gen(function* () {
-        const base = yield* resolveSshTarget(
-          target.alias || target.hostname,
-          target.executionSource,
-        );
+        const base = target.manual
+          ? target
+          : yield* resolveSshTarget(target.alias || target.hostname, target.executionSource);
         const resolved = {
           ...base,
           ...(target.username !== null ? { username: target.username } : {}),
