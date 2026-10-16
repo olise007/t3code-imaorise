@@ -1,1 +1,1 @@
-export { createSetupDetails } from "@t3tools/shared/setupDetails";
+export { createSetupDetails, sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
