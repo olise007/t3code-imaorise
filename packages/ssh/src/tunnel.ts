@@ -992,12 +992,10 @@ export const issueRemotePairingToken = Effect.fn("ssh/tunnel.issueRemotePairingT
   const result = yield* runSshCommand(target, {
     ...(runner?.prepared
       ? remoteRuntimeInvocation(runner.prepared, [
-          "auth",
-          "pairing",
-          "create",
-          "--base-dir",
-          ".t3-imaorise",
-          "--json",
+          "__ssh-helper",
+          "managed-pair",
+          stateKey,
+          runner.prepared.version,
         ])
       : { remoteCommandArgs: ["sh", "-s"], stdin: buildRemotePairingScript(stateKey, runner) }),
     // Pairing may be the first command on a cold remote, so it can install

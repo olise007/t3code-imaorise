@@ -241,8 +241,10 @@ Disconnecting, removing the saved connection, or closing T3 leaves remote agents
 running. Reconnect through the same SSH source to continue. To stop a verified
 T3-managed server and its agents, use **Stop remote server** in its connection
 menu. Switch the connection on again to explicitly restart it; background reconnects
-respect the stop. A running incompatible version requires an explicit stop before changing
-runtime versions.
+respect the stop. A compatible running version is reused after desktop updates,
+leaving its agents running. To activate the bundled version instead, explicitly
+stop and restart the remote server when its agents can be stopped. Incompatible
+versions require this explicit stop before setup can continue.
 
 For Antigravity's Google callback on a remote host, see
 [remote sign-in](./providers-antigravity.md#sign-in-from-a-remote-device).

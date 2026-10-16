@@ -46,7 +46,7 @@ export const powershellArgs = (script: string) => [
   "-NonInteractive",
   "-EncodedCommand",
   Buffer.from(
-    `$env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; $env:Path+=';'+[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); [Console]::InputEncoding=New-Object Text.UTF8Encoding($false); [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); $OutputEncoding=[Console]::OutputEncoding; ${script}`,
+    `$ProgressPreference='SilentlyContinue'; $env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; $env:Path+=';'+[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); [Console]::InputEncoding=New-Object Text.UTF8Encoding($false); [Console]::OutputEncoding=New-Object Text.UTF8Encoding($false); $OutputEncoding=[Console]::OutputEncoding; ${script}`,
     "utf16le",
   ).toString("base64"),
 ];
@@ -55,7 +55,8 @@ export const powershellArgs = (script: string) => [
 // on stdin into a private user temporary file and removed even if execution fails.
 export const powershellFileArgs = () =>
   powershellArgs(
-    `$ErrorActionPreference='Stop'; $p=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString()+'.ps1'); try { [IO.File]::WriteAllText($p,[Console]::In.ReadToEnd(),(New-Object Text.UTF8Encoding($true))); & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $p; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE} } finally { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }`,
+    // Preference variables do not cross the child PowerShell process boundary.
+    `$ErrorActionPreference='Stop'; $p=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString()+'.ps1'); try { [IO.File]::WriteAllText($p,'$ProgressPreference=''SilentlyContinue'''+[Environment]::NewLine+[Console]::In.ReadToEnd(),(New-Object Text.UTF8Encoding($true))); & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $p; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE} } finally { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }`,
   );
 
 export const remoteRuntimeInvocation = (
@@ -183,6 +184,7 @@ case "$available" in ''|*[!0-9]*) ;; *) if [ "$available" -lt ${validEntries + 6
 
 export function windowsInstallScript(hash: string, suffix = "") {
   return `$ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
 $parent=Join-Path $HOME '.t3-imaorise/runtime'
 $root=Join-Path $parent 'sha256-${hash}'
 $archive=Join-Path $parent 'upload-${hash}${suffix}.zip'

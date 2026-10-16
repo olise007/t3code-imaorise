@@ -144,6 +144,20 @@ const managedStop = Command.make("managed-stop", { key: Argument.String("key") }
     ),
   ),
 );
+const managedPair = Command.make("managed-pair", {
+  key: Argument.String("key"),
+  version: Argument.String("version"),
+}).pipe(
+  Command.withHandler(({ key, version }) =>
+    Effect.gen(function* () {
+      const service = yield* SshManagedRuntime.SshManagedRuntime;
+      const result = yield* service.pair(key, version);
+      yield* Effect.sync(() => {
+        process.stdout.write(JSON.stringify(result));
+      });
+    }).pipe(Effect.provide(SshManagedRuntime.layer)),
+  ),
+);
 const supervise = Command.make("supervise", {
   key: Argument.String("key"),
   version: Argument.String("version"),
@@ -171,6 +185,7 @@ export const sshHelperCommand = Command.make("__ssh-helper").pipe(
     runtimePort,
     managedStart,
     managedStop,
+    managedPair,
     supervise,
     verifyRuntime,
   ]),

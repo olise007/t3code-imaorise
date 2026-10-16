@@ -53,7 +53,7 @@ await NodeFSP.writeFile(
 const daemon = NodeChildProcess.spawn("/usr/sbin/sshd", ["-D", "-e", "-f", config], {
   stdio: ["ignore", "ignore", "pipe"],
 });
-const run = async (operation: string) => {
+const run = async (operation: string, version = "2.0.1-test") => {
   const command = [
     "env",
     `HOME=${remoteHome}`,
@@ -62,7 +62,7 @@ const run = async (operation: string) => {
     peer,
     operation,
     "3333333333333333",
-    "2.0.1-test",
+    version,
   ]
     .map(quote)
     .join(" ");
@@ -127,9 +127,12 @@ try {
     "Passed native SFTP archive transfer with a literal special-character path.\n",
   );
   const first = JSON.parse((await run("start")).stdout);
-  const second = JSON.parse((await run("start")).stdout);
+  const second = JSON.parse((await run("start", "2.0.2-newer")).stdout);
   if (first.remotePort !== second.remotePort)
     throw new Error("SSH reconnect replaced the remote server.");
+  const pairing = JSON.parse((await run("pair", "2.0.2-newer")).stdout);
+  if (pairing.credential !== "disposable-fixture-credential")
+    throw new Error("Compatible runtime pairing failed.");
   const descriptor = await fetch(`http://127.0.0.1:${first.remotePort}/.well-known/t3/environment`);
   if (!descriptor.ok) throw new Error("Remote server did not survive SSH session exit.");
   await run("stop");

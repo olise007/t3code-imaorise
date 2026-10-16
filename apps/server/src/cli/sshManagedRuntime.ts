@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { PROVIDER_RECIPE_CATALOG } from "@t3tools/shared/providerInstallRecipes";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import { bundledResourceMonitorPaths } from "../resourceTelemetry/ResourceMonitorBinary.ts";
 
 export class SshManagedRuntimeError extends Schema.TaggedError<SshManagedRuntimeError>()(
@@ -41,6 +42,10 @@ export class SshManagedRuntime extends Context.Service<
       SshManagedRuntimeError
     >;
     readonly stop: (key: string) => Effect.Effect<void, SshManagedRuntimeError>;
+    readonly pair: (
+      key: string,
+      version: string,
+    ) => Effect.Effect<{ credential: string }, SshManagedRuntimeError>;
     readonly supervise: (
       key: string,
       version: string,
@@ -77,6 +82,7 @@ export const layer = Layer.sync(SshManagedRuntime, () =>
         operation(() => startManagedSsh(key, version, platform, resume)),
       ),
     stop: (key) => operation(() => stopManagedSsh(key)),
+    pair: (key, version) => operation(() => pairManagedSsh(key, version)),
     supervise: (key, version) =>
       Effect.flatMap(HostProcess.Platform, (platform) =>
         operation(() => superviseManagedSsh(key, version, platform)),
@@ -203,6 +209,89 @@ async function control(record: ManagedSshRecord, action: "health" | "stop") {
   return result;
 }
 
+async function compatibleServer(record: ManagedSshRecord, version: string) {
+  const health = await control(record, "health");
+  const releaseLine = (value: string) => /^(\d+\.\d+)\.\d+(?:[-+].*)?$/.exec(value)?.[1];
+  const incompatible = () =>
+    new Error(
+      `Managed server ${record.version} is still running and is incompatible with runtime ${version}. Disconnecting leaves it running. Stop the remote server explicitly before changing versions; this also stops its agents.`,
+    );
+  if (!releaseLine(version) || releaseLine(record.version) !== releaseLine(version))
+    throw incompatible();
+  if (
+    typeof health.remotePort !== "number" ||
+    !Number.isInteger(health.remotePort) ||
+    health.remotePort < 1 ||
+    health.remotePort > 65535
+  )
+    throw new Error("Managed server did not report a valid port.");
+  const response = await fetch(`http://127.0.0.1:${health.remotePort}/.well-known/t3/environment`, {
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!response.ok) throw new Error("Managed server readiness could not be verified.");
+  const descriptor = (await response.json()) as {
+    serverVersion?: unknown;
+    environmentId?: unknown;
+    orchestrationProtocolVersion?: unknown;
+  };
+  if (
+    typeof health.environmentId !== "string" ||
+    health.environmentId.length === 0 ||
+    descriptor.environmentId !== health.environmentId ||
+    descriptor.serverVersion !== record.version
+  )
+    throw new Error("Managed server identity differs from its verified supervisor.");
+  if (descriptor.orchestrationProtocolVersion !== ORCHESTRATION_PROTOCOL_VERSION)
+    throw incompatible();
+  return health;
+}
+
+export async function pairManagedSsh(key: string, version: string) {
+  const release = await acquireManagedLock(recordPath(key));
+  try {
+    const record = await readRecord(key);
+    if (record === null)
+      throw new Error("No verified T3-managed server exists for this connection.");
+    await compatibleServer(record, version);
+    // Use the running runtime's auth implementation. A newer CLI opening its
+    // database could otherwise apply migrations while the older server is live.
+    const output = await new Promise<string>((resolve, reject) => {
+      NodeChildProcess.execFile(
+        record.executable,
+        [
+          ...(NodeSea.isSea() ? [] : process.argv.slice(1, 2)),
+          "auth",
+          "pairing",
+          "create",
+          "--base-dir",
+          NodePath.join(NodeOS.homedir(), ".t3-imaorise"),
+          "--json",
+        ],
+        { timeout: 15_000, maxBuffer: 64 * 1024, windowsHide: true },
+        (error, stdout) =>
+          error
+            ? reject(new Error("Could not issue a pairing credential through the running runtime."))
+            : resolve(stdout),
+      );
+    });
+    let result: { credential?: unknown };
+    try {
+      result = JSON.parse(output);
+    } catch {
+      throw new Error("The running runtime returned an invalid pairing response.");
+    }
+    if (
+      typeof result.credential !== "string" ||
+      result.credential.length === 0 ||
+      result.credential.length > 4096
+    )
+      throw new Error("The running runtime returned an invalid pairing credential.");
+    return { credential: result.credential };
+  } finally {
+    await release();
+  }
+}
+
 export async function stopManagedSsh(key: string) {
   const release = await acquireManagedLock(recordPath(key));
   try {
@@ -284,15 +373,18 @@ export async function startManagedSsh(
     const existing = await readRecord(key);
     if (existing !== null) {
       try {
-        const health = await control(existing, "health");
-        if (health.version !== version || health.executable !== process.execPath)
-          throw new Error(
-            "A different managed runtime is still running. Stop it explicitly before changing versions.",
-          );
+        const health = await compatibleServer(existing, version);
         return {
           remotePort: health.remotePort,
           serverKind: "managed",
-          setupWarnings: await providerSetupWarnings(platform),
+          setupWarnings: [
+            ...(await providerSetupWarnings(platform)),
+            ...(existing.version === version
+              ? []
+              : [
+                  `Reusing compatible remote server ${existing.version}. It and its agents remain running. Stop the remote server explicitly when ready to activate runtime ${version}.`,
+                ]),
+          ],
         };
       } catch (error) {
         if (processAlive(existing.pid)) throw error;

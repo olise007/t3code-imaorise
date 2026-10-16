@@ -3,6 +3,7 @@ import * as NodeAssert from "node:assert/strict";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeCrypto from "node:crypto";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -15,6 +16,7 @@ import {
   powershellFileArgs,
   runtimeStorageScript,
   uploadRuntimeArchive,
+  windowsInstallScript,
 } from "../../packages/ssh/src/bundledRuntime.ts";
 import { runtimeRequirements } from "../../packages/ssh/src/prerequisites.ts";
 import * as Effect from "effect/Effect";
@@ -110,6 +112,67 @@ const program = Effect.gen(function* () {
     ),
   });
   NodeAssert.ok(upload.stdout.includes(digest));
+  yield* Effect.logInfo("SSH fixture: noninteractive archive extraction and progress suppression");
+  const payloadDirectory = NodePath.join(input.root, "archive payload", "runtime");
+  const installArchive = NodePath.join(input.root, "install runtime.zip");
+  yield* Effect.promise(async () => {
+    await NodeFSP.mkdir(payloadDirectory, { recursive: true });
+    await NodeFSP.copyFile(process.execPath, NodePath.join(payloadDirectory, "t3.exe"));
+    const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+    const [command, ...args] = powershellArgs(
+      `$ErrorActionPreference='Stop'; Compress-Archive -LiteralPath ${quote(payloadDirectory)} -DestinationPath ${quote(installArchive)} -CompressionLevel NoCompression`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      NodeChildProcess.execFile(command!, args, { timeout: 60_000, windowsHide: true }, (error) =>
+        error ? reject(error) : resolve(),
+      );
+    });
+  });
+  const installHash = yield* Effect.promise(async () =>
+    NodeCrypto.createHash("sha256")
+      .update(await NodeFSP.readFile(installArchive))
+      .digest("hex"),
+  );
+  yield* uploadRuntimeArchive(
+    target,
+    { interactiveAuth: true, authSecret: input.password },
+    "windows",
+    installArchive,
+    installHash,
+    "-extract",
+  );
+  const extracted = yield* runSshCommand(target, {
+    interactiveAuth: true,
+    authSecret: input.password,
+    remoteCommandArgs: powershellFileArgs(),
+    // Node stands in for the packaged executable; exercise the complete remote
+    // checksum/extraction/activation path through the real SSH default shell.
+    stdin: windowsInstallScript(installHash, "-extract").replaceAll(
+      "__ssh-helper verify-runtime",
+      "--version",
+    ),
+    timeoutMs: 90_000,
+  });
+  NodeAssert.doesNotMatch(extracted.stderr, /CLIXML|ReadConsoleOutput/);
+  const verified = yield* runSshCommand(target, {
+    interactiveAuth: true,
+    authSecret: input.password,
+    remoteCommandArgs: powershellFileArgs(),
+    stdin: `$ErrorActionPreference='Stop'\nWrite-Progress -Activity 'Noninteractive SSH fixture' -PercentComplete 50\nif($ProgressPreference -ne 'SilentlyContinue'){throw 'Child progress preference was lost'}\n$p=Join-Path $HOME '.t3-imaorise/runtime/sha256-${installHash}'\ntry { & (Join-Path $p 't3.exe') --version; if($LASTEXITCODE -ne 0){exit $LASTEXITCODE} } finally { Remove-Item -LiteralPath $p -Recurse -Force }\n`,
+  });
+  NodeAssert.ok(verified.stdout.includes(process.version));
+  const realError = yield* Effect.result(
+    runSshCommand(target, {
+      interactiveAuth: true,
+      authSecret: input.password,
+      remoteCommandArgs: powershellFileArgs(),
+      stdin:
+        "$ErrorActionPreference='Stop'\nthrow 'Disposable extraction failure must remain visible'\n",
+    }),
+  );
+  NodeAssert.equal(realError._tag, "Failure");
+  if (realError._tag === "Failure")
+    NodeAssert.match(realError.failure.message, /Disposable extraction failure/);
   const closed = yield* Effect.result(
     runSshCommand(target, {
       interactiveAuth: true,

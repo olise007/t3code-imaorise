@@ -7,7 +7,12 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeOS from "node:os";
 import * as NodeChildProcess from "node:child_process";
-import { startManagedSsh, stopManagedSsh, superviseManagedSsh } from "../sshManagedRuntime.ts";
+import {
+  pairManagedSsh,
+  startManagedSsh,
+  stopManagedSsh,
+  superviseManagedSsh,
+} from "../sshManagedRuntime.ts";
 
 const args = process.argv.slice(2);
 if (args[0] === "serve") {
@@ -27,7 +32,16 @@ if (args[0] === "serve") {
   const server = NodeHttp.createServer((_request, response) => {
     response.setHeader("Content-Type", "application/json");
     response.end(
-      JSON.stringify({ environmentId: "fixture-environment", serverVersion: "2.0.1-test" }),
+      NodeFS.existsSync(NodePath.join(NodePath.dirname(file), "fixture-descriptor.json"))
+        ? NodeFS.readFileSync(
+            NodePath.join(NodePath.dirname(file), "fixture-descriptor.json"),
+            "utf8",
+          )
+        : JSON.stringify({
+            environmentId: "fixture-environment",
+            serverVersion: "2.0.1-test",
+            orchestrationProtocolVersion: 2,
+          }),
     );
   });
   server.listen(port, "127.0.0.1");
@@ -36,6 +50,8 @@ if (args[0] === "serve") {
     provider.kill("SIGTERM");
     server.close();
   });
+} else if (args[0] === "auth") {
+  console.log(JSON.stringify({ credential: "disposable-fixture-credential" }));
 } else {
   try {
     if (args[0] === "start" || args[0] === "resume")
@@ -49,6 +65,8 @@ if (args[0] === "serve") {
           ),
         ),
       );
+    else if (args[0] === "pair")
+      console.log(JSON.stringify(await pairManagedSsh(args[1]!, args[2]!)));
     else if (args[0] === "stop") await stopManagedSsh(args[1]!);
     else if (args[0] === "__ssh-helper" && args[1] === "supervise")
       await superviseManagedSsh(args[2]!, args[3]!, Effect.runSync(HostProcess.Platform));

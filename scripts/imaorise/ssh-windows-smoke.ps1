@@ -116,8 +116,8 @@ Host t3-fixture
       throw 'Native SSH authentication fixture failed.'
     }
   }
-  function Invoke-Peer([string]$operation, [string]$keyValue) {
-    $script = "`$env:HOME='$($homeDirectory.Replace("'","''"))'; `$env:USERPROFILE=`$env:HOME; & '$($node.Replace("'","''"))' '$($peer.Replace("'","''"))' '$operation' '$keyValue' '2.0.1-test'; if(`$LASTEXITCODE -ne 0){exit `$LASTEXITCODE}"
+  function Invoke-Peer([string]$operation, [string]$keyValue, [string]$version = '2.0.1-test') {
+    $script = "`$env:HOME='$($homeDirectory.Replace("'","''"))'; `$env:USERPROFILE=`$env:HOME; & '$($node.Replace("'","''"))' '$($peer.Replace("'","''"))' '$operation' '$keyValue' '$version'; if(`$LASTEXITCODE -ne 0){exit `$LASTEXITCODE}"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
     $startInfo = [Diagnostics.ProcessStartInfo]::new("$sshRoot/ssh.exe")
     $startInfo.UseShellExecute = $false
@@ -142,8 +142,10 @@ Host t3-fixture
     $keyValue = if ($shell.EndsWith('cmd.exe')) { '1111111111111111' } else { '2222222222222222' }
     try {
       $first = Invoke-Peer 'resume' $keyValue | ConvertFrom-Json
-      $second = Invoke-Peer 'start' $keyValue | ConvertFrom-Json
+      $second = Invoke-Peer 'start' $keyValue '2.0.2-newer' | ConvertFrom-Json
       if ($first.remotePort -ne $second.remotePort) { throw 'SSH reconnect replaced the remote server.' }
+      $pairing = Invoke-Peer 'pair' $keyValue '2.0.2-newer' | ConvertFrom-Json
+      if ($pairing.credential -ne 'disposable-fixture-credential') { throw 'Compatible runtime pairing failed.' }
       $descriptor = Invoke-RestMethod "http://127.0.0.1:$($first.remotePort)/.well-known/t3/environment"
       if ($descriptor.environmentId -ne 'fixture-environment') { throw 'Detached remote server did not survive SSH session exit.' }
       Write-Output "Passed SSH session survival and reconnect with $([IO.Path]::GetFileName($shell))."

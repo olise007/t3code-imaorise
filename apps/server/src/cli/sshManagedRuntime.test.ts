@@ -81,7 +81,46 @@ it("reuses an authenticated supervisor after its launching command exits and sto
         })
       ).status,
     ).toBe(403);
-    await expect(run("start", key, "2.0.1-other")).rejects.toThrow("different managed runtime");
+    const newerExecutable = NodePath.join(
+      home,
+      hostPlatform === "win32" ? "newer-runtime.exe" : "newer-runtime",
+    );
+    await NodeFSP.copyFile(process.execPath, newerExecutable);
+    const runNewer = (...args: string[]) =>
+      exec(newerExecutable, [fixture, ...args], { env, timeout: 15_000 });
+    const upgraded = JSON.parse((await runNewer("start", key, "2.0.2-newer")).stdout);
+    expect(upgraded.remotePort).toBe(first.remotePort);
+    expect(upgraded.setupWarnings).toContainEqual(expect.stringContaining("Reusing compatible"));
+    expect(JSON.parse(await NodeFSP.readFile(file, "utf8"))).toEqual(record);
+    expect(JSON.parse((await runNewer("pair", key, "2.0.2-newer")).stdout)).toEqual({
+      credential: "disposable-fixture-credential",
+    });
+    await expect(run("start", key, "3.0.0-test")).rejects.toThrow("incompatible");
+    const descriptorFile = NodePath.join(
+      NodePath.dirname(file),
+      "../../userdata/fixture-descriptor.json",
+    );
+    await NodeFSP.writeFile(
+      descriptorFile,
+      JSON.stringify({
+        environmentId: "fixture-environment",
+        serverVersion: "2.0.1-test",
+        orchestrationProtocolVersion: 999,
+      }),
+    );
+    await expect(run("start", key, "2.0.2-newer")).rejects.toThrow("incompatible");
+    await expect(run("pair", key, "2.0.2-newer")).rejects.toThrow("incompatible");
+    await NodeFSP.writeFile(
+      descriptorFile,
+      JSON.stringify({
+        environmentId: "another-environment",
+        serverVersion: "2.0.1-test",
+        orchestrationProtocolVersion: 2,
+      }),
+    );
+    await expect(run("start", key, "2.0.2-newer")).rejects.toThrow("identity differs");
+    await NodeFSP.rm(descriptorFile);
+    expect(JSON.parse(await NodeFSP.readFile(file, "utf8"))).toEqual(record);
     const provider = JSON.parse(
       await NodeFSP.readFile(
         NodePath.join(home, ".t3-imaorise/userdata/fixture-provider.json"),
