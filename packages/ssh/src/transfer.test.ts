@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - These fixtures exercise owned native pipes without contacting SSH hosts.
-import NodeChildProcess, { type ChildProcess as NativeChildProcess } from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeModule from "node:module";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { expect, vi } from "vite-plus/test";
@@ -75,14 +75,19 @@ it.live("rejects truncated input even when the receiver exits successfully", () 
 it.live("handles a late Windows EOF after the input writer is cancelled", () =>
   Effect.gen(function* () {
     const spawn = NodeChildProcess.spawn;
-    let captured: NativeChildProcess | undefined;
+    // Node's ESM namespace is immutable. Instrument its mutable builtin object
+    // and refresh named exports so the real spawner sees the same function.
+    const builtin = NodeModule.createRequire(import.meta.url)(
+      "node:child_process",
+    ) as typeof NodeChildProcess;
+    let captured: NodeChildProcess.ChildProcess | undefined;
     const spy = vi
-      .spyOn(NodeChildProcess, "spawn")
+      .spyOn(builtin, "spawn")
       .mockImplementation((...args: Parameters<typeof spawn>) => {
         captured = spawn(...args);
         return captured;
       });
-    syncBuiltinESMExports();
+    NodeModule.syncBuiltinESMExports();
     try {
       yield* Effect.scoped(
         Effect.gen(function* () {
@@ -113,7 +118,7 @@ it.live("handles a late Windows EOF after the input writer is cancelled", () =>
       );
     } finally {
       spy.mockRestore();
-      syncBuiltinESMExports();
+      NodeModule.syncBuiltinESMExports();
     }
   }).pipe(Effect.provide(NodeServices.layer)),
 );
