@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
+  ProviderDriverKind,
   type ServerSettings,
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
@@ -27,9 +28,9 @@ import { makeProviderVersionManager } from "./ProviderVersionManager.ts";
 import { trackProviderInstallationWork } from "./ProviderInstallationActivity.ts";
 
 const input = {
-  provider: "claudeAgent",
+  provider: ProviderDriverKind.make("claudeAgent"),
   instanceId: ProviderInstanceId.make("shared-one"),
-  targetVersion: "2.0.0",
+  targetVersion: "2.1.301",
   expectedIntegrity: `sha512-${"a".repeat(86)}==`,
   allowUnknownCompatibility: true,
 };
@@ -49,7 +50,11 @@ const harness = Effect.fn("test.versionManager")(function* (changeSettings = fal
     providerInstances: Object.fromEntries(
       ["shared-one", "shared-two"].map((id) => [
         id,
-        { driver: "claudeAgent", displayName: id, config: { binaryPath: binary } },
+        {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          displayName: id,
+          config: { binaryPath: binary },
+        },
       ]),
     ),
   };
@@ -72,6 +77,7 @@ const harness = Effect.fn("test.versionManager")(function* (changeSettings = fal
                 ...settings,
                 providerInstances: { ...settings.providerInstances, ...replacements },
               };
+              return settings;
             }),
         }),
         Layer.mock(Codex.CodexInstallation)({
@@ -89,10 +95,13 @@ const harness = Effect.fn("test.versionManager")(function* (changeSettings = fal
                   ...settings,
                   providerInstances: {
                     ...settings.providerInstances,
-                    other: { driver: "codex", config: {} },
+                    [ProviderInstanceId.make("other")]: {
+                      driver: ProviderDriverKind.make("codex"),
+                      config: {},
+                    },
                   },
                 };
-              return path.join(root, "verified-2.0.0", "claude");
+              return path.join(root, "verified-2.1.301", "claude");
             }),
         }),
         Layer.mock(Maintenance.ProviderMaintenanceRunner)({
@@ -103,6 +112,7 @@ const harness = Effect.fn("test.versionManager")(function* (changeSettings = fal
           refresh: () => Effect.succeed([]),
           setProviderMaintenanceActionState: ({ state }) =>
             Effect.gen(function* () {
+              if (!state) return [];
               states.push(state);
               if (state.message === "Ready—waiting for running work")
                 yield* Deferred.succeed(ready, undefined);
@@ -120,9 +130,9 @@ const harness = Effect.fn("test.versionManager")(function* (changeSettings = fal
               HttpClientResponse.fromWeb(
                 request,
                 Response.json(
-                  request.url.endsWith("/2.0.0")
+                  request.url.endsWith("/2.1.301")
                     ? {
-                        version: "2.0.0",
+                        version: "2.1.301",
                         dist: {
                           tarball:
                             "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/fixture.tgz",
@@ -130,9 +140,9 @@ const harness = Effect.fn("test.versionManager")(function* (changeSettings = fal
                         },
                       }
                     : {
-                        "dist-tags": { latest: "2.0.0" },
+                        "dist-tags": { latest: "2.1.301" },
                         versions: {
-                          "2.0.0": {
+                          "2.1.301": {
                             dist: {
                               tarball:
                                 "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/fixture.tgz",
@@ -178,7 +188,10 @@ it.layer(NodeServices.layer)("provider version activation", (it) => {
           Deferred.succeed(working, undefined).pipe(Effect.andThen(Deferred.await(finish))),
         ).pipe(Effect.forkChild);
         yield* Deferred.await(working);
-        const request = yield* fixture.manager.update(input).pipe(Effect.forkChild);
+        const request = yield* fixture.manager.update(input).pipe(
+          Effect.tapError((error) => Deferred.fail(fixture.ready, error)),
+          Effect.forkChild,
+        );
         yield* Deferred.await(fixture.ready);
         expect(fixture.activations()).toBe(0);
         yield* Fiber.interrupt(request);
@@ -187,8 +200,10 @@ it.layer(NodeServices.layer)("provider version activation", (it) => {
         yield* Fiber.join(agent);
         yield* Deferred.await(fixture.completed);
         expect(fixture.activations()).toBe(1);
-        expect(fixture.current().providerInstances["shared-one"]?.config).toEqual(
-          fixture.current().providerInstances["shared-two"]?.config,
+        expect(
+          fixture.current().providerInstances[ProviderInstanceId.make("shared-one")]?.config,
+        ).toEqual(
+          fixture.current().providerInstances[ProviderInstanceId.make("shared-two")]?.config,
         );
       }),
   );
@@ -208,8 +223,8 @@ it.layer(NodeServices.layer)("provider version activation", (it) => {
       yield* fixture.manager.update(input).pipe(Effect.flip);
       expect(fixture.preparations()).toBe(1);
       expect(fixture.activations()).toBe(0);
-      expect(fixture.current().providerInstances["shared-one"]).toEqual(
-        fixture.original.providerInstances["shared-one"],
+      expect(fixture.current().providerInstances[ProviderInstanceId.make("shared-one")]).toEqual(
+        fixture.original.providerInstances[ProviderInstanceId.make("shared-one")],
       );
     }),
   );

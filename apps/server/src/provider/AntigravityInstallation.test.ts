@@ -814,20 +814,26 @@ it.layer(NodeServices.layer)("Antigravity installation", (it) => {
       }),
   );
 
-  it.effect("keeps leased releases available while new sessions resolve the new release", () =>
+  it.effect("waits for leased sessions before activating and retains the previous executable", () =>
     Effect.gen(function* () {
-      const { installation, fs, stagingReleased } = yield* makeHarness({ previous: true });
+      const verified = yield* Deferred.make<void>();
+      const { installation, fs, stagingReleased } = yield* makeHarness({
+        previous: true,
+        validate: () => Deferred.succeed(verified, undefined).pipe(Effect.asVoid),
+      });
       const processScope = yield* Scope.make();
       const oldExecutable = yield* installation.acquire().pipe(Scope.provide(processScope));
       yield* installation.start;
+      yield* Deferred.await(verified);
+      expect((yield* installation.resolve()).version).toBe(previousVersion);
+      expect(yield* installation.remove().pipe(Effect.flip)).toMatchObject({ operation: "remove" });
+      yield* Scope.close(processScope, Exit.void);
       expect((yield* terminalState(installation)).phase).toBe("succeeded");
       yield* Deferred.await(stagingReleased);
       const current = yield* installation.resolve();
       expect(current.version).toBe("fixture-new");
       expect(current.executablePath).not.toBe(oldExecutable.executablePath);
       expect(yield* fs.readFileString(oldExecutable.executablePath)).toBe(serverContents);
-      expect(yield* installation.remove().pipe(Effect.flip)).toMatchObject({ operation: "remove" });
-      yield* Scope.close(processScope, Exit.void);
       yield* installation.remove();
       expect(yield* fs.exists(installation.managedDirectory)).toBe(false);
     }),

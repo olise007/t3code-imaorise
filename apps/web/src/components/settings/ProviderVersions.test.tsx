@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
+import { EnvironmentId, ProviderInstanceId, ProviderDriverKind } from "@t3tools/contracts";
 import { ProviderVersions } from "./ProviderVersions";
 
 const fixtures = vi.hoisted(() => ({ query: vi.fn(), update: vi.fn() }));
@@ -67,7 +67,7 @@ it("requires an exact artifact review, preserves independent labels, and allows 
         <ProviderVersions
           environmentId={EnvironmentId.make("remote")}
           instanceId={ProviderInstanceId.make("work")}
-          provider="codex"
+          provider={ProviderDriverKind.make("codex")}
         />,
       );
     });

@@ -93,7 +93,7 @@ interface AntigravityInstallationService {
   readonly start: Effect.Effect<ProviderInstallState, AntigravityInstallationError>;
   readonly startVersion?: (
     asset: AntigravityReleaseAsset,
-    beforeActivation: Effect.Effect<void, AntigravityInstallationError, Scope.Scope>,
+    beforeActivation?: Effect.Effect<void, AntigravityInstallationError, Scope.Scope>,
     afterActivation?: Effect.Effect<void, AntigravityInstallationError>,
   ) => Effect.Effect<ProviderInstallState, AntigravityInstallationError>;
   readonly cancel: (
