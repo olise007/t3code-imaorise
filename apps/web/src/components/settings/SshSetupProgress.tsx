@@ -1,11 +1,21 @@
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { sshSetupProgress, type SshSetupAttempt } from "../../connection/sshSetupProgress";
 import { cancelSshEnvironmentSetup } from "../../connection/onboarding";
 import { Button } from "../ui/button";
+import { writeTextToClipboard } from "../../hooks/useCopyToClipboard";
+
+const views = new Map<
+  string,
+  { open: boolean; following: boolean; scrollTop: number; detailsOpen: boolean }
+>();
 
 function Attempt({ attempt }: { attempt: SshSetupAttempt }) {
-  const [open, setOpen] = useState(false);
-  const following = useRef(true);
+  const [open, setOpen] = useState(views.get(attempt.id)?.open ?? false);
+  const [error, setError] = useState<string | null>(null);
+  const view = useRef(
+    views.get(attempt.id) ?? { open: false, following: true, scrollTop: 0, detailsOpen: false },
+  );
+  views.set(attempt.id, view.current);
   return (
     <div className="space-y-2 rounded-md border border-border p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -14,7 +24,14 @@ function Attempt({ attempt }: { attempt: SshSetupAttempt }) {
           <span className="block text-xs text-muted-foreground">{attempt.lines.at(-1)?.text}</span>
         </p>
         <div className="flex gap-2">
-          <Button size="xs" variant="outline" onClick={() => setOpen(!open)}>
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => {
+              view.current.open = !open;
+              setOpen(!open);
+            }}
+          >
             {open ? "Hide progress" : "View progress"}
           </Button>
           {attempt.status === "running" ? (
@@ -22,7 +39,11 @@ function Attempt({ attempt }: { attempt: SshSetupAttempt }) {
               size="xs"
               variant="outline"
               onClick={() => {
-                void cancelSshEnvironmentSetup(attempt.target);
+                void cancelSshEnvironmentSetup(attempt.target).catch(() =>
+                  setError(
+                    "Could not confirm cancellation. Check the active setup before retrying.",
+                  ),
+                );
               }}
             >
               Cancel setup
@@ -45,16 +66,29 @@ function Attempt({ attempt }: { attempt: SshSetupAttempt }) {
                 </li>
               ))}
           </ol>
-          <details>
+          <details
+            open={view.current.detailsOpen}
+            onToggle={(event) => {
+              view.current.detailsOpen = event.currentTarget.open;
+              const pre = event.currentTarget.querySelector("pre");
+              if (pre && event.currentTarget.open)
+                pre.scrollTop = view.current.following ? pre.scrollHeight : view.current.scrollTop;
+            }}
+          >
             <summary className="cursor-pointer text-xs">Live details</summary>
             <pre
               className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs"
               onScroll={(event) => {
                 const view = event.currentTarget;
-                following.current = view.scrollHeight - view.scrollTop - view.clientHeight < 24;
+                const state = views.get(attempt.id)!;
+                state.following = view.scrollHeight - view.scrollTop - view.clientHeight < 24;
+                state.scrollTop = view.scrollTop;
               }}
               ref={(node) => {
-                if (node && following.current) node.scrollTop = node.scrollHeight;
+                if (node)
+                  node.scrollTop = view.current.following
+                    ? node.scrollHeight
+                    : view.current.scrollTop;
               }}
             >
               {attempt.truncated ? "[Earlier output truncated]\n" : ""}
@@ -67,8 +101,12 @@ function Attempt({ attempt }: { attempt: SshSetupAttempt }) {
             size="xs"
             variant="outline"
             onClick={() => {
-              void navigator.clipboard.writeText(
+              void writeTextToClipboard(
                 `${attempt.truncated ? "[Earlier output truncated]\n" : ""}${attempt.lines.map((line) => `${new Date(line.time).toISOString()} ${line.text}`).join("\n")}`,
+              ).catch(() =>
+                setError(
+                  "Could not copy the details. Select the text in Live details to copy it manually.",
+                ),
               );
             }}
           >
@@ -76,15 +114,24 @@ function Attempt({ attempt }: { attempt: SshSetupAttempt }) {
           </Button>
         </>
       ) : null}
+      {error ? (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
 
 export function SshSetupProgress() {
   const attempts = useSyncExternalStore(sshSetupProgress.subscribe, sshSetupProgress.snapshot);
+  useEffect(() => {
+    const ids = new Set(attempts.map((attempt) => attempt.id));
+    for (const id of views.keys()) if (!ids.has(id)) views.delete(id);
+  }, [attempts]);
   return (
     <div className="space-y-2">
-      {[...attempts].reverse().map((attempt) => (
+      {attempts.toReversed().map((attempt) => (
         <Attempt key={attempt.id} attempt={attempt} />
       ))}
     </div>

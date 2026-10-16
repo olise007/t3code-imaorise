@@ -457,6 +457,11 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
           message: "Ready—waiting for running work",
         }));
         yield* beforeActivation;
+        const destinationExecutable = yield* completedRelease(release.version);
+        yield* validate(destinationExecutable, release.version).pipe(
+          Effect.scoped,
+          Effect.timeout("90 seconds"),
+        );
         let activated = false;
         while (!activated) {
           yield* Deferred.await(idle);
@@ -489,9 +494,16 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
               );
               const previous = yield* fs.readFile(activePath).pipe(Effect.option);
               yield* fs.rename(pointer, activePath);
-              yield* validate(executable, release.version).pipe(
-                Effect.scoped,
-                Effect.timeout("90 seconds"),
+              yield* resolveManaged().pipe(
+                Effect.flatMap((activated) =>
+                  activated.version === release.version &&
+                  activated.executablePath === executable.executablePath
+                    ? Effect.void
+                    : installationError(
+                        "activate",
+                        "Could not verify the activated Codex selection.",
+                      ),
+                ),
                 Effect.andThen(afterActivation),
                 Effect.tapError(() =>
                   Option.isSome(previous)

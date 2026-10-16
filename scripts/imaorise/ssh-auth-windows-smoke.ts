@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - Hosted disposable OpenSSH authentication fixture.
+// @effect-diagnostics nodeBuiltinImport:off multipleEffectProvide:off - Hosted fixture composes the SSH layer with its platform dependencies.
 import * as NodeAssert from "node:assert/strict";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -46,15 +46,19 @@ const program = Effect.gen(function* () {
   const prompt = SshAuth.SshPasswordPrompt.of({
     isAvailable: true,
     request: (request) =>
-      Effect.sync(() => {
-        requests.push(request);
-        if (cancel) return null;
-        if (request.challenge === "host-key") {
-          NodeAssert.match(request.prompt, /SHA256:/);
-          return "yes";
-        }
-        return request.challenge === "key-passphrase" ? input.passphrase : input.password;
-      }),
+      Effect.logInfo(`SSH fixture challenge: ${request.challenge}`).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            requests.push(request);
+            if (cancel) return null;
+            if (request.challenge === "host-key") {
+              NodeAssert.match(request.prompt, /SHA256:/);
+              return "yes";
+            }
+            return request.challenge === "key-passphrase" ? input.passphrase : input.password;
+          }),
+        ),
+      ),
   });
   const authenticate = (target: DesktopSshEnvironmentTarget, secret?: string) =>
     service
@@ -62,7 +66,8 @@ const program = Effect.gen(function* () {
         testOnly: true,
         ...(secret === undefined ? {} : { authSecret: secret }),
       })
-      .pipe(Effect.provideService(SshAuth.SshPasswordPrompt, prompt));
+      .pipe(Effect.provideService(SshAuth.SshPasswordPrompt, prompt), Effect.timeout("35 seconds"));
+  yield* Effect.logInfo("SSH fixture: unfamiliar host and password");
   const first = yield* authenticate(target);
   NodeAssert.equal(first.httpBaseUrl, "");
   NodeAssert.ok(requests.some((request) => request.challenge === "host-key"));
@@ -72,6 +77,7 @@ const program = Effect.gen(function* () {
     manual: { ...target.manual!, profileId: "incorrect-password-fixture" },
   };
   yield* authenticate(retry, "incorrect-disposable-fixture-password");
+  yield* Effect.logInfo("SSH fixture: encrypted key");
   const key: DesktopSshEnvironmentTarget = {
     ...target,
     manual: {
@@ -83,6 +89,7 @@ const program = Effect.gen(function* () {
   yield* authenticate(key);
   NodeAssert.ok(requests.some((request) => request.challenge === "key-passphrase"));
   cancel = true;
+  yield* Effect.logInfo("SSH fixture: cancellation");
   const cancellation = yield* Effect.result(
     authenticate({
       ...target,

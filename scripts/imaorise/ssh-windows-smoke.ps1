@@ -100,7 +100,12 @@ Host t3-fixture
     $payload = @{ root=(Join-Path $fixtureRoot $shellLabel); port=$port; username=$authUsername; password=$authPassword; passphrase=$keyPassphrase; identity=$authIdentity; differentHostKey=(Get-Content "$differentHostKey.pub" -Raw).Trim() } | ConvertTo-Json -Compress
     $process.StandardInput.WriteLine($payload)
     $process.StandardInput.Close()
-    if (!$process.WaitForExit(120000)) { $process.Kill($true); throw 'Native SSH authentication fixture exceeded its deadline.' }
+    if (!$process.WaitForExit(120000)) {
+      $process.Kill($true)
+      $process.WaitForExit()
+      Write-Output (($stdout.Result + $stderr.Result).Replace($authPassword, '[redacted]').Replace($keyPassphrase, '[redacted]'))
+      throw 'Native SSH authentication fixture exceeded its deadline.'
+    }
     $details = ($stdout.Result + $stderr.Result).Replace($authPassword, '[redacted]').Replace($keyPassphrase, '[redacted]')
     Write-Output $details
     if ($process.ExitCode -ne 0) { throw 'Native SSH authentication fixture failed.' }

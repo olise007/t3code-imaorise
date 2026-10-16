@@ -1,3 +1,4 @@
+// @effect-diagnostics multipleEffectProvide:off - The catalog fixture supplies independently mocked service layers.
 import { expect, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";

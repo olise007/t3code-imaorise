@@ -197,6 +197,12 @@ export function ProviderVersions({
                 <div className="space-y-2 text-xs">
                   <p className="break-all">Source: {selected.source}</p>
                   <p className="break-all">Integrity: {selected.integrity}</p>
+                  {selected.dependencies?.map((dependency) => (
+                    <p key={dependency.name} className="break-all">
+                      Dependency: {dependency.name} {dependency.version} · {dependency.source} ·{" "}
+                      {dependency.integrity}
+                    </p>
+                  ))}
                   {selected.compatibility === "unknown" ? (
                     <p className="text-warning">
                       Compatibility with this T3 Code release has not been verified. Choosing this

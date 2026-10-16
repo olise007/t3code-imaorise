@@ -4,6 +4,7 @@ import {
   type ServerProviderUpdateInput,
   type ProviderVersionCatalogInput,
   type ProviderInstanceConfig,
+  type ServerProviderUpdatedPayload,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -13,12 +14,15 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
+import * as Fiber from "effect/Fiber";
+import * as Deferred from "effect/Deferred";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 import { PROVIDER_RECIPE_CATALOG } from "@t3tools/shared/providerInstallRecipes";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
+import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import * as ManagedProviderArchives from "./ManagedProviderArchives.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./providerMaintenanceRunner.ts";
@@ -43,18 +47,29 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
   const settings = yield* ServerSettings.ServerSettingsService;
   const config = yield* ServerConfig.ServerConfig;
   const codex = yield* CodexInstallation.CodexInstallation;
+  const antigravity = yield* AntigravityInstallation.AntigravityInstallation;
   const archives = yield* ManagedProviderArchives.ManagedProviderArchives;
   const providers = yield* ProviderRegistry.ProviderRegistry;
   const maintenance = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const locks = yield* KeyedLock.make<string>();
+  const scope = yield* Effect.scope;
+  const operations = new Map<
+    string,
+    Fiber.Fiber<ServerProviderUpdatedPayload, ServerProviderUpdateError>
+  >();
   const identify = Effect.fn("ProviderVersionManager.identify")(function* (
     instance: ProviderInstanceConfig,
   ) {
     const value = configObject(instance.config) ? instance.config : {};
     if (instance.driver === "codex" && value.setupMode === "managed")
       return { kind: "codex" as const, key: codex.managedDirectory, binary: null };
+    if (
+      instance.driver === "antigravity" &&
+      !(typeof value.binaryPath === "string" && value.binaryPath.trim())
+    )
+      return { kind: "antigravity" as const, key: antigravity.managedDirectory, binary: null };
     const command =
       typeof value.binaryPath === "string" && value.binaryPath.trim()
         ? value.binaryPath
@@ -71,6 +86,20 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
     if (!binary) return null;
     const real = yield* fs.realPath(binary).pipe(Effect.option);
     if (Option.isNone(real)) return null;
+    const antigRoot = yield* fs
+      .realPath(antigravity.managedDirectory)
+      .pipe(Effect.orElseSucceed(() => antigravity.managedDirectory));
+    if (real.value.startsWith(`${antigRoot}${path.sep}`)) {
+      const installed = yield* antigravity.resolve(real.value).pipe(Effect.option);
+      return {
+        kind:
+          Option.isSome(installed) && installed.value.managedVersionDirectory
+            ? ("antigravity" as const)
+            : ("unverified" as const),
+        key: antigravity.managedDirectory,
+        binary: real.value,
+      };
+    }
     const codexRoot = yield* fs
       .realPath(codex.managedDirectory)
       .pipe(Effect.orElseSucceed(() => codex.managedDirectory));
@@ -139,11 +168,26 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
               Effect.map((record) => record.version),
               Effect.orElseSucceed(() => null),
             )
-          : group.installation?.binary
-            ? path.basename(path.dirname(group.installation.binary))
-            : null;
+          : group.installation?.kind === "antigravity"
+            ? yield* antigravity.resolve().pipe(
+                Effect.map((value) => (value.managedVersionDirectory ? value.version : null)),
+                Effect.orElseSucceed(() => null),
+              )
+            : group.installation?.kind === "archive" && group.installation.binary
+              ? path.basename(path.dirname(group.installation.binary))
+              : null;
       return {
         ...result,
+        ...(group.installation?.kind === "unverified"
+          ? {
+              releases: result.releases.map((release) => ({
+                ...release,
+                available: false,
+                reason:
+                  "This executable is inside T3's tools directory, but its installation record could not be verified. Inspect the installation before changing it.",
+              })),
+            }
+          : {}),
         selectedVersion: selected,
         affectedInstances: group.affected.map((id) => group.entries[id]?.displayName || id),
       };
@@ -159,7 +203,7 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
           }),
       ),
     );
-  const update = (input: ServerProviderUpdateInput) =>
+  const runUpdate = (input: ServerProviderUpdateInput) =>
     Effect.gen(function* () {
       const instanceId = input.instanceId ?? ProviderInstanceId.make(input.provider);
       const initial = yield* describe({ ...input, instanceId });
@@ -310,6 +354,81 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
                       "The selected Codex version could not be activated.")
                     : "Codex installation did not finish.",
                 });
+            } else if (
+              selected.artifact!.kind === "antigravity" &&
+              installation.kind === "antigravity"
+            ) {
+              if (!antigravity.startVersion)
+                return yield* new ServerProviderUpdateError({
+                  provider: input.provider,
+                  reason: "Update T3 Code before choosing an Antigravity version.",
+                });
+              yield* archives.ensureCompatibleNode;
+              const asset = selected.artifact!.asset;
+              const activationError = (cause: unknown) =>
+                new AntigravityInstallation.AntigravityInstallationError({
+                  operation: "activate",
+                  detail:
+                    cause instanceof Error
+                      ? cause.message
+                      : "Provider settings changed; the previous selection was restored.",
+                });
+              const started = yield* antigravity.startVersion(
+                asset,
+                Effect.gen(function* () {
+                  yield* state("Ready—waiting for running work");
+                  yield* reserveProviderInstallationIdle(initial.affected);
+                  yield* verifySettings;
+                }).pipe(Effect.mapError(activationError)),
+                Effect.gen(function* () {
+                  const replacements: Record<string, ProviderInstanceConfig> = {};
+                  for (const id of initial.affected) {
+                    const previous = initial.entries[id]!;
+                    const value = configObject(previous.config) ? previous.config : {};
+                    if (typeof value.binaryPath === "string" && value.binaryPath.trim())
+                      replacements[id] = {
+                        ...previous,
+                        config: {
+                          ...value,
+                          binaryPath: path.join(
+                            antigravity.managedDirectory,
+                            "versions",
+                            asset.sha256,
+                            asset.executable.name,
+                          ),
+                        },
+                      };
+                  }
+                  if (Object.keys(replacements).length > 0) {
+                    if (!settings.activateProviderInstallation)
+                      return yield* activationError("Unsupported activation");
+                    yield* settings.activateProviderInstallation(
+                      initial.current.providerInstances,
+                      replacements,
+                    );
+                  }
+                }).pipe(Effect.mapError(activationError)),
+              );
+              const finished = yield* antigravity.changes.pipe(
+                Stream.filter(
+                  (value) =>
+                    value.operationId === started.operationId &&
+                    ["succeeded", "failed", "cancelled"].includes(value.phase),
+                ),
+                Stream.runHead,
+              );
+              if (
+                Option.isNone(finished) ||
+                finished.value.phase !== "succeeded" ||
+                finished.value.installedVersion !== input.targetVersion
+              )
+                return yield* new ServerProviderUpdateError({
+                  provider: input.provider,
+                  reason: Option.isSome(finished)
+                    ? (finished.value.message ??
+                      "The selected Antigravity version could not be activated.")
+                    : "Antigravity installation did not finish.",
+                });
             } else if (selected.artifact!.kind === "archive" && installation.kind === "archive") {
               if (!archives.prepare || !settings.activateProviderInstallation)
                 return yield* new ServerProviderUpdateError({
@@ -345,11 +464,11 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
                 reason:
                   "This installation cannot activate the selected artifact. Use its existing installer or provider instructions; T3 will not substitute a different runtime.",
               });
-            yield* providers.refresh(input.provider);
             yield* state(
               `Activated ${input.targetVersion}. Account credentials are unchanged.`,
               "succeeded",
             );
+            yield* providers.refresh(input.provider);
           }).pipe(
             Effect.tapError(() =>
               state(
@@ -370,6 +489,67 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
               cause instanceof Error
                 ? cause.message
                 : "Provider update failed; the previous selection was retained.",
+          }),
+      ),
+    );
+  const update = (input: ServerProviderUpdateInput) =>
+    Effect.gen(function* () {
+      const instanceId = input.instanceId ?? ProviderInstanceId.make(input.provider);
+      const current = yield* describe({ ...input, instanceId });
+      const key = current.installation?.key ?? `external:${instanceId}`;
+      const fiber = yield* locks.withLock(
+        `operation:${key}`,
+        Effect.gen(function* () {
+          if (operations.has(key))
+            return yield* new ServerProviderUpdateError({
+              provider: input.provider,
+              reason:
+                "An update is already running for this installation. View provider progress before starting another.",
+            });
+          const ready = yield* Deferred.make<void>();
+          const worker = yield* Deferred.await(ready).pipe(
+            Effect.andThen(runUpdate(input)),
+            Effect.onInterrupt(() =>
+              Effect.gen(function* () {
+                const snapshot = (yield* providers.getProviders).find(
+                  (provider) => provider.instanceId === instanceId,
+                );
+                if (snapshot?.updateState?.status === "succeeded") return;
+                yield* providers.setProviderMaintenanceActionState({
+                  instanceId,
+                  action: "update",
+                  state: {
+                    status: "failed",
+                    startedAt: null,
+                    finishedAt: null,
+                    message:
+                      "The update stopped before its completion status could be verified. Check the installed version before retrying.",
+                    output: null,
+                  },
+                });
+              }),
+            ),
+            Effect.ensuring(
+              Effect.sync(() => {
+                operations.delete(key);
+              }),
+            ),
+            Effect.forkIn(scope),
+          );
+          operations.set(key, worker);
+          yield* Deferred.succeed(ready, undefined);
+          return worker;
+        }),
+      );
+      // Closing a dialog or disconnecting this client leaves the approved operation running.
+      return yield* Fiber.join(fiber);
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ServerProviderUpdateError({
+            provider: input.provider,
+            reason:
+              cause instanceof Error ? cause.message : "Could not start this provider update.",
           }),
       ),
     );

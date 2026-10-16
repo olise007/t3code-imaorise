@@ -6,6 +6,7 @@ import { resolveNodeExecutable, nodeRuntimeUnavailableMessage } from "@t3tools/s
 import * as Clock from "effect/Clock";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -90,6 +91,11 @@ interface AntigravityInstallationService {
     environment?: NodeJS.ProcessEnv,
   ) => Effect.Effect<AntigravityExecutable, AntigravityInstallationError, Scope.Scope>;
   readonly start: Effect.Effect<ProviderInstallState, AntigravityInstallationError>;
+  readonly startVersion?: (
+    asset: AntigravityReleaseAsset,
+    beforeActivation: Effect.Effect<void, AntigravityInstallationError, Scope.Scope>,
+    afterActivation?: Effect.Effect<void, AntigravityInstallationError>,
+  ) => Effect.Effect<ProviderInstallState, AntigravityInstallationError>;
   readonly cancel: (
     operationId: string,
   ) => Effect.Effect<ProviderInstallState, AntigravityInstallationError>;
@@ -173,6 +179,8 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
   const activePath = path.join(managedDirectory, "active.json");
   const gate = yield* Semaphore.make(1);
   const leases = new Map<string, number>();
+  let idle = yield* Deferred.make<void>();
+  yield* Deferred.succeed(idle, undefined);
   let running: { readonly operationId: string; readonly fiber: Fiber.Fiber<void> } | undefined;
   const state = yield* SubscriptionRef.make<ProviderInstallState>({
     driver: DRIVER,
@@ -332,18 +340,22 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
         Effect.gen(function* () {
           const executable = yield* resolve(binaryPath, processEnvironment);
           const directory = executable.managedVersionDirectory;
-          if (directory) leases.set(directory, (leases.get(directory) ?? 0) + 1);
+          if (directory) {
+            if (leases.size === 0) idle = yield* Deferred.make<void>();
+            leases.set(directory, (leases.get(directory) ?? 0) + 1);
+          }
           return executable;
         }),
       ),
       (executable) =>
         gate.withPermit(
-          Effect.sync(() => {
+          Effect.gen(function* () {
             const directory = executable.managedVersionDirectory;
             if (!directory) return;
             const remaining = (leases.get(directory) ?? 1) - 1;
             if (remaining > 0) leases.set(directory, remaining);
             else leases.delete(directory);
+            if (leases.size === 0) yield* Deferred.succeed(idle, undefined);
           }),
         ),
     );
@@ -419,7 +431,15 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     );
 
   const install = Effect.fn("AntigravityInstallation.install")(
-    function* (asset: AntigravityReleaseAsset) {
+    function* (
+      asset: AntigravityReleaseAsset,
+      beforeActivation: Effect.Effect<
+        void,
+        AntigravityInstallationError,
+        Scope.Scope
+      > = Effect.void,
+      afterActivation: Effect.Effect<void, AntigravityInstallationError> = Effect.void,
+    ) {
       yield* resolveNodeExecutable("Antigravity", environment).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
@@ -435,28 +455,63 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
       const destination = path.join(versionsDirectory, asset.sha256);
       const activate = Effect.fn("AntigravityInstallation.activate")(
         function* () {
-          const pointerDirectory = yield* fs.makeTempDirectoryScoped({
-            directory: managedDirectory,
-            prefix: "active.json.",
-          });
-          const pointerPath = path.join(pointerDirectory, "contents.tmp");
-          yield* fs.writeFileString(
-            pointerPath,
-            yield* encodeActiveRelease({ releaseId: asset.sha256 }),
-            { flag: "wx", mode: 0o600 },
+          yield* beforeActivation;
+          const installed = yield* completedRelease(asset.sha256);
+          yield* validate(installed, asset.version).pipe(
+            Effect.scoped,
+            Effect.timeout(VALIDATION_TIMEOUT),
           );
-          yield* fs.rename(pointerPath, activePath);
-          // The pointer commits the install. Later temp cleanup cannot undo it.
-          yield* SubscriptionRef.update(
-            state,
-            (current) =>
-              ({
-                ...current,
-                phase: "succeeded",
-                installedVersion: asset.version,
-                message: null,
-              }) satisfies ProviderInstallState,
-          );
+          let activated = false;
+          while (!activated) {
+            yield* Deferred.await(idle);
+            activated = yield* gate.withPermit(
+              Effect.gen(function* () {
+                if (leases.size > 0) return false;
+                const pointerDirectory = yield* fs.makeTempDirectoryScoped({
+                  directory: managedDirectory,
+                  prefix: "active.json.",
+                });
+                const pointerPath = path.join(pointerDirectory, "contents.tmp");
+                yield* fs.writeFileString(
+                  pointerPath,
+                  yield* encodeActiveRelease({ releaseId: asset.sha256 }),
+                  { flag: "wx", mode: 0o600 },
+                );
+                const previous = yield* fs.readFile(activePath).pipe(Effect.option);
+                yield* fs.rename(pointerPath, activePath);
+                yield* completedRelease(asset.sha256).pipe(
+                  Effect.flatMap((activated) =>
+                    activated.version === asset.version
+                      ? Effect.void
+                      : installationError(
+                          "activate",
+                          "The activated Antigravity version could not be verified.",
+                        ),
+                  ),
+                  Effect.andThen(afterActivation),
+                  Effect.tapError(() =>
+                    Option.isSome(previous)
+                      ? fs
+                          .writeFile(pointerPath, previous.value, { mode: 0o600 })
+                          .pipe(Effect.andThen(fs.rename(pointerPath, activePath)))
+                      : fs.remove(activePath, { force: true }),
+                  ),
+                );
+                // The pointer commits the install. Later temp cleanup cannot undo it.
+                yield* SubscriptionRef.update(
+                  state,
+                  (current) =>
+                    ({
+                      ...current,
+                      phase: "succeeded",
+                      installedVersion: asset.version,
+                      message: null,
+                    }) satisfies ProviderInstallState,
+                );
+                return true;
+              }).pipe(Effect.uninterruptible),
+            );
+          }
         },
         Effect.scoped,
         Effect.mapError(
@@ -465,7 +520,6 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
             "Could not activate Antigravity. The previous runtime is unchanged. Check for locked files and try again.",
           ),
         ),
-        Effect.uninterruptible,
       );
 
       if (yield* fs.exists(destination)) {
@@ -701,66 +755,89 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     ),
   );
 
-  const start = gate
-    .withPermit(
-      Effect.gen(function* () {
-        const current = yield* SubscriptionRef.get(state);
-        if (isRunning(current)) return current;
-        if (!releaseAsset) {
-          return yield* installationError(
-            "start",
-            `Google does not publish an Antigravity runtime for ${platform}-${arch}. Use a supported remote environment or a custom executable.`,
+  const startRelease = (
+    asset: AntigravityReleaseAsset | null,
+    reuse = true,
+    beforeActivation: Effect.Effect<void, AntigravityInstallationError, Scope.Scope> = Effect.void,
+    afterActivation: Effect.Effect<void, AntigravityInstallationError> = Effect.void,
+  ) =>
+    gate
+      .withPermit(
+        Effect.gen(function* () {
+          const current = yield* SubscriptionRef.get(state);
+          if (isRunning(current)) return current;
+          if (reuse && (yield* fs.exists(activePath))) {
+            const active = yield* readRecord(activePath, ActiveRelease);
+            const selected = yield* completedRelease(active.releaseId);
+            const retained: ProviderInstallState = {
+              ...current,
+              phase: "succeeded",
+              version: selected.version,
+              installedVersion: selected.version,
+              executablePath: selected.executablePath,
+              source: "managed",
+              message: null,
+            };
+            yield* SubscriptionRef.set(state, retained);
+            return retained;
+          }
+          if (!asset) {
+            return yield* installationError(
+              "start",
+              `Google does not publish an Antigravity runtime for ${platform}-${arch}. Use a supported remote environment or a custom executable.`,
+            );
+          }
+          const operationId = yield* crypto.randomUUIDv4;
+          const next: ProviderInstallState = {
+            driver: DRIVER,
+            operationId,
+            phase: "downloading",
+            downloadedBytes: 0,
+            totalBytes: asset.archiveBytes,
+            version: asset.version,
+            installedVersion: current.installedVersion,
+            canRemove: current.canRemove,
+            message: "Downloading Google's official Antigravity runtime.",
+          };
+          yield* SubscriptionRef.set(state, next);
+          const work = install(asset, beforeActivation, afterActivation).pipe(
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit) && options.onFailure
+                ? options.onFailure(exit.cause)
+                : Effect.void,
+            ),
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit)
+                ? SubscriptionRef.update(state, (value) => {
+                    if (value.operationId !== operationId || value.phase === "succeeded")
+                      return value;
+                    const error = Cause.findErrorOption(exit.cause);
+                    const cancelled = Cause.hasInterruptsOnly(exit.cause);
+                    return {
+                      ...value,
+                      phase: cancelled ? "cancelled" : "failed",
+                      message: cancelled
+                        ? "Installation cancelled. The previous runtime is unchanged."
+                        : Option.isSome(error)
+                          ? error.value.detail
+                          : "Could not finish the Antigravity installation. Check disk space and directory access.",
+                    } satisfies ProviderInstallState;
+                  })
+                : Effect.void,
+            ),
+            Effect.ignoreCause,
+            Effect.ensuring(
+              Effect.sync(() => {
+                if (running?.operationId === operationId) running = undefined;
+              }),
+            ),
           );
-        }
-        const operationId = yield* crypto.randomUUIDv4;
-        const next: ProviderInstallState = {
-          driver: DRIVER,
-          operationId,
-          phase: "downloading",
-          downloadedBytes: 0,
-          totalBytes: releaseAsset.archiveBytes,
-          version: releaseAsset.version,
-          installedVersion: current.installedVersion,
-          canRemove: current.canRemove,
-          message: "Downloading Google's official Antigravity runtime.",
-        };
-        yield* SubscriptionRef.set(state, next);
-        const work = install(releaseAsset).pipe(
-          Effect.onExit((exit) =>
-            Exit.isFailure(exit) && options.onFailure ? options.onFailure(exit.cause) : Effect.void,
-          ),
-          Effect.onExit((exit) =>
-            Exit.isFailure(exit)
-              ? SubscriptionRef.update(state, (value) => {
-                  if (value.operationId !== operationId || value.phase === "succeeded")
-                    return value;
-                  const error = Cause.findErrorOption(exit.cause);
-                  const cancelled = Cause.hasInterruptsOnly(exit.cause);
-                  return {
-                    ...value,
-                    phase: cancelled ? "cancelled" : "failed",
-                    message: cancelled
-                      ? "Installation cancelled. The previous runtime is unchanged."
-                      : Option.isSome(error)
-                        ? error.value.detail
-                        : "Could not finish the Antigravity installation. Check disk space and directory access.",
-                  } satisfies ProviderInstallState;
-                })
-              : Effect.void,
-          ),
-          Effect.ignoreCause,
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (running?.operationId === operationId) running = undefined;
-            }),
-          ),
-        );
-        const fiber = yield* Effect.forkIn(Effect.interruptible(work), serviceScope);
-        running = { operationId, fiber };
-        return next;
-      }).pipe(Effect.uninterruptible),
-    )
-    .pipe(Effect.mapError(wrapFailure("start", "Could not start the Antigravity installation.")));
+          const fiber = yield* Effect.forkIn(Effect.interruptible(work), serviceScope);
+          running = { operationId, fiber };
+          return next;
+        }).pipe(Effect.uninterruptible),
+      )
+      .pipe(Effect.mapError(wrapFailure("start", "Could not start the Antigravity installation.")));
 
   const cancel = Effect.fn("AntigravityInstallation.cancel")(function* (operationId: string) {
     return yield* gate.withPermit(
@@ -864,7 +941,9 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
     managedDirectory,
     resolve,
     acquire,
-    start,
+    start: startRelease(releaseAsset),
+    startVersion: (asset, beforeActivation, afterActivation) =>
+      startRelease(asset, false, beforeActivation, afterActivation),
     cancel,
     state: SubscriptionRef.get(state),
     changes: SubscriptionRef.changes(state),

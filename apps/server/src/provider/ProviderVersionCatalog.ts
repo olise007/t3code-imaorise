@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import {
   providerArchiveRecipe,
+  NODE_PROVIDER_RUNTIME,
   type ProviderArchiveRecipe,
 } from "@t3tools/shared/providerInstallRecipes";
 import { compareSemverVersions } from "@t3tools/shared/semver";
@@ -286,6 +287,14 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
                   integrity: `sha256:${asset.sha256}`,
                   source: asset.url,
                   latestStable: false,
+                  dependencies: [
+                    {
+                      name: "Node.js, only if a compatible runtime is missing",
+                      version: NODE_PROVIDER_RUNTIME[host].version,
+                      source: NODE_PROVIDER_RUNTIME[host].url,
+                      integrity: NODE_PROVIDER_RUNTIME[host].integrity,
+                    },
+                  ],
                 },
                 { kind: "antigravity", asset },
               ),

@@ -121,7 +121,7 @@ export function ProviderVersions({
                 onPress={() =>
                   Alert.alert(
                     `Install ${release.version}?`,
-                    `${release.compatibility === "unknown" ? "Compatibility is unknown; this release may prevent agents from starting.\n\n" : ""}Affects ${data.affectedInstances.join(", ")}.\n\n${release.source}\n${release.integrity}`,
+                    `${release.compatibility === "unknown" ? "Compatibility is unknown; this release may prevent agents from starting.\n\n" : ""}Affects ${data.affectedInstances.join(", ")}.\n\n${release.source}\n${release.integrity}${release.dependencies?.map((dependency) => `\nDependency: ${dependency.name} ${dependency.version}\n${dependency.source}\n${dependency.integrity}`).join("") ?? ""}`,
                     [
                       { text: "Cancel", style: "cancel" },
                       {

@@ -984,6 +984,16 @@ export const ProviderVersionRelease = Schema.Struct({
   source: Schema.String,
   latestStable: Schema.Boolean,
   recommended: Schema.Boolean,
+  dependencies: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        version: Schema.String,
+        source: Schema.String,
+        integrity: Schema.String,
+      }),
+    ),
+  ),
 });
 export type ProviderVersionRelease = typeof ProviderVersionRelease.Type;
 export const ProviderVersionCatalog = Schema.Struct({
