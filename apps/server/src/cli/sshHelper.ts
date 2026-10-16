@@ -8,6 +8,7 @@ import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
 
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { Argument, Command } from "effect/cli";
 import * as SshManagedRuntime from "./sshManagedRuntime.ts";
 
@@ -144,6 +145,9 @@ const managedStop = Command.make("managed-stop", { key: Argument.String("key") }
     ),
   ),
 );
+const encodeManagedPairing = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ credential: Schema.String })),
+);
 const managedPair = Command.make("managed-pair", {
   key: Argument.String("key"),
   version: Argument.String("version"),
@@ -153,7 +157,7 @@ const managedPair = Command.make("managed-pair", {
       const service = yield* SshManagedRuntime.SshManagedRuntime;
       const result = yield* service.pair(key, version);
       yield* Effect.sync(() => {
-        process.stdout.write(JSON.stringify(result));
+        process.stdout.write(encodeManagedPairing(result));
       });
     }).pipe(Effect.provide(SshManagedRuntime.layer)),
   ),
