@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as NodeCrypto from "node:crypto";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
@@ -306,14 +307,26 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
       return yield* locks.withLock(
         installation.key,
         Effect.gen(function* () {
+          const startedAt = DateTime.formatIso(yield* DateTime.now);
+          const details: string[] = [];
           const state = (message: string, status: "running" | "failed" | "succeeded" = "running") =>
-            providers
-              .setProviderMaintenanceActionState({
+            Effect.gen(function* () {
+              const now = DateTime.formatIso(yield* DateTime.now);
+              const safe = sanitizeSetupOutput(message).slice(0, 8192);
+              details.push(`${now} ${safe}`);
+              while (details.length > 2000 || details.join("\n").length > 65536) details.shift();
+              yield* providers.setProviderMaintenanceActionState({
                 instanceId,
                 action: "update",
-                state: { status, startedAt: null, finishedAt: null, message, output: null },
-              })
-              .pipe(Effect.asVoid);
+                state: {
+                  status,
+                  startedAt,
+                  finishedAt: status === "running" ? null : now,
+                  message: safe,
+                  output: details.join("\n"),
+                },
+              });
+            });
           const verifySettings = Effect.gen(function* () {
             const checked = yield* catalog.resolve(
               input.provider,
@@ -703,7 +716,7 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
                     finishedAt: null,
                     message:
                       "The update stopped before its completion status could be verified. Check the installed version before retrying.",
-                    output: null,
+                    output: snapshot?.updateState?.output ?? null,
                   },
                 });
               }),

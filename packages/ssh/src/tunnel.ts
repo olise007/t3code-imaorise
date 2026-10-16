@@ -1227,6 +1227,7 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
     ),
   );
   const sshCommand = prepared.command;
+  yield* SshAuth.retainSshAuthenticationHelper(prepared.env, input.scope);
   const tunnelCommand = [sshCommand, ...args];
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { scope } = input;

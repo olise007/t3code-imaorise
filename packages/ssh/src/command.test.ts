@@ -15,6 +15,7 @@ import {
   getLastNonEmptyOutputLine,
   parseSshResolveOutput,
   remoteStateKey,
+  targetConnectionKey,
   runSshCommand,
 } from "./command.ts";
 import { SshCommandError } from "./errors.ts";
@@ -163,6 +164,43 @@ describe("ssh command", () => {
         "326264c4f08c8a0c",
       );
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "retains a manual server after profile edits while isolating local credentials and tunnels",
+    () =>
+      Effect.gen(function* () {
+        const first = {
+          alias: "Manual",
+          hostname: "192.0.2.1",
+          username: "user",
+          port: 22,
+          manual: {
+            profileId: "stable-profile",
+            name: "Before",
+            authentication: { type: "password" as const },
+          },
+        };
+        const edited = {
+          ...first,
+          hostname: "new-address.example",
+          executionSource: { type: "wsl" as const, distro: "Ubuntu" },
+          manual: {
+            ...first.manual,
+            name: "After",
+            authentication: { type: "key" as const, identityFile: "/home/user/.ssh/key" },
+          },
+        };
+        assert.equal(yield* remoteStateKey(first), yield* remoteStateKey(edited));
+        assert.notEqual(targetConnectionKey(first), targetConnectionKey(edited));
+        assert.notEqual(
+          yield* remoteStateKey(first),
+          yield* remoteStateKey({
+            ...first,
+            manual: { ...first.manual, profileId: "other-profile" },
+          }),
+        );
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("reads the last non-empty ssh output line", () =>

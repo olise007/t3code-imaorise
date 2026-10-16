@@ -189,7 +189,7 @@ it.layer(NodeServices.layer)("provider version activation", (it) => {
         ).pipe(Effect.forkChild);
         yield* Deferred.await(working);
         const request = yield* fixture.manager.update(input).pipe(
-          Effect.tapError((error) => Deferred.fail(fixture.ready, error)),
+          Effect.tapError((error) => Deferred.die(fixture.ready, error)),
           Effect.forkChild,
         );
         yield* Deferred.await(fixture.ready);

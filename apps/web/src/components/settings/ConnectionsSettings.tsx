@@ -3827,7 +3827,12 @@ export function ConnectionsSettings() {
             {sshAuthentication === "key" ? (
               <label className="block">
                 <span className="mb-1.5 block text-xs font-medium">
-                  Private key path in {sshSource.type === "wsl" ? sshSource.distro : "Windows"}
+                  Private key path in{" "}
+                  {sshSource.type === "wsl"
+                    ? sshSource.distro
+                    : desktopBridge?.getClientPlatform?.() === "win32"
+                      ? "Windows"
+                      : "this machine"}
                 </span>
                 <Input
                   value={sshIdentityFile}

@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Scope from "effect/Scope";
 
 import { SshPasswordPromptError } from "./errors.ts";
 import type { SshSetupApproval, SshSetupReview } from "@t3tools/contracts";
@@ -240,7 +241,15 @@ export const buildSshChildEnvironment = Effect.fn("ssh/auth.buildSshChildEnviron
         Effect.map(Option.getOrUndefined),
       );
   const directory = input.askpassDirectory ?? (yield* getDefaultSshAskpassDirectory());
-  const sshAskpass = yield* ensureSshAskpassHelpers({ directory });
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sshAskpass = yield* ensureSshAskpassHelpers({ directory }).pipe(
+    Effect.onExit((exit) =>
+      exit._tag === "Failure" && input.askpassDirectory === undefined
+        ? fs.remove(path.dirname(directory), { recursive: true, force: true }).pipe(Effect.ignore)
+        : Effect.void,
+    ),
+  );
 
   return {
     ...baseEnv,
@@ -252,6 +261,28 @@ export const buildSshChildEnvironment = Effect.fn("ssh/auth.buildSshChildEnviron
     ...(input.authSecret === undefined ? {} : { T3_SSH_AUTH_SECRET: input.authSecret ?? "" }),
     ...(platform === "win32" || baseEnv.DISPLAY || hostDisplay ? {} : { DISPLAY: "t3code" }),
   };
+});
+
+/** Remove only the temporary helper created by this operation after its SSH process exits. */
+export const retainSshAuthenticationHelper = Effect.fn("ssh/auth.retainHelper")(function* (
+  environment: NodeJS.ProcessEnv,
+  scope: Scope.Scope,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const helper = environment.SSH_ASKPASS;
+  if (!helper) return;
+  const directory = path.dirname(helper);
+  const parent = path.dirname(directory);
+  if (
+    path.basename(directory) !== SSH_ASKPASS_DIR_NAME ||
+    !path.basename(parent).startsWith("t3code-ssh-runtime-")
+  )
+    return;
+  yield* Scope.addFinalizer(
+    scope,
+    fs.remove(parent, { recursive: true, force: true }).pipe(Effect.ignore),
+  );
 });
 
 export function isSshAuthFailure(error: unknown): boolean {

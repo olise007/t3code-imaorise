@@ -11,7 +11,11 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { buildSshChildEnvironment, type SshAuthOptions } from "./auth.ts";
+import {
+  buildSshChildEnvironment,
+  retainSshAuthenticationHelper,
+  type SshAuthOptions,
+} from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
 import { createSetupDetails } from "./setupDetails.ts";
 
@@ -203,9 +207,13 @@ export const remoteStateKey = Effect.fn("ssh/command.remoteStateKey")(function* 
   target: DesktopSshEnvironmentTarget,
 ): Effect.fn.Return<string, never, Crypto.Crypto> {
   const crypto = yield* Crypto.Crypto;
-  const digest = yield* crypto
-    .digest("SHA-256", encoder.encode(targetConnectionKey(target)))
-    .pipe(Effect.orDie);
+  // Editing a manual profile's label, authentication or execution source must
+  // reconnect to its existing managed server. Local tunnel and credential keys
+  // still use the full target identity; remote state belongs to the stable profile.
+  const identity = target.manual
+    ? JSON.stringify(["manual", target.manual.profileId])
+    : targetConnectionKey(target);
+  const digest = yield* crypto.digest("SHA-256", encoder.encode(identity)).pipe(Effect.orDie);
   return Hex.encode(digest).slice(0, 16);
 });
 
@@ -357,6 +365,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
     ),
   );
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  yield* retainSshAuthenticationHelper(prepared.env, commandScope);
   const sshCommand = prepared.command;
   yield* Effect.logDebug("ssh.command.start", {
     ...sshTargetLogFields(target),
