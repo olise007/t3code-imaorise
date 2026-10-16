@@ -173,6 +173,7 @@ import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderL
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
+import { makeProviderVersionManager } from "./provider/ProviderVersionManager.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -1278,7 +1279,7 @@ const layerWsRpc = (
       const acpRegistryCatalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
       const acpRegistryRuntimeCoordinator =
         yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
-      const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
+      const providerVersionManager = yield* makeProviderVersionManager();
       const providerAuth = yield* ProviderAuthService.ProviderAuthService;
       const providerInstallation = yield* makeProviderInstallation();
       const desktopRuntime = yield* DesktopRuntimeManagement.DesktopRuntimeManagement;
@@ -2309,8 +2310,8 @@ const layerWsRpc = (
                   }),
             ),
           ),
-        [WS_METHODS.serverUpdateProvider]: (input) =>
-          providerMaintenanceRunner.updateProvider(input),
+        [WS_METHODS.serverUpdateProvider]: (input) => providerVersionManager.update(input),
+        [WS_METHODS.serverProviderVersions]: (input) => providerVersionManager.page(input),
         [WS_METHODS.providerConsumeResetCredit]: (input) =>
           Effect.gen(function* () {
             if ("sourceId" in input) return yield* usageLimitSources.consumeResetCredit(input);

@@ -81,7 +81,15 @@ const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
       ),
     ),
   );
-  return { installation, fs, baseDir, localBinaryPath, probeLog, downloads: () => downloads };
+  return {
+    installation,
+    fs,
+    baseDir,
+    localBinaryPath,
+    probeLog,
+    asset: { ...asset, sha256 },
+    downloads: () => downloads,
+  };
 });
 const terminalState = (installation: CodexInstallation.CodexInstallation["Service"]) =>
   installation.changes.pipe(
@@ -358,3 +366,42 @@ it("publishes complete packages for all supported platforms", () => {
       );
   expect(CodexInstallation.resolveCodexReleaseAsset("linux", "riscv64")).toBeNull();
 });
+
+it.effect(
+  "installs the explicitly selected artifact alongside a local CLI, then retains that managed selection",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ local: { version: "0.156.1" } });
+      yield* h.installation.startVersion!(h.asset, false);
+      expect((yield* terminalState(h.installation)).phase).toBe("succeeded");
+      expect(h.downloads()).toBe(1);
+      expect((yield* h.installation.resolve()).source).toBe("managed");
+      expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
+      const restarted = yield* makeHarness({ baseDir: h.baseDir, local: { version: "0.157.0" } });
+      expect((yield* restarted.installation.resolve()).source).toBe("managed");
+      expect((yield* restarted.installation.resolve()).version).toBe(h.asset.version);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("keeps the previous selection when activation approval fails", () =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness();
+    yield* h.installation.start;
+    yield* terminalState(h.installation);
+    const previous = yield* h.fs.readFileString(`${h.installation.managedDirectory}/active.json`);
+    yield* h.installation.startVersion!(
+      h.asset,
+      false,
+      Effect.fail(
+        new CodexInstallation.CodexInstallationError({
+          operation: "activate",
+          detail: "Settings changed during download",
+        }),
+      ),
+    );
+    expect((yield* terminalState(h.installation)).phase).toBe("failed");
+    expect(yield* h.fs.readFileString(`${h.installation.managedDirectory}/active.json`)).toBe(
+      previous,
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

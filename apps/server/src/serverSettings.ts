@@ -207,6 +207,11 @@ export class ServerSettingsService extends Context.Service<
       mutation: ProviderInstanceMutation,
       patch?: ServerSettingsPatch,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
+    /** Compare and activate one shared installation without overwriting concurrent edits. */
+    readonly activateProviderInstallation?: (
+      expected: Readonly<Record<string, ProviderInstanceConfig | undefined>>,
+      replacements: Readonly<Record<string, ProviderInstanceConfig>>,
+    ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 
     /** Run an effect against a settings snapshot while settings writes are paused. */
     readonly withSettingsSnapshot: <A, E, R>(
@@ -1226,6 +1231,32 @@ const make = Effect.gen(function* () {
           yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
           const patched = applyServerSettingsPatch(current, patch);
           return applyProviderInstanceMutation(patched, mutation);
+        }),
+      ),
+    activateProviderInstallation: (expected, replacements) =>
+      updateAndPersistSettings((current) =>
+        Effect.gen(function* () {
+          for (const [instanceId, previous] of Object.entries(expected)) {
+            if (!Equal.equals(current.providerInstances[instanceId], previous))
+              return yield* new ServerSettingsError({
+                settingsPath,
+                operation: "activate-provider-installation",
+                cause: new Error(
+                  "Provider settings changed during the download. Review the installation again.",
+                ),
+              });
+          }
+          let next = current;
+          for (const [id, instance] of Object.entries(replacements)) {
+            const mutation: ProviderInstanceMutation = {
+              operation: "upsert",
+              instanceId: ProviderInstanceId.make(id),
+              instance,
+            };
+            yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);
+            next = applyProviderInstanceMutation(next, mutation);
+          }
+          return next;
         }),
       ),
     withSettingsSnapshot,

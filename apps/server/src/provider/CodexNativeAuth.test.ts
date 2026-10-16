@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import { ProviderInstanceId, type ProviderAuthInteraction } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -93,7 +94,7 @@ it.effect.each(["codex-browser", "codex-device", "codex-existing"])(
       const interactions: ProviderAuthInteraction[] = [];
       const context = {
         flowId: "fixture-flow",
-        expiresAt: Date.now() + 60000,
+        expiresAt: (yield* Clock.currentTimeMillis) + 60000,
         verifying: Effect.void,
         setInteraction: (value: ProviderAuthInteraction) =>
           Effect.sync(() => {

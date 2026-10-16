@@ -1,6 +1,7 @@
 "use client";
 
 import { Spinner } from "~/components/ui/spinner";
+import { ProviderVersions } from "./ProviderVersions";
 
 import {
   AlertTriangleIcon,
@@ -1169,6 +1170,14 @@ export function ProviderInstanceCard({
   return (
     <>
       <SettingsSection title={displayName} icon={titleIconNode} headerAction={editorHeaderAction}>
+        {environmentId && !projectOverride ? (
+          <ProviderVersions
+            environmentId={environmentId}
+            instanceId={instanceId}
+            provider={instance.driver}
+            readOnly={readOnly}
+          />
+        ) : null}
         <SettingsRow
           title="Display name"
           status={

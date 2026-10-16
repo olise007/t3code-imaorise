@@ -78,7 +78,17 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
         auth: { status: "unauthenticated" as const },
       };
     const saved = yield* runtime.auth.read.pipe(Effect.orElseSucceed(() => Option.none()));
-    const nativeSelection = yield* runtime.native.read;
+    const nativeSelection = yield* runtime.native.read.pipe(
+      Effect.orElseSucceed(() => Option.some({ mode: "unavailable" as const, homePath: "" })),
+    );
+    if (Option.isSome(nativeSelection) && nativeSelection.value.mode === "unavailable")
+      return {
+        ...base,
+        installed: true,
+        models: [],
+        auth: { status: "unknown" as const },
+        message: "Could not read the selected sign-in method. Reconnect and try again.",
+      };
     if (Option.isSome(nativeSelection) && nativeSelection.value.mode === "disconnected")
       return {
         ...base,
@@ -104,6 +114,13 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
           }),
         ),
         Effect.scoped,
+        Effect.orElseSucceed(() => ({
+          ...base,
+          installed: true,
+          models: [],
+          auth: { status: "unknown" as const },
+          message: "Could not verify native Codex credentials. Retry or choose a sign-in method.",
+        })),
       );
     if (Option.isSome(saved) && !saved.value.scopes.includes("chatgpt.tokens.use.direct"))
       return {

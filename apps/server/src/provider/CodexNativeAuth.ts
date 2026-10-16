@@ -22,6 +22,9 @@ const Selection = Schema.Struct({
   mode: Schema.Literals(["native", "existing", "disconnected"]),
   homePath: Schema.String,
 });
+const encodeSelection = Schema.encodeEffect(Schema.fromJsonString(Selection));
+const decodeSelection = Schema.decodeUnknownEffect(Schema.fromJsonString(Selection));
+const isSetupError = Schema.is(ProviderSetupError);
 export const nativeCodexMethods = [
   {
     id: "codex-browser",
@@ -112,9 +115,7 @@ export const makeCodexNativeAuth = Effect.fn("makeCodexNativeAuth")(function* (o
     Effect.flatMap((bytes) =>
       Option.isNone(bytes)
         ? Effect.succeed(Option.none<typeof Selection.Type>())
-        : Schema.decodeUnknownEffect(Schema.fromJsonString(Selection))(
-            new TextDecoder().decode(bytes.value),
-          ).pipe(Effect.map(Option.some)),
+        : decodeSelection(new TextDecoder().decode(bytes.value)).pipe(Effect.map(Option.some)),
     ),
     Effect.mapError(() => fail("auth", "Could not read the selected Codex sign-in method.")),
   );
@@ -231,7 +232,7 @@ export const makeCodexNativeAuth = Effect.fn("makeCodexNativeAuth")(function* (o
             ? "The configured Codex home has no verified ChatGPT account. Sign in with Codex first, or choose browser or device-code login."
             : "Codex could not verify the new ChatGPT account.",
         );
-      const metadata = JSON.stringify({ mode: existing ? "existing" : "native", homePath });
+      const metadata = yield* encodeSelection({ mode: existing ? "existing" : "native", homePath });
       yield* selection.set(new TextEncoder().encode(metadata));
       activated = true;
     }).pipe(
@@ -253,7 +254,7 @@ export const makeCodexNativeAuth = Effect.fn("makeCodexNativeAuth")(function* (o
         Effect.provideService(Path.Path, path),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.mapError((cause) =>
-          cause instanceof ProviderSetupError
+          isSetupError(cause)
             ? cause
             : fail(
                 "auth",
@@ -267,7 +268,9 @@ export const makeCodexNativeAuth = Effect.fn("makeCodexNativeAuth")(function* (o
     logout: Effect.gen(function* () {
       if (Option.isNone(yield* read)) return false;
       yield* selection
-        .set(new TextEncoder().encode(JSON.stringify({ mode: "disconnected", homePath: "" })))
+        .set(
+          new TextEncoder().encode(yield* encodeSelection({ mode: "disconnected", homePath: "" })),
+        )
         .pipe(Effect.mapError(() => fail("logout", "Could not disconnect native Codex.")));
       return true;
     }),

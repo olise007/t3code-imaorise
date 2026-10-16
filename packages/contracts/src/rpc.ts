@@ -301,6 +301,8 @@ import {
   ServerConfig,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
+  ProviderVersionCatalogInput,
+  ProviderVersionCatalog,
   ServerLifecycleStreamEvent,
   ServerRemoveKeybindingInput,
   ServerRemoveKeybindingResult,
@@ -486,6 +488,7 @@ export const WS_METHODS = {
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
+  serverProviderVersions: "server.providerVersions",
   serverManageDesktopRuntime: "server.manageDesktopRuntime",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
@@ -645,6 +648,11 @@ const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, 
 const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
   payload: ServerProviderUpdateInput,
   success: ServerProviderUpdatedPayload,
+  error: Schema.Union([ServerProviderUpdateError, EnvironmentAuthorizationError]),
+});
+const WsServerProviderVersionsRpc = Rpc.make(WS_METHODS.serverProviderVersions, {
+  payload: ProviderVersionCatalogInput,
+  success: ProviderVersionCatalog,
   error: Schema.Union([ServerProviderUpdateError, EnvironmentAuthorizationError]),
 });
 
@@ -1913,6 +1921,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
+  WsServerProviderVersionsRpc,
   WsProviderConsumeResetCreditRpc,
   WsProviderAuthStartRpc,
   WsProviderAuthCompleteRpc,

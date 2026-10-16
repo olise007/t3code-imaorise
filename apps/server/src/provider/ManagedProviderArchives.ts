@@ -57,6 +57,7 @@ export class ManagedProviderArchives extends Context.Service<
     readonly changes: (driver: string) => Stream.Stream<ProviderInstallState>;
     readonly ensureNode: Effect.Effect<string, ProviderSetupError>;
     readonly ensureCompatibleNode: Effect.Effect<string, ProviderSetupError>;
+    readonly prepare?: (recipe: ProviderArchiveRecipe) => Effect.Effect<string, ProviderSetupError>;
   }
 >()("t3/provider/ManagedProviderArchives") {}
 
@@ -308,6 +309,7 @@ export const makeManagedProviderArchives = Effect.fn("ManagedProviderArchives.ma
     return yield* ensureNode;
   });
   return ManagedProviderArchives.of({
+    prepare: (recipe) => gate.withPermit(install(recipe)),
     ensureNode,
     ensureCompatibleNode,
     changes: (driver) =>

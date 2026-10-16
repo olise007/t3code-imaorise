@@ -961,8 +961,41 @@ export const ServerProviderUpdateInput = Schema.Struct({
   provider: ProviderDriverKind,
   targetVersion: Schema.optionalKey(TrimmedNonEmptyString),
   instanceId: Schema.optionalKey(ProviderInstanceId),
+  expectedIntegrity: Schema.optionalKey(TrimmedNonEmptyString),
+  allowUnknownCompatibility: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
+
+export const ProviderVersionCatalogInput = Schema.Struct({
+  provider: ProviderDriverKind,
+  instanceId: ProviderInstanceId,
+  page: Schema.Int.check(Schema.isBetween(1, 100)),
+  prereleases: Schema.Boolean,
+});
+export type ProviderVersionCatalogInput = typeof ProviderVersionCatalogInput.Type;
+export const ProviderVersionRelease = Schema.Struct({
+  version: Schema.String,
+  releasedAt: Schema.NullOr(Schema.String),
+  channel: Schema.Literals(["stable", "prerelease"]),
+  compatibility: Schema.String,
+  available: Schema.Boolean,
+  reason: Schema.NullOr(Schema.String),
+  integrity: Schema.NullOr(Schema.String),
+  source: Schema.String,
+  latestStable: Schema.Boolean,
+  recommended: Schema.Boolean,
+});
+export type ProviderVersionRelease = typeof ProviderVersionRelease.Type;
+export const ProviderVersionCatalog = Schema.Struct({
+  releases: Schema.Array(ProviderVersionRelease),
+  page: Schema.Number,
+  hasMore: Schema.Boolean,
+  installedVersion: Schema.NullOr(Schema.String),
+  selectedVersion: Schema.NullOr(Schema.String),
+  affectedInstances: Schema.Array(Schema.String),
+  message: Schema.NullOr(Schema.String),
+});
+export type ProviderVersionCatalog = typeof ProviderVersionCatalog.Type;
 
 export class ServerProviderUpdateError extends Schema.TaggedError<ServerProviderUpdateError>()(
   "ServerProviderUpdateError",

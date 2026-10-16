@@ -16,6 +16,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -657,6 +658,13 @@ export const makeAntigravityInstallation = Effect.fn("AntigravityInstallation.ma
         { flag: "wx", mode: 0o600 },
       );
       yield* fs.rename(pairDirectory, destination).pipe(
+        // Windows can retain a verified process's image briefly after exit.
+        // Retry only this owned staging rename; never replay the installer.
+        Effect.retry({
+          times: 8,
+          schedule: Schedule.spaced("250 millis"),
+          while: () => platform === "win32",
+        }),
         Effect.catch((cause) =>
           completedRelease(asset.sha256).pipe(
             Effect.flatMap((existing) =>

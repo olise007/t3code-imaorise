@@ -170,7 +170,7 @@ export function makeTargetedProviderUpdateAction(
   capabilities: ProviderMaintenanceCapabilities,
   version: string,
 ): ProviderMaintenanceCommandAction | null {
-  if (!/^\d+\.\d+\.\d+$/.test(version)) return null;
+  if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) return null;
   const update = capabilities.update;
   const packageName = capabilities.packageName;
   if (!update || !packageName) return null;
