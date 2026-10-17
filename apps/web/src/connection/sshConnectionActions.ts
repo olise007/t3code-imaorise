@@ -1,4 +1,5 @@
 import type { DesktopBridge, DesktopSshEnvironmentTarget } from "@t3tools/contracts";
+import { randomUUID } from "~/lib/utils";
 import { sshSetupOperations } from "./sshSetupOperations";
 import { sshServerLifecycle } from "./sshServerLifecycle";
 import { sshSetupProgress, sshSetupTargetKey } from "./sshSetupProgress";
@@ -147,7 +148,7 @@ export async function setSshConnectionEnabled(
     return input.setEnabled(false);
   }
   if (["starting", "stopping"].includes(sshServerLifecycle.read(target).state)) return false;
-  const id = crypto.randomUUID();
+  const id = randomUUID();
   let cancelled = false;
   const confirmation = new AbortController();
   let complete!: () => void;

@@ -54,7 +54,6 @@ it.effect(
                 ? Effect.succeed("T3_SSH_AUTH_OK\n")
                 : Deferred.await(script).pipe(
                     Effect.map((value) => {
-                      scripts.push(value);
                       if (value.includes("managed-start"))
                         return '{"remotePort":4773,"serverKind":"managed"}\n';
                       if (value.includes("managed-status"))
@@ -80,9 +79,11 @@ it.effect(
             stdout,
             stderr: Stream.empty,
             all: stdout,
-            stdin: Sink.forEach((bytes: Uint8Array) =>
-              Deferred.succeed(script, new TextDecoder().decode(bytes)),
-            ),
+            stdin: Sink.forEach((bytes: Uint8Array) => {
+              const value = new TextDecoder().decode(bytes);
+              scripts.push(value);
+              return Deferred.succeed(script, value);
+            }),
             exitCode: running
               ? Deferred.await(exit)
               : reply.pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),

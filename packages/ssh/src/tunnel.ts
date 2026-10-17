@@ -1952,7 +1952,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           reconnect &&
           requestOptions?.expectedEnvironmentId &&
           existing &&
-          (yield* existing.process.isRunning)
+          (yield* existing.process.isRunning.pipe(Effect.orElseSucceed(() => false)))
         ) {
           const healthy = yield* waitForHttpReady({
             baseUrl: existing.httpBaseUrl,

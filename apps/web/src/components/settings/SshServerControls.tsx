@@ -54,7 +54,10 @@ export function SshServerControls({
   const pending = state.state === "starting" || state.state === "stopping";
   async function perform(action: "start" | "stop") {
     if (pending || (action === "stop" && !(await confirmStop()))) return;
-    await runSshServerAction({ target, environmentId, label, bridge, setEnabled, notify }, action);
+    await runSshServerAction(
+      { target, ...(environmentId ? { environmentId } : {}), label, bridge, setEnabled, notify },
+      action,
+    );
   }
 
   const names = {

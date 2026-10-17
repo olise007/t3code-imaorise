@@ -136,7 +136,8 @@ if [ -n "$trust_paths" ]; then
       if [ -L "$original" ]; then printf 'Unreadable SSH trust file\n' >&2; exit 1; fi
       : > "$copy"
     fi
-    trust_files="$trust_files \"$copy\""
+    quoted=$(printf '%s' "$copy" | sed 's/\\/\\\\/g;s/"/\\"/g')
+    trust_files="$trust_files \"$quoted\""
     index=$((index + 1))
   done < "$helper/trust-paths"
   set -- -o "UpdateHostKeys=no" -o "UserKnownHostsFile=$trust_files" "$@"
@@ -467,8 +468,10 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
         preHostArgs: ["-G", ...(input.preHostArgs ?? [])],
         timeoutMs: 5_000,
       });
+      const sourceHome =
+        target.executionSource?.type === "wsl" ? undefined : yield* HostProcess.HomeDirectory;
       paths = yield* Effect.try({
-        try: () => userTrustPaths(config.stdout),
+        try: () => userTrustPaths(config.stdout, sourceHome),
         catch: (cause) =>
           new SshInvalidTargetError({
             message:
