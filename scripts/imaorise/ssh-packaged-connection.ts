@@ -41,6 +41,9 @@ export const verifyPackagedSshConnection = (input: {
       const ssh = yield* SshEnvironmentManager;
       const first = yield* ssh.ensureEnvironment(input.target, {
         purpose: "setup",
+        // Both Windows shell cases use the same disposable account. The prior
+        // case explicitly stopped its server; only this owned fixture resumes it.
+        resumeStoppedServer: true,
         issuePairingToken: true,
         ...(input.authSecret === undefined ? {} : { authSecret: input.authSecret }),
       });
