@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Stream from "effect/Stream";
 import type { RpcSession } from "../../packages/client-runtime/src/rpc/session.ts";
+import { sanitizeSetupOutput } from "../../packages/shared/src/setupDetails.ts";
 
 /** Real PTYs must not own the session, another terminal, or the managed server. */
 export const verifyTerminalIsolation = (session: RpcSession, config: ServerConfig) =>
@@ -30,31 +31,43 @@ export const verifyTerminalIsolation = (session: RpcSession, config: ServerConfi
         action: Effect.Effect<unknown, E>,
         matches: (event: TerminalAttachStreamEvent, output: string) => boolean,
       ) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const ready = yield* Deferred.make<void, Error>();
-            const matched = yield* Deferred.make<void, Error>();
-            let output = "";
-            yield* client[WS_METHODS.terminalObserve]({ threadId, terminalId }).pipe(
-              Stream.runForEach((event) =>
-                Effect.gen(function* () {
-                  if (event.type === "snapshot") yield* Deferred.succeed(ready, undefined);
-                  if (event.type === "output")
-                    output = NodeUtil.stripVTControlCharacters((output + event.data).slice(-32768));
-                  if (matches(event, output)) yield* Deferred.succeed(matched, undefined);
+        Effect.suspend(() => {
+          let output = "";
+          return Effect.scoped(
+            Effect.gen(function* () {
+              const ready = yield* Deferred.make<void, Error>();
+              const matched = yield* Deferred.make<void, Error>();
+              yield* client[WS_METHODS.terminalObserve]({ threadId, terminalId }).pipe(
+                Stream.runForEach((event) =>
+                  Effect.gen(function* () {
+                    if (event.type === "snapshot") yield* Deferred.succeed(ready, undefined);
+                    if (event.type === "output")
+                      output = NodeUtil.stripVTControlCharacters(
+                        (output + event.data).slice(-32768),
+                      );
+                    if (matches(event, output)) yield* Deferred.succeed(matched, undefined);
+                  }),
+                ),
+                Effect.catch((cause) => {
+                  const error = new Error("Terminal observation failed", { cause });
+                  return Effect.all([Deferred.fail(ready, error), Deferred.fail(matched, error)]);
                 }),
-              ),
-              Effect.catch((cause) => {
-                const error = new Error("Terminal observation failed", { cause });
-                return Effect.all([Deferred.fail(ready, error), Deferred.fail(matched, error)]);
-              }),
-              Effect.forkScoped,
-            );
-            yield* Deferred.await(ready);
-            yield* action;
-            yield* Deferred.await(matched);
-          }),
-        ).pipe(Effect.timeout("15 seconds"));
+                Effect.forkScoped,
+              );
+              yield* Deferred.await(ready);
+              yield* action;
+              yield* Deferred.await(matched);
+            }),
+          ).pipe(
+            Effect.timeout("15 seconds"),
+            Effect.mapError(
+              (cause) =>
+                new Error(
+                  `Terminal fixture ${terminalId}: ${sanitizeSetupOutput(cause instanceof Error ? cause.message : String(cause)).slice(-1000)}; output: ${sanitizeSetupOutput(output).slice(-2000)}`,
+                ),
+            ),
+          );
+        });
       const echo = (terminalId: string) => {
         const marker = `T3_TERMINAL_${NodeCrypto.randomUUID().replaceAll("-", "")}`;
         return observe(
@@ -63,6 +76,7 @@ export const verifyTerminalIsolation = (session: RpcSession, config: ServerConfi
           (_event, text) => text.split(/\r?\n/).some((line) => line.trim() === marker),
         );
       };
+      yield* Effect.logInfo("Terminal fixture: opening two independent PTYs.");
       const sidecar = yield* open("sidecar");
       if (!sidecar.pid) return yield* Effect.die("Second terminal did not receive an owned PID.");
       yield* Effect.addFinalizer(() =>
@@ -70,6 +84,7 @@ export const verifyTerminalIsolation = (session: RpcSession, config: ServerConfi
       );
       yield* echo("sidecar");
       for (let index = 0; index < 3; index++) {
+        yield* Effect.logInfo(`Terminal fixture: close/reopen cycle ${index + 1}.`);
         const terminalId = `closed-${index}`;
         yield* open(terminalId);
         yield* echo(terminalId);
@@ -86,6 +101,7 @@ export const verifyTerminalIsolation = (session: RpcSession, config: ServerConfi
         if (current.pid !== sidecar.pid)
           return yield* Effect.die("Closing a terminal replaced the unrelated terminal.");
       }
+      yield* Effect.logInfo("Terminal fixture: shell exit.");
       yield* open("shell-exit");
       yield* observe(
         "shell-exit",

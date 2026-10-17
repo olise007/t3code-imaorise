@@ -44,6 +44,7 @@ const start = async (resume: string) => {
   const line = result.stdout.trim().split(/\r?\n/).at(-1)!;
   return JSON.parse(line) as { remotePort: number };
 };
+let primaryFailure: Error | undefined;
 try {
   await verifyPackagedPtyHelper(executable);
   const first = await start("yes");
@@ -114,6 +115,10 @@ try {
   if (!blocked) throw new Error("Explicitly stopped packaged server restarted automatically.");
   console.log(`Verified packaged SSH supervisor lifecycle for ${version}.`);
 } catch (error) {
+  primaryFailure = new Error(
+    sanitizeSetupOutput(error instanceof Error ? error.message : String(error)),
+  );
+  console.error(`Packaged SSH fixture failed: ${primaryFailure.message}`);
   const folder = NodePath.join(home, ".t3-imaorise/ssh-managed/server");
   for (const name of ["server.log", "supervisor.log"])
     console.error(
@@ -122,8 +127,17 @@ try {
         () => "No launcher log.",
       ),
     );
-  throw new Error(sanitizeSetupOutput(error instanceof Error ? error.message : String(error)));
+  throw primaryFailure;
 } finally {
-  await run("__ssh-helper", "managed-stop", key).catch(() => {});
-  await NodeFSP.rm(home, { recursive: true, force: true });
+  await run("__ssh-helper", "managed-stop", key).catch((error) => {
+    console.error(sanitizeSetupOutput(`Owned fixture stop failed: ${String(error)}`).slice(-2000));
+  });
+  try {
+    await NodeFSP.rm(home, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+  } catch (error) {
+    if (!primaryFailure) throw error;
+    console.error(
+      sanitizeSetupOutput(`Owned fixture cleanup failed: ${String(error)}`).slice(-2000),
+    );
+  }
 }
