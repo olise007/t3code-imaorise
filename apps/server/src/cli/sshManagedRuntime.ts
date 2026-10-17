@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalTimers:off globalDateInEffect:off
 // This supervisor runs before the Effect server. Only its captured child can be stopped.
 import { makeManagedStop } from "./sshManagedStop.ts";
+import { windowsServerJobScript } from "./sshWindowsJob.ts";
 import { sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
 import { windowsSupervisorLaunchScript } from "./sshWindowsLaunch.ts";
 import * as NodeFSP from "node:fs/promises";
@@ -581,48 +582,71 @@ export async function superviseManagedSsh(key: string, version: string, platform
     });
   });
   const log = await NodeFSP.open(NodePath.join(NodePath.dirname(file), "server.log"), "a", 0o600);
+  const serverArgs = [
+    ...(NodeSea.isSea() ? [] : process.argv.slice(1, 2)),
+    "serve",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    String(serverPort),
+    "--base-dir",
+    home,
+  ];
+  const powershell = NodePath.join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const jobFile = NodePath.join(NodePath.dirname(file), "server-job.ps1");
+  if (platform === "win32") {
+    const commandLine = [process.execPath, ...serverArgs]
+      .map((arg) => `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, "$1$1")}"`)
+      .join(" ");
+    await NodeFSP.writeFile(
+      jobFile,
+      `\uFEFF${windowsServerJobScript(process.execPath, commandLine, home)}`,
+      { mode: 0o600 },
+    );
+  }
   const child = NodeChildProcess.spawn(
-    process.execPath,
-    [
-      ...(NodeSea.isSea() ? [] : process.argv.slice(1, 2)),
-      "serve",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(serverPort),
-      "--base-dir",
-      home,
-    ],
+    platform === "win32" ? powershell : process.execPath,
+    platform === "win32"
+      ? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", jobFile]
+      : serverArgs,
     {
       windowsHide: true,
-      stdio: ["ignore", log.fd, log.fd],
+      stdio: [platform === "win32" ? "pipe" : "ignore", log.fd, log.fd],
       env: { ...process.env, T3CODE_NO_BROWSER: "1" },
     },
   );
+  // The helper owns the Windows job handle; EOF also reaps its server tree.
+  child.stdin?.on("error", () => {});
   await log.close();
   const stopChild = async () => {
     if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
     if (platform === "win32") {
-      // Node's Windows SIGTERM terminates only the root process. This PID is
-      // captured from our spawn, never discovered from a saved record or name.
-      await new Promise<void>((resolve, reject) =>
-        NodeChildProcess.execFile(
-          NodePath.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
-          ["/PID", String(child.pid), "/T", "/F"],
-          { windowsHide: true, timeout: 10_000 },
-          (error, stdout, stderr) =>
-            error && child.exitCode === null && child.signalCode === null
-              ? reject(
-                  new Error(
-                    `Could not stop the owned Windows server process tree: ${sanitizeSetupOutput(stderr || stdout || error.message).slice(-1000)}`,
-                    {
-                      cause: error,
-                    },
-                  ),
-                )
-              : resolve(),
-        ),
-      );
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          child.off("exit", exited);
+          reject(
+            new Error("Owned Windows server job did not finish shutdown. Inspect its server log."),
+          );
+        }, 12_000);
+        const exited = (code: number | null) => {
+          clearTimeout(timer);
+          if (code === 0) resolve();
+          else
+            reject(
+              new Error(
+                `Owned Windows server job shutdown failed (exit ${code}). Inspect its server log.`,
+              ),
+            );
+        };
+        child.once("exit", exited);
+        child.stdin?.end("stop\n");
+      });
     } else {
       await new Promise<void>((resolve) => {
         child.once("exit", () => resolve());

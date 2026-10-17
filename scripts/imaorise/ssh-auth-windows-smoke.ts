@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off multipleEffectProvide:off - Hosted fixture composes the SSH layer with its platform dependencies.
+import { windowsServerJobScript } from "../../apps/server/src/cli/sshWindowsJob.ts";
 import { windowsSupervisorLaunchScript } from "../../apps/server/src/cli/sshWindowsLaunch.ts";
 import { verifyPackagedSshConnection } from "./ssh-packaged-connection.ts";
 import * as NodeAssert from "node:assert/strict";
@@ -241,24 +242,55 @@ const program = Effect.gen(function* () {
       stdin: script,
     });
   try {
-    const launched = yield* detached(
+    yield* detached(
       `$ready=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(readyName)})\ntry {\n${windowsSupervisorLaunchScript(powershell, commandLine, process.env.SystemRoot!)}\nif(!$ready.WaitOne(10000)){throw 'Detached child did not signal readiness'}\n} finally { $ready.Dispose() }\n`,
     );
     yield* detached(
       `$stop=[Threading.EventWaitHandle]::OpenExisting(${quote(stopName)}); try { if($stop.SafeWaitHandle.IsInvalid){throw 'Detached child was unavailable after SSH exit'} } finally { $stop.Dispose() }\n`,
     );
-    const capturedPid = /Detached supervisor PID (\d+)/.exec(launched.stdout)?.[1];
-    if (!capturedPid) return yield* Effect.die("Detached fixture did not return its captured PID");
     yield* detached(
-      `& (Join-Path $env:SystemRoot 'System32/taskkill.exe') /PID ${capturedPid} /T /F\nif($LASTEXITCODE -ne 0){throw 'Could not stop the captured fixture process tree'}\n`,
+      `$stop=[Threading.EventWaitHandle]::OpenExisting(${quote(stopName)}); try { [void]$stop.Set() } finally { $stop.Dispose() }\n`,
     );
-    yield* Effect.logInfo(
-      "Passed nonadministrator process survival and owned tree stop after SSH command exit.",
-    );
+    yield* Effect.logInfo("Passed nonadministrator process survival after SSH command exit.");
   } finally {
     yield* detached(
       `$stop=[Threading.EventWaitHandle]::OpenExisting(${quote(stopName)}); try { [void]$stop.Set() } finally { $stop.Dispose() }\n`,
     ).pipe(Effect.ignore);
+  }
+  for (const mode of ["stop", "eof"] as const) {
+    const rootLive = `Local\\T3Root${suffix}${mode}`;
+    const descendantLive = `Local\\T3Descendant${suffix}${mode}`;
+    const jobReady = `Local\\T3JobReady${suffix}${mode}`;
+    const descendant = `$live=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(descendantLive)}); try { $ready=[Threading.EventWaitHandle]::OpenExisting(${quote(jobReady)}); [void]$ready.Set(); $ready.Dispose(); [void]$live.WaitOne(60000) } finally { $live.Dispose() }`;
+    const root = `$live=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(rootLive)}); try { $info=[Diagnostics.ProcessStartInfo]::new(${quote(powershell)}); $info.UseShellExecute=$false; $info.Arguments='-NoProfile -NonInteractive -EncodedCommand ${Buffer.from(descendant, "utf16le").toString("base64")}'; $child=[Diagnostics.Process]::Start($info); [void]$live.WaitOne(60000) } finally { $live.Dispose() }`;
+    const serverCommand = `"${powershell}" -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(root, "utf16le").toString("base64")}`;
+    const jobScript = windowsServerJobScript(powershell, serverCommand, process.env.SystemRoot!);
+    yield* detached(`$ready=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(jobReady)})
+$file=Join-Path ([IO.Path]::GetTempPath()) '${suffix}-${mode}.ps1'
+$helper=$null
+try {
+  [IO.File]::WriteAllText($file,${quote(jobScript)},[Text.UTF8Encoding]::new($true))
+  $info=[Diagnostics.ProcessStartInfo]::new(${quote(powershell)})
+  $info.UseShellExecute=$false
+  $info.RedirectStandardInput=$true
+  $info.Arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$file+'"'
+  $helper=[Diagnostics.Process]::Start($info)
+  if(!$ready.WaitOne(15000)){throw 'Owned job descendant did not become ready'}
+  ${mode === "stop" ? "$helper.StandardInput.WriteLine('stop')" : "$helper.StandardInput.Close()"}
+  if(!$helper.WaitForExit(12000)){throw 'Owned job helper did not finish'}
+  if($helper.ExitCode -ne 0){throw 'Owned job helper failed'}
+  foreach($name in @(${quote(rootLive)},${quote(descendantLive)})) {
+    $remaining=$null
+    try { $remaining=[Threading.EventWaitHandle]::OpenExisting($name) } catch [Threading.WaitHandleCannotBeOpenedException] {}
+    if($remaining){$remaining.Dispose(); throw 'Owned server or descendant survived job shutdown'}
+  }
+} finally {
+  if($helper){$helper.StandardInput.Close(); [void]$helper.WaitForExit(12000); $helper.Dispose()}
+  $ready.Dispose()
+  Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+}
+`);
+    yield* Effect.logInfo(`Passed standard-user owned server/descendant job cleanup: ${mode}.`);
   }
   if (process.env.T3_SSH_FIXTURE_ARCHIVE && process.env.T3_SSH_FIXTURE_VERSION) {
     yield* verifyPackagedSshConnection({
