@@ -6,6 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import { expect, it } from "vite-plus/test";
+import { makeManagedStop } from "./sshManagedStop.ts";
 import { verifyBundledResourceMonitor } from "./sshManagedRuntime.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
@@ -173,4 +174,34 @@ it("refuses malformed ownership records instead of signalling a saved PID", asyn
   } finally {
     await NodeFSP.rm(home, { recursive: true, force: true });
   }
+});
+
+it("shares stop completion and retries failure without reporting success", async () => {
+  let attempts = 0;
+  let cleaned = 0;
+  let release!: () => void;
+  const completion = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const stop = makeManagedStop(
+    async () => {
+      attempts++;
+      if (attempts === 1) throw new Error("Owned process could not stop");
+      await completion;
+    },
+    async () => {
+      cleaned++;
+    },
+  );
+  const first = stop();
+  expect(stop()).toBe(first);
+  await expect(first).rejects.toThrow("Owned process could not stop");
+  expect(cleaned).toBe(0);
+  const retry = stop();
+  expect(stop()).toBe(retry);
+  expect(cleaned).toBe(0);
+  release();
+  await retry;
+  expect(attempts).toBe(2);
+  expect(cleaned).toBe(1);
 });

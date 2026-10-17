@@ -241,13 +241,20 @@ const program = Effect.gen(function* () {
       stdin: script,
     });
   try {
-    yield* detached(
+    const launched = yield* detached(
       `$ready=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(readyName)})\ntry {\n${windowsSupervisorLaunchScript(powershell, commandLine, process.env.SystemRoot!)}\nif(!$ready.WaitOne(10000)){throw 'Detached child did not signal readiness'}\n} finally { $ready.Dispose() }\n`,
     );
     yield* detached(
-      `$stop=[Threading.EventWaitHandle]::OpenExisting(${quote(stopName)}); try { if(!$stop.Set()){throw 'Detached child was unavailable after SSH exit'} } finally { $stop.Dispose() }\n`,
+      `$stop=[Threading.EventWaitHandle]::OpenExisting(${quote(stopName)}); try { if($stop.SafeWaitHandle.IsInvalid){throw 'Detached child was unavailable after SSH exit'} } finally { $stop.Dispose() }\n`,
     );
-    yield* Effect.logInfo("Passed nonadministrator process survival after SSH command exit.");
+    const capturedPid = /Detached supervisor PID (\d+)/.exec(launched.stdout)?.[1];
+    if (!capturedPid) return yield* Effect.die("Detached fixture did not return its captured PID");
+    yield* detached(
+      `& (Join-Path $env:SystemRoot 'System32/taskkill.exe') /PID ${capturedPid} /T /F\nif($LASTEXITCODE -ne 0){throw 'Could not stop the captured fixture process tree'}\n`,
+    );
+    yield* Effect.logInfo(
+      "Passed nonadministrator process survival and owned tree stop after SSH command exit.",
+    );
   } finally {
     yield* detached(
       `$stop=[Threading.EventWaitHandle]::OpenExisting(${quote(stopName)}); try { [void]$stop.Set() } finally { $stop.Dispose() }\n`,

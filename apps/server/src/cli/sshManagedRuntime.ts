@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalTimers:off globalDateInEffect:off
 // This supervisor runs before the Effect server. Only its captured child can be stopped.
+import { makeManagedStop } from "./sshManagedStop.ts";
+import { sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
 import { windowsSupervisorLaunchScript } from "./sshWindowsLaunch.ts";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -193,20 +195,25 @@ async function control(record: ManagedSshRecord, action: "health" | "stop") {
     headers: { Authorization: `Bearer ${record.token}` },
     signal: AbortSignal.timeout(action === "stop" ? 15_000 : 3000),
   });
-  if (!response.ok) throw new Error("Remote supervisor identity could not be verified.");
-  const result = (await response.json()) as {
+  const result = (await response.json().catch(() => null)) as {
+    error?: string;
     token?: string;
     executable?: string;
     version?: string;
     remotePort?: number;
     environmentId?: string;
-  };
+  } | null;
   if (
+    result === null ||
     result.token !== record.token ||
     result.executable !== record.executable ||
     result.version !== record.version
   )
     throw new Error("Remote supervisor identity changed.");
+  if (!response.ok)
+    throw new Error(
+      `Remote supervisor ${action} failed (HTTP ${response.status}): ${sanitizeSetupOutput(typeof result.error === "string" ? result.error : "No failure detail available.").slice(-1000)}`,
+    );
   return result;
 }
 
@@ -603,12 +610,15 @@ export async function superviseManagedSsh(key: string, version: string, platform
           NodePath.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"),
           ["/PID", String(child.pid), "/T", "/F"],
           { windowsHide: true, timeout: 10_000 },
-          (error) =>
+          (error, stdout, stderr) =>
             error && child.exitCode === null && child.signalCode === null
               ? reject(
-                  new Error("Could not stop the owned Windows server process tree.", {
-                    cause: error,
-                  }),
+                  new Error(
+                    `Could not stop the owned Windows server process tree: ${sanitizeSetupOutput(stderr || stdout || error.message).slice(-1000)}`,
+                    {
+                      cause: error,
+                    },
+                  ),
                 )
               : resolve(),
         ),
@@ -629,12 +639,12 @@ export async function superviseManagedSsh(key: string, version: string, platform
     version,
   };
   let environmentId: string | undefined;
-  let stopping = false;
   const cleanup = async () => {
     const current = await readRecord(key).catch(() => null);
     if (current?.token === record.token) await NodeFSP.unlink(file).catch(() => {});
     listener.close();
   };
+  const stop = makeManagedStop(stopChild, cleanup);
   child.once("error", () => {
     void cleanup();
   });
@@ -655,14 +665,21 @@ export async function superviseManagedSsh(key: string, version: string, platform
       return;
     }
     response.setHeader("Content-Type", "application/json");
-    if (request.url === "/stop" && !stopping) {
-      stopping = true;
-      void stopChild()
-        .then(() => cleanup())
+    if (request.url === "/stop") {
+      void stop()
         .then(() =>
           response.end(JSON.stringify({ ...record, remotePort: serverPort, environmentId })),
         )
-        .catch(() => response.writeHead(500).end());
+        .catch((error) =>
+          response.writeHead(500).end(
+            JSON.stringify({
+              ...record,
+              error: sanitizeSetupOutput(
+                error instanceof Error ? error.message : "Owned server shutdown failed.",
+              ).slice(-1000),
+            }),
+          ),
+        );
       return;
     }
     response.end(JSON.stringify({ ...record, remotePort: serverPort, environmentId }));
