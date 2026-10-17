@@ -11,6 +11,7 @@ import { type DesktopSshEnvironmentTarget } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 import * as Deferred from "effect/Deferred";
 import { sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
 
@@ -20,6 +21,7 @@ import { sshSetupProgress, sshSetupTargetKey } from "./sshSetupProgress";
 const onboardingScheduler = createAtomCommandScheduler();
 const setupCancellations = new Map<string, () => Promise<unknown>>();
 const setupKey = sshSetupTargetKey;
+const isConnectionTransientError = Schema.is(ConnectionTransientError);
 export const cancelSshEnvironmentSetup = async (target: DesktopSshEnvironmentTarget) => {
   await setupCancellations.get(setupKey(target))?.();
 };
@@ -158,7 +160,7 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
           ),
           Effect.timeout("80 seconds"),
           Effect.mapError((cause) =>
-            cause instanceof ConnectionTransientError
+            isConnectionTransientError(cause)
               ? cause
               : new ConnectionTransientError({
                   reason: "timeout",
@@ -187,7 +189,8 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
                   ? "Setup cancelled"
                   : sanitizeSetupOutput(
                       (() => {
-                        const error = Cause.squash(exit.cause);
+                        const error =
+                          exit._tag === "Failure" ? Cause.squash(exit.cause) : undefined;
                         return error instanceof Error
                           ? error.message
                           : "Setup failed; completed work is retained.";
