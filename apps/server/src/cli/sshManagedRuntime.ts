@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalTimers:off globalDateInEffect:off
 // This supervisor runs before the Effect server. Only its captured child can be stopped.
+import { windowsSupervisorLaunchScript } from "./sshWindowsLaunch.ts";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeOS from "node:os";
@@ -399,8 +400,8 @@ export async function startManagedSsh(
       key,
       version,
     ];
-    // Windows OpenSSH may reap the entire SSH job. WMI starts the supervisor
-    // outside that job without installing a service or requiring elevation.
+    // OpenSSH permits explicit job breakaway. Avoid WMI, which standard SSH
+    // users may not access, and never inherit the SSH session's pipe handles.
     const powershell = NodePath.join(
       process.env.SystemRoot ?? "C:\\Windows",
       "System32",
@@ -413,7 +414,7 @@ export async function startManagedSsh(
       const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
       await NodeFSP.writeFile(
         launchFile,
-        `\uFEFF$ErrorActionPreference='Stop'\n$env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath\n& ${quote(process.execPath)} ${args.map(quote).join(" ")} *>> ${quote(NodePath.join(NodePath.dirname(file), "supervisor.log"))}\n`,
+        `\uFEFF$ErrorActionPreference='Stop'\n$ProgressPreference='SilentlyContinue'\n$env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath\n& ${quote(process.execPath)} ${args.map(quote).join(" ")} *>> ${quote(NodePath.join(NodePath.dirname(file), "supervisor.log"))}\n`,
         { mode: 0o600 },
       );
     }
@@ -428,7 +429,11 @@ export async function startManagedSsh(
     ]
       .map((arg) => `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, "$1$1")}"`)
       .join(" ");
-    const launchPowerShell = `$ErrorActionPreference='Stop'; $env:PSModulePath=(Join-Path $PSHOME 'Modules')+';'+$env:PSModulePath; $settings=New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{CreateFlags=[uint32]16778240;ShowWindow=[uint16]0;EnvironmentVariables=[string[]]@([Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object { $_.Key+'='+$_.Value })}; $r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ProcessStartupInformation=$settings;CommandLine='${commandLine.replaceAll("'", "''")}'}; if($r.ReturnValue -ne 0){throw ('Could not detach SSH supervisor: '+$r.ReturnValue)}; Write-Output ('Detached supervisor PID '+$r.ProcessId);`;
+    const launchPowerShell = windowsSupervisorLaunchScript(
+      powershell,
+      commandLine,
+      NodeOS.homedir(),
+    );
     let spawnError: Error | undefined;
     if (platform === "win32") {
       await new Promise<void>((resolve, reject) => {

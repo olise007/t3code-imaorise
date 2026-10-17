@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off multipleEffectProvide:off - Hosted fixture composes the SSH layer with its platform dependencies.
+import { windowsSupervisorLaunchScript } from "../../apps/server/src/cli/sshWindowsLaunch.ts";
 import { verifyPackagedSshConnection } from "./ssh-packaged-connection.ts";
 import * as NodeAssert from "node:assert/strict";
 import * as NodeFSP from "node:fs/promises";
@@ -21,6 +22,7 @@ import {
 } from "../../packages/ssh/src/bundledRuntime.ts";
 import { runtimeRequirements } from "../../packages/ssh/src/prerequisites.ts";
 import * as Effect from "effect/Effect";
+import * as Crypto from "effect/Crypto";
 import * as Layer from "effect/Layer";
 import type { DesktopSshEnvironmentTarget } from "../../packages/contracts/src/ipc.ts";
 
@@ -213,6 +215,44 @@ const program = Effect.gen(function* () {
   );
   NodeAssert.equal(cancellation._tag, "Failure");
   cancel = false;
+  // Named events prove that the child survives a completed SSH command without
+  // requiring the standard account to read the runner's Node installation.
+  const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+  const suffix = (yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie)).replaceAll(
+    "-",
+    "",
+  );
+  const readyName = `Local\\T3Ready${suffix}`;
+  const stopName = `Local\\T3Stop${suffix}`;
+  const childScript = `$stop=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(stopName)}); try { $ready=[Threading.EventWaitHandle]::OpenExisting(${quote(readyName)}); [void]$ready.Set(); $ready.Dispose(); [void]$stop.WaitOne(60000) } finally { $stop.Dispose() }`;
+  const powershell = NodePath.join(
+    process.env.SystemRoot!,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const commandLine = `"${powershell}" -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(childScript, "utf16le").toString("base64")}`;
+  const detached = (script: string) =>
+    runSshCommand(target, {
+      interactiveAuth: true,
+      authSecret: input.password,
+      remoteCommandArgs: powershellFileArgs(),
+      stdin: script,
+    });
+  try {
+    yield* detached(
+      `$ready=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(readyName)})\ntry {\n${windowsSupervisorLaunchScript(powershell, commandLine, process.env.SystemRoot!)}\nif(!$ready.WaitOne(10000)){throw 'Detached child did not signal readiness'}\n} finally { $ready.Dispose() }\n`,
+    );
+    yield* detached(
+      `$stop=[Threading.EventWaitHandle]::OpenExisting(${quote(stopName)}); try { if(!$stop.Set()){throw 'Detached child was unavailable after SSH exit'} } finally { $stop.Dispose() }\n`,
+    );
+    yield* Effect.logInfo("Passed nonadministrator process survival after SSH command exit.");
+  } finally {
+    yield* detached(
+      `$stop=[Threading.EventWaitHandle]::OpenExisting(${quote(stopName)}); try { [void]$stop.Set() } finally { $stop.Dispose() }\n`,
+    ).pipe(Effect.ignore);
+  }
   if (process.env.T3_SSH_FIXTURE_ARCHIVE && process.env.T3_SSH_FIXTURE_VERSION) {
     yield* verifyPackagedSshConnection({
       target,
