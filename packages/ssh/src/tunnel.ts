@@ -17,7 +17,7 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -2193,7 +2193,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             if (!runtime)
               return {
                 state: "unknown" as const,
-                checkedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+                checkedAt: DateTime.formatIso(yield* DateTime.now),
                 detail: "No attested runtime is available. Repair this connection explicitly.",
               };
             const stateKey = yield* remoteStateKey(resolved);

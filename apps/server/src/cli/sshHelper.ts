@@ -151,7 +151,9 @@ const managedStatus = Command.make("managed-status", { key: Argument.String("key
     Effect.gen(function* () {
       const service = yield* SshManagedRuntime.SshManagedRuntime;
       const result = yield* service.status(key);
-      const output = Schema.encodeSync(Schema.fromJsonString(DesktopSshServerStatusSchema))(result);
+      const output = yield* Schema.encodeEffect(
+        Schema.fromJsonString(DesktopSshServerStatusSchema),
+      )(result);
       yield* Effect.sync(() => process.stdout.write(output));
     }).pipe(Effect.provide(SshManagedRuntime.layer)),
   ),

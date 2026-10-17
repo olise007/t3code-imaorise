@@ -22,7 +22,7 @@ import * as SshTunnel from "@t3tools/ssh/tunnel";
 import * as Context from "effect/Context";
 import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
-import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as Option from "effect/Option";
@@ -342,9 +342,9 @@ export const make = Effect.gen(function* () {
     serverStatus: (target) =>
       (
         manager.serverStatus?.(target) ??
-        Effect.map(Clock.currentTimeMillis, (now) => ({
+        Effect.map(DateTime.now, (now) => ({
           state: "unknown" as const,
-          checkedAt: new Date(now).toISOString(),
+          checkedAt: DateTime.formatIso(now),
         }))
       ).pipe(
         Effect.provide(SshAuth.SshPasswordPrompt.disabledLayer),

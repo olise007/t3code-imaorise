@@ -298,3 +298,80 @@ it.each(["cancellation failure", "disable failure"])(
     }
   },
 );
+
+it("coalesces repeated Stop confirmations without cancelling the first stop", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const target = { alias: "repeat-stop", hostname: "192.0.2.5", username: "user", port: 22 };
+  let state = "running";
+  let finish!: () => void;
+  const confirms: (() => void)[] = [];
+  const confirm = () =>
+    new Promise<boolean>((resolve) => {
+      confirms.push(() => resolve(true));
+    });
+  const stop = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = () => {
+          state = "stopped";
+          resolve();
+        };
+      }),
+  );
+  const cancel = vi.fn().mockResolvedValue(undefined);
+  const bridge = {
+    stopSshEnvironment: stop,
+    cancelSshSetup: cancel,
+    sshServerStatus: vi.fn(async () => ({
+      state,
+      environmentId: "repeat-stop",
+      checkedAt: "2026-10-17T12:00:00Z",
+    })),
+  } as unknown as DesktopBridge;
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => {
+      root.render(
+        <SshServerControls
+          target={target}
+          environmentId="repeat-stop"
+          label="Fixture"
+          bridge={bridge}
+          setEnabled={async () => true}
+          confirmStop={confirm}
+          notify={() => {}}
+        />,
+      );
+    });
+    const button = Array.from(container.querySelectorAll("button")).find(
+      (node) => node.textContent === "Stop remote server…",
+    )!;
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    expect(confirms).toHaveLength(2);
+    await act(async () => {
+      confirms[0]!();
+    });
+    expect(stop).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      confirms[1]!();
+    });
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish();
+    });
+    expect(container.textContent).toContain("Remote server: Stopped");
+  } finally {
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+    sshServerLifecycle.forgetEnvironment("repeat-stop", [target]);
+    vi.unstubAllGlobals();
+  }
+});

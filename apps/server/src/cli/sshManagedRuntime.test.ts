@@ -128,7 +128,9 @@ it("reuses an authenticated supervisor after its launching command exits and sto
     await expect(run("start", key, "2.0.2-newer")).rejects.toThrow("identity differs");
     await NodeFSP.rm(descriptorFile);
     expect(JSON.parse(await NodeFSP.readFile(file, "utf8"))).toEqual(record);
-    await expect(run("stop", key, "wrong-environment")).rejects.toThrow("identity changed");
+    await expect(run("stop", key, "--environment-id", "wrong-environment")).rejects.toThrow(
+      "identity changed",
+    );
     await expect(run("resume", key, "2.0.1-test", "wrong-environment")).rejects.toThrow(
       "identity changed",
     );

@@ -36,6 +36,7 @@ import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -221,7 +222,7 @@ export const provisionDesktopSshEnvironment = Effect.fn(
   if (bootstrap.serverState === "stopped") {
     sshServerLifecycle.observe(target, {
       state: "stopped",
-      checkedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+      checkedAt: DateTime.formatIso(yield* DateTime.now),
     });
     return yield* new ConnectionBlockedError({
       reason: "configuration",
@@ -359,7 +360,7 @@ const layerCapabilities = Layer.effectContext(
         if (bootstrap.serverState === "stopped") {
           sshServerLifecycle.observe(input.target, {
             state: "stopped",
-            checkedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+            checkedAt: DateTime.formatIso(yield* DateTime.now),
           });
           return yield* new ConnectionBlockedError({
             reason: "configuration",

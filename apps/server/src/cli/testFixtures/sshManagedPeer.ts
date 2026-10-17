@@ -74,7 +74,8 @@ if (args[0] === "serve") {
     else if (args[0] === "pair")
       console.log(JSON.stringify(await pairManagedSsh(args[1]!, args[2]!)));
     else if (args[0] === "status") console.log(JSON.stringify(await statusManagedSsh(args[1]!)));
-    else if (args[0] === "stop") await stopManagedSsh(args[1]!, args[2]);
+    else if (args[0] === "stop")
+      await stopManagedSsh(args[1]!, args[2] === "--environment-id" ? args[3] : undefined);
     else if (args[0] === "__ssh-helper" && args[1] === "supervise")
       await superviseManagedSsh(args[2]!, args[3]!, Effect.runSync(HostProcess.Platform));
     else throw new Error("Unknown fixture operation");

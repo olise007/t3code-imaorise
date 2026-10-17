@@ -307,7 +307,7 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
       };
     }).pipe(
       Effect.mapError((cause) =>
-        cause instanceof ServerProviderUpdateError
+        Schema.is(ServerProviderUpdateError)(cause)
           ? cause
           : new ServerProviderUpdateError({
               provider: input.provider,

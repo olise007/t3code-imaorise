@@ -54,7 +54,20 @@ export function SshServerControls({
   const pending = state.state === "starting" || state.state === "stopping";
   async function perform(action: "start" | "stop") {
     if (pending || (action === "stop" && !(await confirmStop()))) return;
-    await sshSetupOperations.cancel(target);
+    const busy = () => ["starting", "stopping"].includes(sshServerLifecycle.read(target).state);
+    if (busy()) return;
+    try {
+      await sshSetupOperations.cancel(target);
+    } catch (error) {
+      sshServerLifecycle.observe(target, {
+        state: "unknown",
+        checkedAt: new Date().toISOString(),
+        detail:
+          error instanceof Error ? error.message : "Could not cancel the active SSH operation.",
+      });
+      return;
+    }
+    if (busy()) return;
     const id = sshSetupProgress.begin(target);
     let cancelled = false;
     let complete!: () => void;

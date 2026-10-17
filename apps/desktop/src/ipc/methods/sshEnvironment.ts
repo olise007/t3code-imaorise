@@ -34,7 +34,7 @@ import { SshHttpBridgeError } from "@t3tools/ssh/errors";
 import { resolveLoopbackSshHttpBaseUrl } from "@t3tools/ssh/tunnel";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
 import * as IpcChannels from "../channels.ts";
@@ -158,9 +158,9 @@ export const sshServerStatus = DesktopIpc.makeIpcMethod({
       DesktopSshEnvironment.DesktopSshEnvironment,
       (service) =>
         service.serverStatus?.(target) ??
-        Effect.map(Clock.currentTimeMillis, (now) => ({
+        Effect.map(DateTime.now, (now) => ({
           state: "unknown" as const,
-          checkedAt: new Date(now).toISOString(),
+          checkedAt: DateTime.formatIso(now),
         })),
     ),
 });

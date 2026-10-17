@@ -479,6 +479,7 @@ export const DesktopDiscoveredSshHostSchema = Schema.Struct({
 });
 
 export interface DesktopSshEnvironmentBootstrap {
+  serverState?: "stopped";
   selectedProviders?: readonly string[];
   target: DesktopSshEnvironmentTarget;
   httpBaseUrl: string;

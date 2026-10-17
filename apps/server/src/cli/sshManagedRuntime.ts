@@ -15,6 +15,7 @@ import * as NodeModule from "node:module";
 import * as Context from "effect/Context";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { PROVIDER_RECIPE_CATALOG } from "@t3tools/shared/providerInstallRecipes";
@@ -314,7 +315,7 @@ export async function pairManagedSsh(key: string, version: string) {
 export async function statusManagedSsh(
   key: string,
 ): Promise<import("@t3tools/contracts").DesktopSshServerStatus> {
-  const checkedAt = new Date().toISOString();
+  const checkedAt = DateTime.formatIso(DateTime.nowUnsafe());
   const record = await readRecord(key);
   const stopped = await NodeFSP.stat(`${recordPath(key)}.stopped`).then(
     () => true,

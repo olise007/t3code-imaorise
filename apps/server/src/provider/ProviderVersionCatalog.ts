@@ -207,13 +207,13 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
     );
   };
   const publicError = (provider: ProviderDriverKind, cause: unknown) =>
-    cause instanceof CatalogFetchError
+    Schema.is(CatalogFetchError)(cause)
       ? new ServerProviderUpdateError({
           provider,
           reason: `Could not load versions from ${cause.message}`,
           cause,
         })
-      : cause instanceof ServerProviderUpdateError
+      : Schema.is(ServerProviderUpdateError)(cause)
         ? cause
         : error(provider);
   const classify = Effect.fn("ProviderVersionCatalog.classify")(function* (

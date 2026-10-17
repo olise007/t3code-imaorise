@@ -1547,6 +1547,12 @@ function SavedBackendListRow({
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const environmentId = environment.environmentId;
+  useEffect(() => {
+    for (const route of connectionRoutes(environment.entry)) {
+      if (Option.isSome(route.profile) && route.profile.value._tag === "SshConnectionProfile")
+        sshServerLifecycle.bind(route.profile.value.target, environmentId);
+    }
+  }, [environment.entry, environmentId]);
   const unsupported = environment.connection.phase === "unsupported";
   const enabled = environment.entry.enabled && !unsupported;
   const isConnected = environment.connection.phase === "connected";

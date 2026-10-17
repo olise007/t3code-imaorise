@@ -10,7 +10,7 @@ export interface SshServerState {
   readonly lastConfirmedState?: "running" | "stopped";
   readonly lastConfirmedAt?: string;
   readonly checkedAt?: string;
-  readonly error?: string;
+  readonly error?: string | undefined;
   readonly environmentId?: string;
 }
 const unknown: SshServerState = { state: "unknown", stopIntent: false, cached: false };
