@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - Execute the source-owned shell helper against disposable files, without connecting to a host.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import * as NodeOS from "node:os";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
@@ -47,4 +52,81 @@ it.effect("refuses WSL profiles on another operating system instead of falling b
     );
     assert.equal(result._tag, "Failure");
   }).pipe(Effect.provide(NodeServices.layer), Effect.provideService(HostProcess.Platform, "linux")),
+);
+
+it.effect(
+  "WSL readonly trust copies preserve records and leave no source trust directory or helpers",
+  () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return; // The hosted Windows fixture covers native OpenSSH.
+      const root = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-source-trust-")),
+      );
+      try {
+        const original = NodePath.join(root, "source trust");
+        const contents = "@revoked host ssh-ed25519 revoked\n";
+        yield* Effect.promise(() => NodeFSP.writeFile(original, contents));
+        const observer = NodePath.join(root, "observe.cjs");
+        yield* Effect.promise(() =>
+          NodeFSP.writeFile(
+            observer,
+            `#!${process.execPath}
+const fs=require('node:fs');const arg=process.argv.find(x=>x.startsWith('UserKnownHostsFile='));const file=arg.match(/"([^"]+)"/)[1];process.stdout.write(JSON.stringify({file,contents:fs.readFileSync(file,'utf8')}));`,
+            { mode: 0o700 },
+          ),
+        );
+        const prepared = yield* prepareSshSpawn(
+          { ...target, executionSource: { type: "wsl", distro: "Fixture" } },
+          [observer],
+          { readOnlyTrustPaths: [original] },
+        );
+        const input = Buffer.concat(
+          Array.from(yield* Stream.runCollect(prepared.stdin), (chunk) => Buffer.from(chunk)),
+        );
+        const script = prepared.args[prepared.args.indexOf("-lc") + 1]!;
+        const result = NodeChildProcess.spawnSync("sh", ["-c", script, "t3-ssh", observer], {
+          input,
+          env: { ...process.env, HOME: root },
+          encoding: "utf8",
+          timeout: 5_000,
+        });
+        assert.equal(result.status, 0, result.stderr);
+        const observation = JSON.parse(result.stdout) as { file: string; contents: string };
+        assert.equal(observation.contents, contents);
+        const inspection = NodeChildProcess.spawnSync(
+          "sh",
+          ["-c", script, "t3-ssh", "/bin/true", "-G"],
+          {
+            input: "\n\n\n",
+            env: { ...process.env, HOME: root },
+            encoding: "utf8",
+            timeout: 5_000,
+          },
+        );
+        assert.equal(inspection.status, 0, inspection.stderr);
+        assert.equal(inspection.stdout, `t3sourcehomedir ${root}\n`);
+        assert.equal(yield* Effect.promise(() => NodeFSP.readFile(original, "utf8")), contents);
+        assert.isFalse(
+          yield* Effect.promise(() =>
+            NodeFSP.access(observation.file).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        );
+        assert.isFalse(
+          yield* Effect.promise(() =>
+            NodeFSP.access(NodePath.join(root, ".t3-imaorise")).then(
+              () => true,
+              () => false,
+            ),
+          ),
+        );
+      } finally {
+        yield* Effect.promise(() => NodeFSP.rm(root, { recursive: true, force: true }));
+      }
+    }).pipe(
+      Effect.provide(NodeServices.layer),
+      Effect.provideService(HostProcess.Platform, "win32"),
+    ),
 );

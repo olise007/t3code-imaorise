@@ -102,6 +102,7 @@ umask 077
 inspection=false
 for arg do if [ "$arg" = "-G" ]; then inspection=true; fi; done
 if [ -z "$trust_paths" ] && [ "$inspection" = false ]; then mkdir -p "$HOME/.t3-imaorise/ssh"; fi
+if [ "$inspection" = true ]; then printf 't3sourcehomedir %s\n' "$HOME"; fi
 helper=$(mktemp -d)
 cleanup() { rm -rf "$helper"; }
 trap cleanup EXIT HUP INT TERM
@@ -469,7 +470,12 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
         timeoutMs: 5_000,
       });
       const sourceHome =
-        target.executionSource?.type === "wsl" ? undefined : yield* HostProcess.HomeDirectory;
+        target.executionSource?.type === "wsl"
+          ? config.stdout
+              .split(/\r?\n/)
+              .find((line) => line.startsWith("t3sourcehomedir "))
+              ?.slice(16)
+          : yield* HostProcess.HomeDirectory;
       paths = yield* Effect.try({
         try: () => userTrustPaths(config.stdout, sourceHome),
         catch: (cause) =>

@@ -16,6 +16,12 @@ it("fails closed when OpenSSH erased custom path boundaries", () => {
   expect(userTrustPaths("userknownhostsfile NUL\n")).toEqual(["NUL"]);
   expect(
     userTrustPaths(
+      "t3sourcehomedir /home/distro user\nuserknownhostsfile /home/distro user/.ssh/known_hosts /home/distro user/.ssh/known_hosts2\n",
+      "/home/distro user",
+    ),
+  ).toEqual(["/home/distro user/.ssh/known_hosts", "/home/distro user/.ssh/known_hosts2"]);
+  expect(
+    userTrustPaths(
       "userknownhostsfile C:/Users/Test User/.ssh/known_hosts C:/Users/Test User/.ssh/known_hosts2\n",
       "C:\\Users\\Test User",
     ),
