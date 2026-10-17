@@ -442,6 +442,7 @@ it.effect(
               httpBaseUrl: "http://localhost:1234/",
               wsBaseUrl: "ws://localhost:1234/",
               selectedProviders: ["codex"],
+              pairingToken: "fixture-pairing",
             },
           });
         },

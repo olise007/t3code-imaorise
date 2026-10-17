@@ -12,6 +12,7 @@ import {
   bootstrapRemoteBearerSession,
   resolveRemoteWebSocketConnectionUrl,
 } from "../../packages/client-runtime/src/authorization/remote.ts";
+import { fetchRemoteEnvironmentDescriptor } from "../../packages/client-runtime/src/environment/descriptor.ts";
 import * as Driver from "../../packages/client-runtime/src/connection/driver.ts";
 import * as Resolver from "../../packages/client-runtime/src/connection/resolver.ts";
 import {
@@ -44,11 +45,11 @@ export const verifyPackagedSshConnection = (input: {
         ...(input.authSecret === undefined ? {} : { authSecret: input.authSecret }),
       });
       yield* Effect.addFinalizer(() => ssh.stopEnvironment(input.target).pipe(Effect.ignore));
-      const descriptor = yield* Effect.tryPromise(() =>
-        fetch(new URL("/.well-known/t3/environment", first.httpBaseUrl)).then(
-          (response) => response.json() as Promise<{ environmentId: string }>,
-        ),
-      );
+      const descriptor = yield* fetchRemoteEnvironmentDescriptor({
+        httpBaseUrl: first.httpBaseUrl,
+      });
+      const context =
+        yield* Effect.context<Effect.Services<ReturnType<typeof ssh.ensureEnvironment>>>();
       const target = new SshConnectionTarget({
         environmentId: EnvironmentId.make(descriptor.environmentId),
         label: "Packaged SSH fixture",
@@ -85,6 +86,7 @@ export const verifyPackagedSshConnection = (input: {
               httpAuthorization: { _tag: "Bearer" as const, token: access.access_token },
             };
           }).pipe(
+            Effect.provideContext(context),
             Effect.mapError(
               (cause) =>
                 new ConnectionTransientError({

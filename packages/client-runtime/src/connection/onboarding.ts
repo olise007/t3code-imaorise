@@ -299,11 +299,7 @@ export const registerSshConnection = Effect.fn(
     return yield* differentMachineError(registration.target.label);
   }
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-  yield* Effect.uninterruptible(
-    Effect.gen(function* () {
-      yield* registry.register(registration, input.onRegistration);
-    }),
-  );
+  yield* Effect.uninterruptible(registry.register(registration, input.onRegistration));
   return registration.target.environmentId;
 });
 

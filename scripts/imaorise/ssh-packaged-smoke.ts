@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalConsole:off - Hosted process fixture uses Node subprocess APIs and reports sanitized evidence.
 // Disposable hosted-runner acceptance of the actual bundled executable.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
