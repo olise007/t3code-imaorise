@@ -79,11 +79,19 @@ export const verifyTerminalIsolation = (session: RpcSession, config: ServerConfi
           );
         });
       const echo = (terminalId: string) => {
-        const marker = `T3_TERMINAL_${NodeCrypto.randomUUID().replaceAll("-", "")}`;
+        const nonce = NodeCrypto.randomUUID().replaceAll("-", "");
+        const marker = `T3_TERMINAL_${nonce}`;
+        // ConPTY renders progress and output with cursor moves rather than
+        // newline-delimited records. Keep the complete marker out of the typed
+        // command so seeing it anywhere still proves the shell executed it.
+        const command =
+          config.environment.platform.os === "windows"
+            ? `Write-Output ('T3_TERMINAL_' + '${nonce}')\r`
+            : `printf '%s%s\\n' 'T3_TERMINAL_' '${nonce}'\r`;
         return observe(
           terminalId,
-          client[WS_METHODS.terminalWrite]({ threadId, terminalId, data: `echo ${marker}\r` }),
-          (_event, text) => text.split(/\r?\n/).some((line) => line.trim() === marker),
+          client[WS_METHODS.terminalWrite]({ threadId, terminalId, data: command }),
+          (_event, text) => text.includes(marker),
         );
       };
       yield* Effect.logInfo("Terminal fixture: opening two independent PTYs.");
