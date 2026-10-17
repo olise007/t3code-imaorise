@@ -19,6 +19,7 @@ import {
   SshConnectionTarget,
   ConnectionTransientError,
 } from "../../packages/client-runtime/src/connection/model.ts";
+import { appendOrchestrationProtocol } from "../../packages/client-runtime/src/connection/compatibility.ts";
 import * as RpcSession from "../../packages/client-runtime/src/rpc/session.ts";
 import { SshEnvironmentManager } from "../../packages/ssh/src/tunnel.ts";
 
@@ -85,7 +86,7 @@ export const verifyPackagedSshConnection = (input: {
               environmentId: target.environmentId,
               label: target.label,
               httpBaseUrl: bootstrap.httpBaseUrl,
-              socketUrl,
+              socketUrl: appendOrchestrationProtocol(socketUrl),
               httpAuthorization: { _tag: "Bearer" as const, token: access.access_token },
             };
           }).pipe(

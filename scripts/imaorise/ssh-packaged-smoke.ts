@@ -12,6 +12,7 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as Socket from "effect/socket/Socket";
 import { EnvironmentId } from "../../packages/contracts/src/index.ts";
 import { SshConnectionTarget } from "../../packages/client-runtime/src/connection/model.ts";
+import { appendOrchestrationProtocol } from "../../packages/client-runtime/src/connection/compatibility.ts";
 import * as RpcSession from "../../packages/client-runtime/src/rpc/session.ts";
 import {
   bootstrapRemoteBearerSession,
@@ -81,7 +82,7 @@ try {
               environmentId: EnvironmentId.make(identity.environmentId),
               label: "Packaged SSH fixture",
               httpBaseUrl,
-              socketUrl,
+              socketUrl: appendOrchestrationProtocol(socketUrl),
               httpAuthorization: { _tag: "Bearer", token: access.access_token },
             });
             yield* session.ready;
