@@ -9,8 +9,18 @@ import {
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 import type { RpcSession } from "../../packages/client-runtime/src/rpc/session.ts";
 import { sanitizeSetupOutput } from "../../packages/shared/src/setupDetails.ts";
+
+class TerminalFixtureError extends Schema.TaggedError<TerminalFixtureError>()(
+  "TerminalFixtureError",
+  { detail: Schema.String },
+) {
+  override get message() {
+    return this.detail;
+  }
+}
 
 /** Real PTYs must not own the session, another terminal, or the managed server. */
 export const verifyTerminalIsolation = (session: RpcSession, config: ServerConfig) =>
@@ -62,9 +72,9 @@ export const verifyTerminalIsolation = (session: RpcSession, config: ServerConfi
             Effect.timeout("15 seconds"),
             Effect.mapError(
               (cause) =>
-                new Error(
-                  `Terminal fixture ${terminalId}: ${sanitizeSetupOutput(cause instanceof Error ? cause.message : String(cause)).slice(-1000)}; output: ${sanitizeSetupOutput(output).slice(-2000)}`,
-                ),
+                new TerminalFixtureError({
+                  detail: `Terminal fixture ${terminalId}: ${sanitizeSetupOutput(cause instanceof Error ? cause.message : String(cause)).slice(-1000)}; output: ${sanitizeSetupOutput(output).slice(-2000)}`,
+                }),
             ),
           );
         });
