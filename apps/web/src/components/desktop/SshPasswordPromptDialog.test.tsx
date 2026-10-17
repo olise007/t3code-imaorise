@@ -127,20 +127,18 @@ const button = (label: string) =>
   [...document.querySelectorAll<HTMLButtonElement>("button")].find(
     (node) => node.textContent === label,
   )!;
-it("requires explicit approval and submits only selected available providers", async () => {
+it("requires explicit control-server approval without selecting agent CLIs", async () => {
   await present();
   expect(document.body.textContent).toContain("libatomic.so.1");
   expect(document.body.textContent).toContain("sudo apt-get install");
   expect(resolveReview).not.toHaveBeenCalled();
-  const boxes = document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
-  expect(boxes[1]!.disabled).toBe(true);
-  await act(async () => boxes[0]!.click());
-  expect(document.body.textContent).toContain("Install verified Codex 0.156.1");
+  expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+  expect(document.body.textContent).toContain("Agent CLI installation and sign-in are separate");
   await act(async () => button("Approve and continue").click());
   expect(resolveReview).toHaveBeenCalledWith("prompt-1", {
     reviewId: "review-1",
     approved: true,
-    providers: ["codex"],
+    providers: [],
   });
   expect(resolvePassword).not.toHaveBeenCalled();
   expect(document.body.textContent).not.toContain("Review remote setup");

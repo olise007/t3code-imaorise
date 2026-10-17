@@ -46,13 +46,10 @@ export interface PairingConnectionInput {
 }
 
 export interface SshConnectionInput {
-  /** One-shot setup continuation. Never persisted or replayed on reconnect. */
-  readonly afterRegistration?: (
-    environmentId: EnvironmentId,
-    selectedProviders: readonly string[],
-  ) => Effect.Effect<void, ConnectionAttemptError>;
   readonly target: DesktopSshEnvironmentTarget;
   readonly label?: string;
+  /** Runs atomically with registry registration so cancellation can clean up its own route. */
+  readonly onRegistration?: (cancel: Effect.Effect<void>) => Effect.Effect<void>;
   /** Set when adding a route to a saved machine; see `PairingConnectionInput`. */
   readonly expectedEnvironmentId?: EnvironmentId;
 }
@@ -285,16 +282,16 @@ const prepareSshRegistrationWithSetup = Effect.fn(
         : { setupWarnings: provisioned.bootstrap.setupWarnings }),
     }),
   });
-  return { registration, selectedProviders: provisioned.bootstrap.selectedProviders ?? [] };
+  return { registration };
 });
 
 export const prepareSshRegistration = (input: SshConnectionInput) =>
   prepareSshRegistrationWithSetup(input).pipe(Effect.map((result) => result.registration));
 
-const registerSshConnection = Effect.fn(
+export const registerSshConnection = Effect.fn(
   "clientRuntime.connection.onboarding.registerSshConnection",
 )(function* (input: SshConnectionInput) {
-  const { registration, selectedProviders } = yield* prepareSshRegistrationWithSetup(input);
+  const { registration } = yield* prepareSshRegistrationWithSetup(input);
   if (
     input.expectedEnvironmentId !== undefined &&
     registration.target.environmentId !== input.expectedEnvironmentId
@@ -302,9 +299,11 @@ const registerSshConnection = Effect.fn(
     return yield* differentMachineError(registration.target.label);
   }
   const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-  yield* registry.register(registration);
-  if (selectedProviders.length && input.afterRegistration)
-    yield* input.afterRegistration(registration.target.environmentId, selectedProviders);
+  yield* Effect.uninterruptible(
+    Effect.gen(function* () {
+      yield* registry.register(registration, input.onRegistration);
+    }),
+  );
   return registration.target.environmentId;
 });
 

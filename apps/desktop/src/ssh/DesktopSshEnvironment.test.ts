@@ -4,6 +4,8 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NetService from "@t3tools/shared/Net";
 import { SshPasswordPromptError } from "@t3tools/ssh/errors";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -127,6 +129,63 @@ describe("sshEnvironment", () => {
         ),
       ),
   );
+  it.effect("cancels only the matching operation and acknowledges cleanup before retry", () =>
+    Effect.gen(function* () {
+      const home = yield* makeTempHomeDir();
+      const entered = yield* Deferred.make<void>();
+      let calls = 0;
+      let cleaned = false;
+      const target = { alias: "fixture", hostname: "192.0.2.10", username: "fixture", port: 22 };
+      const manager = SshTunnel.SshEnvironmentManager.of({
+        ensureEnvironment: (target) =>
+          Effect.gen(function* () {
+            calls++;
+            if (calls === 1)
+              return yield* Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    cleaned = true;
+                  }),
+                ),
+              );
+            return { target, httpBaseUrl: "", wsBaseUrl: "", pairingToken: null };
+          }),
+        disconnectEnvironment: () => Effect.void,
+        stopEnvironment: () => Effect.void,
+      });
+      const service = yield* DesktopSshEnvironment.make.pipe(
+        Effect.provideService(SshTunnel.SshEnvironmentManager, manager),
+        Effect.provideService(DesktopSshPasswordPrompts.DesktopSshPasswordPrompts, {
+          request: () => Effect.die("Unexpected prompt"),
+          resolve: () => Effect.die("Unexpected resolution"),
+        }),
+        Effect.provideService(HostProcess.HomeDirectory, home),
+      );
+      const first = yield* service
+        .ensureEnvironment(target, { operationId: "first" })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* service.cancelSetup(target, "obsolete");
+      assert.isFalse(cleaned);
+      const duplicate = yield* service
+        .ensureEnvironment(target, { operationId: "second" })
+        .pipe(Effect.result);
+      assert.equal(duplicate._tag, "Failure");
+      assert.equal(calls, 1);
+      yield* service.cancelSetup(target, "first");
+      yield* Fiber.await(first);
+      assert.isTrue(cleaned);
+      yield* service.ensureEnvironment(target, { operationId: "second" });
+      assert.equal(calls, 2);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, NetService.layer),
+      ),
+    ),
+  );
+
   it("keeps prompt presentation diagnostics distinct from the legacy wrapper message", () => {
     const cause = new DesktopSshPasswordPrompts.DesktopSshPromptPresentationError({
       requestId: "prompt-1",

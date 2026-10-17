@@ -110,6 +110,12 @@ jobs:
           tar -xzf release-cli/*.tar.gz -C /tmp/personal-runtime-smoke
           python3 scripts/imaorise/smoke-background-runtime.py "/tmp/personal-runtime-smoke/t3-$RELEASE_VERSION-linux-x64/t3"
           node scripts/imaorise/ssh-packaged-smoke.ts "/tmp/personal-runtime-smoke/t3-$RELEASE_VERSION-linux-x64/t3" "$RELEASE_VERSION"
+      - name: Packaged Linux SSH application lifecycle
+        timeout-minutes: 10
+        env:
+          T3_SSH_FIXTURE_VERSION: ${{ needs.reserve.outputs.version }}
+        run: |
+          docker run --rm --memory=3g --cpus=2 -e GITHUB_ACTIONS=true -e T3_SSH_FIXTURE_VERSION -e T3_SSH_FIXTURE_ARCHIVE="/workspace/release-cli/t3-$T3_SSH_FIXTURE_VERSION-linux-x64.tar.gz" -v "$PWD:/workspace" -w /workspace node:26-bookworm bash -lc 'apt-get update -qq && apt-get install -y --no-install-recommends openssh-server libatomic1 && timeout 360 node scripts/imaorise/ssh-linux-smoke.ts'
       - uses: actions/upload-artifact@v4
         with:
           name: personal-wsl-runtime
@@ -162,6 +168,11 @@ jobs:
           Expand-Archive -LiteralPath (Get-ChildItem release-cli/*.zip).FullName -DestinationPath $sshSmoke
           node scripts/imaorise/ssh-packaged-smoke.ts (Get-ChildItem $sshSmoke -Recurse -Filter t3.exe).FullName $env:RELEASE_VERSION
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:T3_SSH_FIXTURE_ARCHIVE = (Get-ChildItem release-cli/*.zip).FullName
+          $env:T3_SSH_FIXTURE_VERSION = $env:RELEASE_VERSION
+          ./scripts/imaorise/ssh-windows-smoke.ps1
+          $env:T3_SSH_FIXTURE_ARCHIVE = $null
+          $env:T3_SSH_FIXTURE_VERSION = $null
           $env:T3CODE_DESKTOP_SSH_WINDOWS_RUNTIME = (Get-ChildItem release-cli/*.zip).FullName
           $runtime = (Get-ChildItem "$env:RUNNER_TEMP/wsl-runtime/*.tar.gz").FullName
           node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64 --build-version $env:RELEASE_VERSION --wsl-runtime $runtime --skip-build --output-dir personal-windows --verbose

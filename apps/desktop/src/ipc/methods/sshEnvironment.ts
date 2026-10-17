@@ -158,11 +158,19 @@ export const stopSshEnvironment = DesktopIpc.makeIpcMethod({
 });
 export const cancelSshSetup = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CANCEL_SSH_SETUP_CHANNEL,
-  payload: DesktopSshEnvironmentTargetSchema,
+  payload: Schema.Union([
+    DesktopSshEnvironmentTargetSchema,
+    Schema.Struct({
+      target: DesktopSshEnvironmentTargetSchema,
+      operationId: Schema.NonEmptyString,
+    }),
+  ]),
   result: Schema.Void,
-  handler: (target) =>
+  handler: (input) =>
     Effect.flatMap(DesktopSshEnvironment.DesktopSshEnvironment, (service) =>
-      service.cancelSetup(target),
+      "target" in input
+        ? service.cancelSetup(input.target, input.operationId)
+        : service.cancelSetup(input),
     ),
 });
 export const forgetSshCredentials = DesktopIpc.makeIpcMethod({

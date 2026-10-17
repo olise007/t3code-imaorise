@@ -260,7 +260,6 @@ function SshSetupReviewDialog({
   onRemove: () => void;
 }) {
   const review = request.setupReview!;
-  const [selected, setSelected] = useState<readonly string[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expired, setExpired] = useState(false);
@@ -277,7 +276,7 @@ function SshSetupReviewDialog({
     try {
       await window.desktopBridge?.resolveSshSetupReview?.(
         request.requestId,
-        approved ? { reviewId: review.reviewId, approved: true, providers: selected } : null,
+        approved ? { reviewId: review.reviewId, approved: true, providers: [] } : null,
       );
       onRemove();
     } catch {
@@ -332,42 +331,10 @@ function SshSetupReviewDialog({
                 {review.commands.join("\n") || "No system package changes required."}
               </pre>
             </div>
-            <fieldset className="space-y-3">
-              <legend>Provider CLIs (optional)</legend>
-              {review.providers.map((provider) => (
-                <label key={provider.driver} className="flex items-start gap-2">
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(provider.driver)}
-                    disabled={!provider.available || pending || expired}
-                    onChange={(event) =>
-                      setSelected((current) =>
-                        event.target.checked
-                          ? [...current, provider.driver]
-                          : current.filter((id) => id !== provider.driver),
-                      )
-                    }
-                  />
-                  <span>
-                    {provider.label}
-                    {provider.version ? ` ${provider.version}` : ""}
-                    {provider.installed ? " — reuse existing executable" : ""}
-                    <br />
-                    <span className="text-muted-foreground">
-                      {provider.reason} {provider.source}
-                      {selected.includes(provider.driver) ? (
-                        <>
-                          <br />
-                          {provider.command}
-                          <br />
-                          {provider.dependencies.join(", ")}
-                        </>
-                      ) : null}
-                    </span>
-                  </span>
-                </label>
-              ))}
-            </fieldset>
+            <p>
+              Agent CLI installation and sign-in are separate. Connect first, then choose Set up
+              agents in Connections.
+            </p>
             {review.blockers.map((blocker) => (
               <p key={blocker} className="text-destructive">
                 {blocker}

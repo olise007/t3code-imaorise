@@ -2176,3 +2176,111 @@ describe("EnvironmentRegistry routes", () => {
     }),
   );
 });
+
+it.effect("cancels only its own registration and preserves a newer registration", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness([], [], [], { beforeSessionConnect: () => Effect.never });
+    yield* Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      let cancel = Effect.void;
+      yield* registry.register(
+        new SshConnectionRegistration({ target: SSH_CONNECTION, profile: SSH_PROFILE }),
+        (cleanup) =>
+          Effect.sync(() => {
+            cancel = cleanup;
+          }),
+      );
+      yield* cancel;
+      expect(
+        (yield* SubscriptionRef.get(registry.entries)).get(SSH_CONNECTION.environmentId)?.enabled,
+      ).toBe(false);
+      yield* registry.setEnabled(SSH_CONNECTION.environmentId, true);
+      let obsolete = Effect.void;
+      yield* registry.register(
+        new SshConnectionRegistration({ target: SSH_CONNECTION, profile: SSH_PROFILE }),
+        (cleanup) =>
+          Effect.sync(() => {
+            obsolete = cleanup;
+          }),
+      );
+      yield* registry.register(
+        new SshConnectionRegistration({
+          target: SSH_CONNECTION,
+          profile: new SshConnectionProfile({ ...SSH_PROFILE, label: "Newer registration" }),
+        }),
+      );
+      yield* obsolete;
+      expect(
+        (yield* SubscriptionRef.get(registry.entries)).get(SSH_CONNECTION.environmentId)?.enabled,
+      ).toBe(true);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  }),
+);
+
+it.effect("cancelling a replacement restores the prior route and desired state", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness([SSH_CONNECTION], [SSH_PROFILE], [], {
+      beforeSessionConnect: () => Effect.never,
+    });
+    yield* Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      yield* registry.start;
+      const previous = (yield* SubscriptionRef.get(registry.entries)).get(
+        SSH_CONNECTION.environmentId,
+      );
+      let cancel = Effect.void;
+      const target = new SshConnectionTarget({ ...SSH_CONNECTION, connectionId: "replacement" });
+      const profile = new SshConnectionProfile({
+        ...SSH_PROFILE,
+        connectionId: target.connectionId,
+      });
+      yield* registry.register(new SshConnectionRegistration({ target, profile }), (cleanup) =>
+        Effect.sync(() => {
+          cancel = cleanup;
+        }),
+      );
+      yield* cancel;
+      expect(
+        (yield* SubscriptionRef.get(registry.entries)).get(SSH_CONNECTION.environmentId),
+      ).toEqual(previous);
+      expect(routesOf(yield* Ref.get(harness.storedTargets), SSH_CONNECTION.environmentId)).toEqual(
+        [SSH_CONNECTION],
+      );
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  }),
+);
+
+it.effect("cancelling a same-ID SSH edit restores the persisted profile", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness([SSH_CONNECTION], [SSH_PROFILE], [], {
+      beforeSessionConnect: () => Effect.never,
+    });
+    yield* Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      yield* registry.start;
+      let cancel = Effect.void;
+      const profile = new SshConnectionProfile({
+        ...SSH_PROFILE,
+        target: {
+          ...SSH_TARGET,
+          hostname: "changed.example.test",
+          executionSource: { type: "wsl", distro: "Ubuntu" },
+        },
+      });
+      yield* registry.register(
+        new SshConnectionRegistration({ target: SSH_CONNECTION, profile }),
+        (cleanup) =>
+          Effect.sync(() => {
+            cancel = cleanup;
+          }),
+      );
+      yield* cancel;
+      expect((yield* Ref.get(harness.storedProfiles)).get(SSH_CONNECTION.connectionId)).toEqual(
+        SSH_PROFILE,
+      );
+      expect(
+        (yield* SubscriptionRef.get(registry.entries)).get(SSH_CONNECTION.environmentId)?.profile,
+      ).toEqual(Option.some(SSH_PROFILE));
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  }),
+);

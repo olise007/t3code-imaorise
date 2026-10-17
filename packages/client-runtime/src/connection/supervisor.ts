@@ -39,8 +39,6 @@ import {
 
 const RETRY_BASE_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 300_000;
-const CONNECTION_ESTABLISHMENT_TIMEOUT = "15 seconds";
-const establishmentTimeout = Duration.fromInputUnsafe(CONNECTION_ESTABLISHMENT_TIMEOUT);
 const CONNECTION_PROBE_TIMEOUT = "15 seconds";
 // Mobile resumes, explicit retries, and offline events want a fast answer:
 // the user is waiting, or the network may be gone.
@@ -701,7 +699,13 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       ),
       // Each route may use the full setup time before the next is tried.
       Effect.sleep(
-        Duration.times(establishmentTimeout, connectionRoutes(yield* Ref.get(currentEntry)).length),
+        Duration.millis(
+          connectionRoutes(yield* Ref.get(currentEntry)).reduce(
+            (total, route) =>
+              total + (route.target._tag === "SshConnectionTarget" ? 75_000 : 15_000),
+            0,
+          ),
+        ),
       ).pipe(Effect.as<EstablishmentEvent>({ _tag: "TimedOut" })),
     ]);
 

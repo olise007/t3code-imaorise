@@ -33,6 +33,7 @@ import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -178,6 +179,13 @@ function sshPreparationError(cause: unknown) {
       detail: message,
     });
   }
+  if (/authentication failed|host.key|passphrase|password/i.test(message))
+    return new ConnectionBlockedError({
+      reason: "authentication",
+      detail: `Authenticate this SSH profile explicitly before reconnecting. ${message}`,
+    });
+  if (/Repair connection|explicitly stopped|incompatible with runtime/i.test(message))
+    return new ConnectionBlockedError({ reason: "configuration", detail: message });
   return new ConnectionTransientError({
     reason: "remote-unavailable",
     detail: `Could not prepare the SSH environment: ${message}`,
@@ -312,13 +320,22 @@ const layerCapabilities = Layer.effectContext(
             detail:
               "Update the desktop client to reconnect this manual SSH profile. Its saved source and authentication settings are unchanged.",
           });
+        const operationId = yield* (yield* Crypto.Crypto).randomUUIDv4.pipe(Effect.orDie);
         const bootstrap = yield* Effect.tryPromise({
           try: () =>
             bridge.ensureSshEnvironment(input.target, {
+              purpose: "reconnect",
+              operationId,
               issuePairingToken: true,
             }),
           catch: sshPreparationError,
-        });
+        }).pipe(
+          Effect.ensuring(
+            Effect.promise(
+              () => bridge.cancelSshSetup?.(input.target, operationId) ?? Promise.resolve(),
+            ).pipe(Effect.ignore),
+          ),
+        );
         if (bootstrap.pairingToken === null) {
           return yield* new ConnectionBlockedError({
             reason: "authentication",

@@ -206,11 +206,14 @@ the active attempt. Recent attempts are kept for the current app session only.
 
 Imaorise Windows desktop builds prepare Linux x64 and native Windows x64 hosts
 by uploading their bundled server runtime over SSH. Setup inspects the remote
-platform and shows missing requirements, optional provider CLIs, commands, sources,
+platform and shows missing control-server requirements, commands, sources,
 and elevation needs before asking you to approve installation. Debian/Ubuntu and
 Fedora/RHEL hosts can install missing system packages through their package manager.
 Windows uses verified installers; missing system components require an elevated
 SSH session. Other unsupported requirements receive manual instructions.
+
+Reconnect reuses the prepared runtime. If it is missing or incompatible, use
+**Repair connection** in Connections to explicitly prepare it again.
 
 Runtime uploads require an OpenSSH `scp` client with SFTP support in the selected
 source and an enabled SFTP subsystem on the remote SSH server. Runtimes live under
@@ -221,8 +224,9 @@ on that filesystem and retry setup.
 
 The control server needs no separate Node or desktop installation. A provider
 that requires Node can install a verified private copy with your approval. Existing
-and custom provider installations are preserved. After connection, finish provider
-account sign-in in that environment's provider settings; local credentials are never copied.
+and custom provider installations are preserved. After connecting, choose **Set up agents**
+in Connections to install providers and sign in. Agent setup is separate from connecting;
+local credentials are never copied.
 Providers without a verified automatic recipe show their manual setup guidance.
 
 Cancel setup to stop owned installation work. Completed packages remain installed;

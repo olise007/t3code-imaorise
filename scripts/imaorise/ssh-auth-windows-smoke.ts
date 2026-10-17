@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off multipleEffectProvide:off - Hosted fixture composes the SSH layer with its platform dependencies.
+import { verifyPackagedSshConnection } from "./ssh-packaged-connection.ts";
 import * as NodeAssert from "node:assert/strict";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -212,6 +213,14 @@ const program = Effect.gen(function* () {
   );
   NodeAssert.equal(cancellation._tag, "Failure");
   cancel = false;
+  if (process.env.T3_SSH_FIXTURE_ARCHIVE && process.env.T3_SSH_FIXTURE_VERSION) {
+    yield* verifyPackagedSshConnection({
+      target,
+      archive: process.env.T3_SSH_FIXTURE_ARCHIVE,
+      version: process.env.T3_SSH_FIXTURE_VERSION,
+      authSecret: input.password,
+    }).pipe(Effect.provideService(SshAuth.SshPasswordPrompt, prompt));
+  }
   const trust = NodePath.join(home, ".t3-imaorise", "ssh", "known_hosts");
   yield* Effect.promise(() =>
     NodeFSP.writeFile(trust, `[127.0.0.1]:${input.port} ${input.differentHostKey}\n`),

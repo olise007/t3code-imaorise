@@ -23,6 +23,7 @@ import * as Context from "effect/Context";
 import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Deferred from "effect/Deferred";
 import * as Option from "effect/Option";
 import * as CryptoRuntime from "effect/Crypto";
 import * as Hex from "effect/encoding/Hex";
@@ -59,7 +60,10 @@ export type DesktopSshEnvironmentDiscoverError = SshHostDiscoveryError;
 export class DesktopSshEnvironment extends Context.Service<
   DesktopSshEnvironment,
   {
-    readonly cancelSetup: (target: DesktopSshEnvironmentTarget) => Effect.Effect<void>;
+    readonly cancelSetup: (
+      target: DesktopSshEnvironmentTarget,
+      operationId?: string,
+    ) => Effect.Effect<void>;
     readonly forgetCredentials?: (target: DesktopSshEnvironmentTarget) => Effect.Effect<void>;
     readonly discoverHosts: (input?: {
       readonly homeDir?: string;
@@ -71,6 +75,7 @@ export class DesktopSshEnvironment extends Context.Service<
     readonly ensureEnvironment: (
       target: DesktopSshEnvironmentTarget,
       options?: {
+        purpose?: "setup" | "reconnect";
         operationId?: string;
         authSecret?: string;
         rememberSecret?: boolean;
@@ -211,7 +216,12 @@ export const make = Effect.gen(function* () {
     );
   const setups = new Map<
     string,
-    Fiber.Fiber<DesktopSshEnvironmentBootstrap, DesktopSshEnvironmentOperationError>
+    {
+      operationId: string | undefined;
+      fiber?: Fiber.Fiber<DesktopSshEnvironmentBootstrap, DesktopSshEnvironmentOperationError>;
+      cancelled: boolean;
+      done: Deferred.Deferred<void>;
+    }
   >();
 
   return DesktopSshEnvironment.of({
@@ -219,14 +229,18 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!target.manual) return;
         const fiber = setups.get(targetConnectionKey(target));
-        if (fiber) yield* Fiber.interrupt(fiber);
+        if (fiber?.fiber) yield* Fiber.interrupt(fiber.fiber);
         yield* manager.forgetAuthentication?.(target) ?? Effect.void;
         yield* fs.remove(yield* secretPath(target), { force: true }).pipe(Effect.orDie);
       }),
-    cancelSetup: (target) =>
+    cancelSetup: (target, operationId) =>
       Effect.gen(function* () {
-        const fiber = setups.get(targetConnectionKey(target));
-        if (fiber) yield* Fiber.interrupt(fiber);
+        const operation = setups.get(targetConnectionKey(target));
+        if (!operation || (operationId !== undefined && operation.operationId !== operationId))
+          return;
+        operation.cancelled = true;
+        if (operation.fiber) yield* Fiber.interrupt(operation.fiber);
+        yield* Deferred.await(operation.done);
       }),
     discoverHosts: (input) =>
       discoverDesktopSshHostsEffect(input).pipe(
@@ -241,60 +255,80 @@ export const make = Effect.gen(function* () {
     ensureEnvironment: (target, ensureOptions) =>
       Effect.gen(function* () {
         const key = targetConnectionKey(target);
-        const file = yield* secretPath(target);
-        const savedSecret =
-          canSave && safeStorage && target.manual
-            ? yield* fs
-                .readFile(file)
-                .pipe(Effect.flatMap(safeStorage.decryptString), Effect.option)
-            : Option.none<string>();
-        const authSecret = ensureOptions?.authSecret ?? Option.getOrUndefined(savedSecret);
-        const fiber = yield* manager
-          .ensureEnvironment(target, {
-            ...ensureOptions,
-            ...(authSecret === undefined ? {} : { authSecret }),
-          })
-          .pipe(
-            Effect.provideService(SshAuth.SshPasswordPrompt, passwordPrompt),
-            Effect.provide(runtimeContext),
-            Effect.withSpan("desktop.ssh.ensureEnvironment"),
-            Effect.forkChild,
-          );
-        setups.set(key, fiber);
-        const result = yield* Fiber.join(fiber).pipe(
+        const done = yield* Deferred.make<void>();
+        if (setups.has(key))
+          return yield* new SshLaunchError({
+            message:
+              "An SSH operation is already active for this profile. Wait for it to finish or cancel it before retrying.",
+            stdout: "",
+          });
+        const operation: {
+          operationId: string | undefined;
+          fiber?: Fiber.Fiber<DesktopSshEnvironmentBootstrap, DesktopSshEnvironmentOperationError>;
+          cancelled: boolean;
+          done: Deferred.Deferred<void>;
+        } = { operationId: ensureOptions?.operationId, cancelled: false, done };
+        setups.set(key, operation);
+        return yield* Effect.gen(function* () {
+          const file = yield* secretPath(target);
+          const savedSecret =
+            canSave && safeStorage && target.manual
+              ? yield* fs
+                  .readFile(file)
+                  .pipe(Effect.flatMap(safeStorage.decryptString), Effect.option)
+              : Option.none<string>();
+          const authSecret = ensureOptions?.authSecret ?? Option.getOrUndefined(savedSecret);
+          if (operation.cancelled)
+            return yield* new SshPasswordPromptError({ message: "SSH operation cancelled." });
+          const fiber = yield* manager
+            .ensureEnvironment(target, {
+              ...ensureOptions,
+              ...(authSecret === undefined ? {} : { authSecret }),
+            })
+            .pipe(
+              Effect.provideService(SshAuth.SshPasswordPrompt, passwordPrompt),
+              Effect.provide(runtimeContext),
+              Effect.withSpan("desktop.ssh.ensureEnvironment"),
+              Effect.forkChild,
+            );
+          operation.fiber = fiber;
+          if (operation.cancelled) yield* Fiber.interrupt(fiber);
+          const result = yield* Fiber.join(fiber);
+          const verifiedSecret = manager.authenticatedSecret?.(result.target);
+          if (target.manual && ensureOptions?.rememberSecret && verifiedSecret !== undefined) {
+            const saved =
+              canSave && safeStorage
+                ? yield* Effect.gen(function* () {
+                    const encrypted = yield* safeStorage.encryptString(verifiedSecret);
+                    yield* fs.makeDirectory(path.dirname(file), { recursive: true, mode: 0o700 });
+                    const temporary = `${file}.${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}.partial`;
+                    yield* fs
+                      .writeFile(temporary, encrypted, { mode: 0o600 })
+                      .pipe(
+                        Effect.andThen(fs.rename(temporary, file)),
+                        Effect.ensuring(fs.remove(temporary).pipe(Effect.ignore)),
+                      );
+                    return true;
+                  }).pipe(Effect.orElseSucceed(() => false))
+                : false;
+            if (!saved)
+              return {
+                ...result,
+                setupWarnings: [
+                  ...(result.setupWarnings ?? []),
+                  "Secure credential storage is unavailable. The credential was not saved; you will be asked again.",
+                ],
+              };
+          }
+          return result;
+        }).pipe(
           Effect.ensuring(
-            Effect.sync(() => {
-              if (setups.get(key) === fiber) setups.delete(key);
+            Effect.gen(function* () {
+              if (setups.get(key) === operation) setups.delete(key);
+              yield* Deferred.succeed(done, undefined);
             }),
           ),
         );
-        const verifiedSecret = manager.authenticatedSecret?.(result.target);
-        if (target.manual && ensureOptions?.rememberSecret && verifiedSecret !== undefined) {
-          const saved =
-            canSave && safeStorage
-              ? yield* Effect.gen(function* () {
-                  const encrypted = yield* safeStorage.encryptString(verifiedSecret);
-                  yield* fs.makeDirectory(path.dirname(file), { recursive: true, mode: 0o700 });
-                  const temporary = `${file}.${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}.partial`;
-                  yield* fs
-                    .writeFile(temporary, encrypted, { mode: 0o600 })
-                    .pipe(
-                      Effect.andThen(fs.rename(temporary, file)),
-                      Effect.ensuring(fs.remove(temporary).pipe(Effect.ignore)),
-                    );
-                  return true;
-                }).pipe(Effect.orElseSucceed(() => false))
-              : false;
-          if (!saved)
-            return {
-              ...result,
-              setupWarnings: [
-                ...(result.setupWarnings ?? []),
-                "Secure credential storage is unavailable. The credential was not saved; you will be asked again.",
-              ],
-            };
-        }
-        return result;
       }),
     stopEnvironment: (target) =>
       manager

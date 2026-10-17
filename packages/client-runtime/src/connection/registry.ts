@@ -101,6 +101,7 @@ export class EnvironmentRegistry extends Context.Service<
     readonly start: Effect.Effect<void>;
     readonly register: (
       registration: ConnectionRegistration,
+      onRegistered?: (cancel: Effect.Effect<void>) => Effect.Effect<void>,
     ) => Effect.Effect<void, Persistence.ConnectionPersistenceError>;
     readonly registerPlatform: (registration: PrimaryConnectionRegistration) => Effect.Effect<void>;
     readonly reconcilePlatform: (
@@ -555,6 +556,7 @@ export const make = Effect.gen(function* () {
 
   const register = Effect.fn("EnvironmentRegistry.register")(function* (
     registration: ConnectionRegistration,
+    onRegistered?: (cancel: Effect.Effect<void>) => Effect.Effect<void>,
   ) {
     const registered = connectionRegistrationCatalogEntry(registration);
     const environmentId = registered.target.environmentId;
@@ -589,6 +591,36 @@ export const make = Effect.gen(function* () {
           new Set(current).add(environmentId),
         );
         yield* installEntryLocked(entry);
+        if (onRegistered)
+          yield* onRegistered(
+            withLeaseLock(
+              environmentId,
+              Effect.gen(function* () {
+                // A later registration or settings change owns the environment now.
+                if ((yield* SubscriptionRef.get(entries)).get(environmentId) !== entry) return;
+                if (previous) {
+                  for (const route of connectionRoutes(previous)) {
+                    if (Option.isSome(route.profile)) yield* profiles.put(route.profile.value);
+                  }
+                  if (
+                    registration._tag === "SshConnectionRegistration" &&
+                    !connectionRoutes(previous).some(
+                      (route) =>
+                        connectionRouteId(route.target) === registration.target.connectionId,
+                    )
+                  )
+                    yield* profiles.remove(registration.target.connectionId);
+                  yield* registrations.setRoutes(environmentId, persistedRoutes(previous));
+                  yield* installEntryLocked(previous);
+                } else {
+                  yield* registrations.setEnabled(environmentId, false);
+                  yield* installEntryLocked({ ...entry, enabled: false });
+                  if (registration._tag === "SshConnectionRegistration")
+                    yield* disconnectSsh(environmentId, registration.profile);
+                }
+              }),
+            ).pipe(Effect.ignore),
+          );
       }),
     );
   });

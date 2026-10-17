@@ -7,6 +7,9 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Registry from "./registry.ts";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
@@ -19,6 +22,7 @@ import {
   prepareBearerConnectionUpdate,
   preparePairingRegistration,
   prepareSshRegistration,
+  registerSshConnection,
 } from "./onboarding.ts";
 
 const layerClientPresentation = Layer.succeed(
@@ -387,6 +391,7 @@ describe("connection onboarding", () => {
                   httpBaseUrl: "http://127.0.0.1:3201",
                   wsBaseUrl: "ws://127.0.0.1:3201",
                   pairingToken: "pairing-token",
+                  selectedProviders: ["codex"], // Legacy selection must not become a connection side effect.
                 },
                 bearerToken: "bearer-token",
               }),
@@ -413,3 +418,64 @@ describe("connection onboarding", () => {
     }),
   );
 });
+
+it.effect(
+  "tracks SSH registration atomically when cancellation races persistence, without installing agents",
+  () =>
+    Effect.gen(function* () {
+      const committing = yield* Deferred.make<void>();
+      const finishCommit = yield* Deferred.make<void>();
+      let tracked = false;
+      let persisted = false;
+      let provisioning = 0;
+      const gateway = ClientCapabilities.SshEnvironmentGateway.of({
+        prepare: () => Effect.die("Registration must not reconnect"),
+        disconnect: () => Effect.void,
+        provision: (target) => {
+          provisioning++;
+          return Effect.succeed({
+            environmentId: EnvironmentId.make("cancel-fixture"),
+            label: "Fixture",
+            bearerToken: "fixture-bearer",
+            bootstrap: {
+              target,
+              httpBaseUrl: "http://localhost:1234/",
+              wsBaseUrl: "ws://localhost:1234/",
+              selectedProviders: ["codex"],
+            },
+          });
+        },
+      });
+      const registry = {
+        register: (
+          _registration: Parameters<typeof Registry.EnvironmentRegistry.Service.register>[0],
+          onRegistered: Parameters<typeof Registry.EnvironmentRegistry.Service.register>[1],
+        ) =>
+          Effect.gen(function* () {
+            yield* onRegistered?.(Effect.void) ?? Effect.void;
+            expect(tracked).toBe(true);
+            yield* Deferred.succeed(committing, undefined);
+            yield* Deferred.await(finishCommit);
+            persisted = true;
+          }),
+      } as unknown as typeof Registry.EnvironmentRegistry.Service;
+      const operation = yield* registerSshConnection({
+        target: { alias: "fixture", hostname: "localhost", username: "fixture", port: 22 },
+        onRegistration: () =>
+          Effect.sync(() => {
+            tracked = true;
+          }),
+      }).pipe(
+        Effect.provideService(ClientCapabilities.SshEnvironmentGateway, gateway),
+        Effect.provideService(Registry.EnvironmentRegistry, registry),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(committing);
+      const cancellation = yield* Fiber.interrupt(operation).pipe(Effect.forkChild);
+      yield* Deferred.succeed(finishCommit, undefined);
+      yield* Fiber.join(cancellation);
+      expect(persisted).toBe(true);
+      expect(tracked).toBe(true);
+      expect(provisioning).toBe(1);
+    }).pipe(Effect.scoped),
+);

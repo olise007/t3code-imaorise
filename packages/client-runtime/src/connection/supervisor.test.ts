@@ -29,6 +29,7 @@ import {
   ConnectionTransientError,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
+  SshConnectionTarget,
   type ConnectionAttemptError,
   type ConnectionTarget,
   type NetworkStatus,
@@ -485,6 +486,43 @@ describe("EnvironmentSupervisor", () => {
           message: "Relay connection timed out.",
         },
       });
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("allows SSH preparation beyond fifteen seconds and retains the ready connection", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<void>();
+      const target = new SshConnectionTarget({
+        environmentId: TARGET.environmentId,
+        label: "SSH fixture",
+        connectionId: "ssh-fixture",
+      });
+      const harness = yield* makeHarness({
+        prepare: () =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(finish)),
+            Effect.as({ ...PREPARED_CONNECTION, target }),
+          ),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(
+        { ...TARGET_ENTRY, target },
+        { initiallyDesired: true },
+      ).pipe(Effect.provide(harness.dependencies));
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust("20 seconds");
+      expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+      expect((yield* SubscriptionRef.get(supervisor.state)).phase).toBe("connecting");
+      yield* Deferred.succeed(finish, undefined);
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      yield* TestClock.adjust("40 seconds");
+      expect((yield* SubscriptionRef.get(supervisor.state)).phase).toBe("connected");
+      expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+      yield* harness.closeLatestSession();
+      yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
+      yield* TestClock.adjust("3 seconds");
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(yield* Ref.get(harness.prepareCount)).toBe(2);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 

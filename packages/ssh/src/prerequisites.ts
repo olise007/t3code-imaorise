@@ -554,5 +554,6 @@ export const inspectAndPrepare = Effect.fn("ssh.prerequisites.prepare")(function
         stdout: "",
       });
   }
-  return [...selected];
+  // Provider installation is an independent operation after connecting.
+  return [] as readonly string[];
 });

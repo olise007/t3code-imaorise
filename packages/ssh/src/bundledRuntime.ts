@@ -355,7 +355,8 @@ export const prepareBundledRuntime = Effect.fn("ssh.runtime.prepare")(function* 
     auth,
     requirements: archive.requirements ?? runtimeRequirements(platform, bundles.version),
     supportsReview: setup.supportsReview === true,
-    reviewRequested: setup.reviewRequested === true,
+    reviewRequested: false,
+    providers: [],
     progress,
     windowsCommand: powershellFileArgs(),
     inspect: () =>

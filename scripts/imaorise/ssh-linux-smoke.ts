@@ -1,4 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off multipleEffectProvide:off globalTimers:off globalFetch:off - Native hosted process readiness and HTTP probes use wall time, without real SSH configuration or live state.
+import { verifyPackagedSshConnection } from "./ssh-packaged-connection.ts";
+import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
+import * as NetService from "@t3tools/shared/Net";
+import * as SshAuth from "../../packages/ssh/src/auth.ts";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -126,6 +130,21 @@ try {
   process.stdout.write(
     "Passed native SFTP archive transfer with a literal special-character path.\n",
   );
+  if (process.env.T3_SSH_FIXTURE_ARCHIVE && process.env.T3_SSH_FIXTURE_VERSION) {
+    await Effect.runPromise(
+      verifyPackagedSshConnection({
+        target,
+        archive: process.env.T3_SSH_FIXTURE_ARCHIVE,
+        version: process.env.T3_SSH_FIXTURE_VERSION,
+      }).pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.provide(NodeHttpClient.layerUndici),
+        Effect.provide(NetService.layer),
+        Effect.provide(SshAuth.SshPasswordPrompt.disabledLayer),
+        Effect.provideService(HostProcess.HomeDirectory, home),
+      ),
+    );
+  }
   const first = JSON.parse((await run("start")).stdout);
   const second = JSON.parse((await run("start", "2.0.2-newer")).stdout);
   if (first.remotePort !== second.remotePort)

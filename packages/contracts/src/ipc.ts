@@ -519,6 +519,7 @@ export const DesktopSshPasswordPromptCancelledResultSchema = Schema.Struct({
 });
 
 export const DesktopSshEnvironmentEnsureOptionsSchema = Schema.Struct({
+  purpose: Schema.optionalKey(Schema.Literals(["setup", "reconnect"])),
   operationId: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(128))),
   authSecret: Schema.optionalKey(Schema.String),
   rememberSecret: Schema.optionalKey(Schema.Boolean),
@@ -1308,6 +1309,7 @@ export interface DesktopBridge {
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: {
+      purpose?: "setup" | "reconnect";
       operationId?: string;
       authSecret?: string;
       rememberSecret?: boolean;
@@ -1319,7 +1321,7 @@ export interface DesktopBridge {
   ) => Promise<DesktopSshEnvironmentBootstrap>;
   disconnectSshEnvironment: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   stopSshEnvironment?: (target: DesktopSshEnvironmentTarget) => Promise<void>;
-  cancelSshSetup?: (target: DesktopSshEnvironmentTarget) => Promise<void>;
+  cancelSshSetup?: (target: DesktopSshEnvironmentTarget, operationId?: string) => Promise<void>;
   forgetSshCredentials?: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   fetchSshEnvironmentDescriptor: (httpBaseUrl: string) => Promise<ExecutionEnvironmentDescriptor>;
   bootstrapSshBearerSession: (

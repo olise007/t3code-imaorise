@@ -1,3 +1,5 @@
+import { useNavigate } from "@tanstack/react-router";
+import { sshSetupProgress } from "~/connection/sshSetupProgress";
 import {
   createEnvironmentPairingCredential,
   revokeEnvironmentPairingLink,
@@ -1537,6 +1539,7 @@ function SavedBackendListRow({
   onAddRoute,
   onEditSsh,
 }: SavedBackendListRowProps) {
+  const navigate = useNavigate();
   const desktopBridge = window.desktopBridge;
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
@@ -1730,6 +1733,34 @@ function SavedBackendListRow({
       }
       below={
         <>
+          <div className="flex gap-2">
+            {isConnected ? (
+              <Button
+                size="xs"
+                variant="ghost-muted"
+                onClick={() =>
+                  void navigate({ to: "/settings/providers", search: { environmentId } })
+                }
+              >
+                Set up agents
+              </Button>
+            ) : null}
+            {!isConnected
+              ? connectionRoutes(environment.entry)
+                  .filter((route) => route.target._tag === "SshConnectionTarget")
+                  .slice(0, 1)
+                  .map((route) => (
+                    <Button
+                      key={connectionRouteId(route.target)}
+                      size="xs"
+                      variant="ghost-muted"
+                      onClick={() => onEditSsh(environment, route)}
+                    >
+                      Repair connection
+                    </Button>
+                  ))
+              : null}
+          </div>
           {Array.from(
             new Set(
               connectionRoutes(environment.entry).flatMap((route) =>
@@ -2641,7 +2672,14 @@ export function ConnectionsSettings() {
   }, [isSshDiscoveryActive, refreshDesktopSshHosts, refreshSshConnections]);
   useEffect(() => {
     if (!isSshDiscoveryActive) return;
-    return desktopBridge?.onSshConnectionProgress?.(({ target, stage }) => {
+    return desktopBridge?.onSshConnectionProgress?.(({ target, stage, operationId }) => {
+      if (
+        !operationId ||
+        !sshSetupProgress
+          .snapshot()
+          .some((attempt) => attempt.id === operationId && attempt.status === "running")
+      )
+        return;
       if (
         target.alias === savedBackendSshHost.trim() &&
         (target.executionSource?.type ?? "local") === sshSource.type &&
@@ -2651,7 +2689,7 @@ export function ConnectionsSettings() {
       )
         setSshProgress(
           stage === "Connected"
-            ? "Connected. Preparing selected providers; sign-in is separate…"
+            ? "SSH tunnel ready. Waiting for application synchronization…"
             : stage,
         );
     });
@@ -4518,21 +4556,20 @@ export function ConnectionsSettings() {
               )
                 return;
               const target = route.profile.value.target;
-              if (!target.manual) return;
               setRouteTarget(environment);
               setEditingSshRoute(connectionRouteId(route.target));
               setEditingSshOriginalTarget(target);
               setSavedBackendMode("ssh");
-              setSshManual(true);
-              setSshProfileId(target.manual.profileId);
-              setSshName(target.manual.name);
-              setSavedBackendSshHost(target.hostname);
+              setSshManual(Boolean(target.manual));
+              if (target.manual) setSshProfileId(target.manual.profileId);
+              setSshName(target.manual?.name ?? target.alias);
+              setSavedBackendSshHost(target.manual ? target.hostname : target.alias);
               setSavedBackendSshUsername(target.username ?? "");
               setSavedBackendSshPort(String(target.port ?? 22));
               setSshSource(target.executionSource ?? { type: "local" });
-              setSshAuthentication(target.manual.authentication.type);
+              setSshAuthentication(target.manual?.authentication.type ?? "password");
               setSshIdentityFile(
-                target.manual.authentication.type === "key"
+                target.manual?.authentication.type === "key"
                   ? target.manual.authentication.identityFile
                   : "",
               );

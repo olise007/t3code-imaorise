@@ -176,11 +176,37 @@ export const make = Effect.gen(function* () {
       entry,
       (route) => checkRoute(entry, route),
       Effect.fnUntraced(function* (route) {
-        const prepared = yield* resolver.prepare(routeEntry(entry, route));
+        const preparation = resolver.prepare(routeEntry(entry, route));
+        const prepared = yield* route.target._tag === "SshConnectionTarget"
+          ? preparation.pipe(
+              Effect.timeout("60 seconds"),
+              Effect.mapError((error) =>
+                error._tag === "TimeoutError"
+                  ? new ConnectionTransientError({
+                      reason: "timeout",
+                      detail: `${entry.target.label}: SSH preparation timed out. Review authentication or repair the connection.`,
+                    })
+                  : error,
+              ),
+            )
+          : preparation;
         yield* reportProgress({ stage: "opening", prepared });
-        const session = yield* sessions.connect(prepared);
-        yield* reportProgress({ stage: "synchronizing", prepared });
-        yield* session.ready;
+        const session = yield* Effect.gen(function* () {
+          const session = yield* sessions.connect(prepared);
+          yield* reportProgress({ stage: "synchronizing", prepared });
+          yield* session.ready;
+          return session;
+        }).pipe(
+          Effect.timeout("15 seconds"),
+          Effect.mapError((error) =>
+            error._tag === "TimeoutError"
+              ? new ConnectionTransientError({
+                  reason: "timeout",
+                  detail: `${entry.target.label}: WebSocket opening or synchronization timed out after the connection was prepared.`,
+                })
+              : error,
+          ),
+        );
         return { prepared, session } satisfies EnvironmentConnectionLease;
       }),
     );

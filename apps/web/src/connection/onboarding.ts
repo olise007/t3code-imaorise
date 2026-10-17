@@ -7,13 +7,12 @@ import {
   createAtomCommandScheduler,
   createRuntimeCommand,
 } from "@t3tools/client-runtime/state/runtime";
-import { ProviderDriverKind, type DesktopSshEnvironmentTarget } from "@t3tools/contracts";
+import { type DesktopSshEnvironmentTarget } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Crypto from "effect/Crypto";
 import * as Stream from "effect/Stream";
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import { sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
-import { serverEnvironment } from "../state/server";
 
 import { connectionAtomRuntime } from "./runtime";
 import { sshSetupProgress, sshSetupTargetKey } from "./sshSetupProgress";
@@ -50,7 +49,6 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
       readonly credentials?: { readonly secret: string; readonly remember: boolean };
       readonly testOnly?: boolean;
     },
-    atoms,
   ) =>
     Effect.gen(function* () {
       const key = setupKey(input.target);
@@ -83,20 +81,23 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
         },
       );
       let cancelled = false;
-      let cancelCurrent = () =>
-        window.desktopBridge?.cancelSshSetup?.(input.target) ?? Promise.resolve();
+      const cancellation = yield* Deferred.make<void>();
+      let cancelRegistration = Effect.void;
+      const completed = yield* Deferred.make<void>();
+      const cancelCurrent = () =>
+        window.desktopBridge?.cancelSshSetup?.(input.target, progressId) ?? Promise.resolve();
       const cancel = async () => {
         cancelled = true;
         sshSetupProgress.append(
           progressId,
           "Cancellation requested; completed installations are retained.",
         );
-        await cancelCurrent();
+        await Effect.runPromise(Deferred.succeed(cancellation, undefined));
+        await cancelCurrent().finally(() => Effect.runPromise(Deferred.await(completed)));
       };
       setupCancellations.set(key, cancel);
       const environments = yield* EnvironmentRegistry.EnvironmentRegistry;
       const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
-      const crypto = yield* Crypto.Crypto;
       return yield* Effect.gen(function* () {
         if ((input.credentials || input.testOnly) && window.desktopBridge) {
           if (!window.desktopBridge.sshConnectionCapabilities?.().authenticationPreflight)
@@ -122,86 +123,62 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
           for (const warning of bootstrap.setupWarnings ?? [])
             sshSetupProgress.append(progressId, warning);
         }
+        if (cancelled) return yield* Effect.interrupt;
         if (input.testOnly) return;
-        return yield* onboarding.registerSsh({
+        const environmentId = yield* onboarding.registerSsh({
           target: input.target,
+          onRegistration: (cancel) =>
+            Effect.sync(() => {
+              cancelRegistration = cancel;
+            }),
           ...(input.label === undefined ? {} : { label: input.label }),
           ...(input.expectedEnvironmentId
             ? { expectedEnvironmentId: input.expectedEnvironmentId }
             : {}),
-          afterRegistration: (environmentId, selectedProviders) =>
-            Effect.gen(function* () {
-              sshSetupProgress.associateEnvironment(progressId, environmentId);
-              sshSetupProgress.append(
-                progressId,
-                `Installing selected providers: ${selectedProviders.join(", ")}. Account sign-in is separate.`,
-              );
-              const operationId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
-              cancelCurrent = async () => {
-                const result = await serverEnvironment.cancelSelectedProviderInstall.run(atoms, {
-                  environmentId,
-                  input: { operationId },
-                });
-                if (result._tag === "Failure")
-                  throw new Error(
-                    "Could not confirm cancellation. Check provider installation status in this environment's settings.",
-                  );
-              };
-              yield* environments.stateChanges(environmentId).pipe(
-                Stream.filter((state) => state.phase === "connected"),
-                Stream.runHead,
-                Effect.timeout("90 seconds"),
-                Effect.mapError(
-                  () =>
-                    new ConnectionTransientError({
-                      reason: "remote-unavailable",
-                      detail:
-                        "Environment saved, but it did not connect for provider setup. Reconnect and install providers explicitly in Settings.",
-                    }),
-                ),
-              );
-              if (cancelled)
-                return yield* new ConnectionTransientError({
-                  reason: "remote-unavailable",
-                  detail:
-                    "Environment saved; provider setup cancelled. Completed installations remain.",
-                });
-              const result = yield* Effect.promise(() =>
-                serverEnvironment.installSelectedProviders.run(atoms, {
-                  environmentId,
-                  input: {
-                    recipeRevision: 1,
-                    operationId,
-                    drivers: selectedProviders.map((driver) => ProviderDriverKind.make(driver)),
-                  },
-                }),
-              );
-              if (result._tag === "Failure")
-                return yield* new ConnectionTransientError({
-                  reason: "remote-unavailable",
-                  detail:
-                    "Environment saved, but selected provider setup did not complete. Open this environment's provider settings to review and retry. Sign-in is separate.",
-                });
-              for (const provider of result.value)
-                sshSetupProgress.append(
-                  progressId,
-                  `${provider.driver}: ${sanitizeSetupOutput(provider.message)}`,
-                );
-              sshSetupProgress.append(
-                progressId,
-                "Provider setup finished. Review the results above; account sign-in is separate.",
-              );
-            }),
         });
+        yield* environments.stateChanges(environmentId).pipe(
+          Stream.filter(
+            (state) =>
+              state.phase === "connected" || state.phase === "blocked" || state.phase === "backoff",
+          ),
+          Stream.runHead,
+          Effect.flatMap((state) =>
+            state._tag === "Some" && state.value.phase === "connected"
+              ? Effect.void
+              : Effect.fail(
+                  new ConnectionTransientError({
+                    reason: "remote-unavailable",
+                    detail:
+                      state._tag === "Some"
+                        ? (state.value.lastFailure?.message ??
+                          "The saved environment could not connect.")
+                        : "The saved environment connection ended.",
+                  }),
+                ),
+          ),
+          Effect.timeout("80 seconds"),
+          Effect.mapError((cause) =>
+            cause instanceof ConnectionTransientError
+              ? cause
+              : new ConnectionTransientError({
+                  reason: "timeout",
+                  detail:
+                    "Environment saved, but connection readiness timed out. Review its connection status and retry.",
+                }),
+          ),
+        );
+        return environmentId;
       }).pipe(
+        Effect.raceFirst(Deferred.await(cancellation).pipe(Effect.andThen(Effect.interrupt))),
+        Effect.onExit(() => (cancelled ? cancelRegistration : Effect.void)),
         Effect.onExit((exit) =>
           Effect.sync(() => {
-            if (exit._tag === "Success")
+            if (exit._tag === "Success" && !cancelled)
               sshSetupProgress.append(
                 progressId,
                 input.testOnly
                   ? "Authentication test passed. No remote runtime was installed or started."
-                  : "Setup complete. Provider sign-in may still be required.",
+                  : "Connected. Agent installation and sign-in are available separately in provider settings.",
               );
             else
               sshSetupProgress.append(
@@ -224,6 +201,7 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
             unsubscribe?.();
           }),
         ),
+        Effect.ensuring(Deferred.succeed(completed, undefined)),
         Effect.ensuring(
           Effect.sync(() => {
             if (setupCancellations.get(key) === cancel) setupCancellations.delete(key);
