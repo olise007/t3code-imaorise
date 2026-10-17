@@ -253,7 +253,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
               ),
               cliAuth.controller.withAccess!,
               Effect.scoped,
-              Effect.catch((cause) =>
+              Effect.catchTag("ProviderSetupError", (cause) =>
                 makePendingCodexProvider(effectiveConfig).pipe(
                   Effect.map((draft) => ({
                     ...draft,
