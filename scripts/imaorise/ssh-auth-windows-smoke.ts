@@ -234,13 +234,20 @@ const program = Effect.gen(function* () {
     "powershell.exe",
   );
   const commandLine = `"${powershell}" -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(childScript, "utf16le").toString("base64")}`;
-  const detached = (script: string, timeoutMs = 60_000) =>
+  const detached = (script: string, timeoutMs = 60_000, details = false) =>
     runSshCommand(target, {
       interactiveAuth: true,
       authSecret: input.password,
-      remoteCommandArgs: powershellFileArgs(),
+      remoteCommandArgs: details
+        ? powershellArgs(
+            `$ErrorActionPreference='Stop'; [Console]::Error.WriteLine('Owned fixture bootstrap reading input'); $script=[Console]::In.ReadToEnd(); [Console]::Error.WriteLine(('Owned fixture bootstrap received characters '+$script.Length)); $p=Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString()+'.ps1'); try { [IO.File]::WriteAllText($p,'$ProgressPreference=''SilentlyContinue'''+[Environment]::NewLine+$script,[Text.UTF8Encoding]::new($true)); [Console]::Error.WriteLine('Owned fixture bootstrap launching script'); & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $p; [Console]::Error.WriteLine(('Owned fixture script exit '+$LASTEXITCODE)); exit $LASTEXITCODE } finally { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }`,
+          )
+        : powershellFileArgs(),
       stdin: script,
       timeoutMs,
+      ...(details
+        ? { onDetails: (line: string) => Effect.logInfo(`Owned job fixture: ${line}`) }
+        : {}),
     });
   try {
     yield* detached(
@@ -267,9 +274,10 @@ const program = Effect.gen(function* () {
     const serverCommand = `"${powershell}" -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(root, "utf16le").toString("base64")}`;
     const jobScript = windowsServerJobScript(powershell, serverCommand, process.env.SystemRoot!);
     const traceFile = `t3-job-${suffix}-${mode}.log`;
-    yield* detached(`$ready=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(jobReady)})
+    yield* detached(
+      `$ready=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(jobReady)})
 $file=Join-Path ([IO.Path]::GetTempPath()) '${suffix}-${mode}.ps1'
-$trace=Join-Path ([IO.Path]::GetTempPath()) ${quote(traceFile)}
+$trace=Join-Path ([Environment]::GetFolderPath('UserProfile')) ${quote(traceFile)}
 function Trace-Fixture($stage) { [IO.File]::AppendAllText($trace,([DateTime]::UtcNow.ToString('o')+' '+$stage+[Environment]::NewLine)) }
 $helper=$null
 $writer=$null
@@ -280,6 +288,8 @@ function Read-FixtureStream($task) {
   return 'Owned fixture stream remained open after helper exit.'
 }
 try {
+  Trace-Fixture 'script entered; writing job helper'
+  [Console]::Error.WriteLine('Owned job fixture script entered')
   [IO.File]::WriteAllText($file,${quote(jobScript)},[Text.UTF8Encoding]::new($true))
   $info=[Diagnostics.ProcessStartInfo]::new(${quote(powershell)})
   $info.UseShellExecute=$false
@@ -317,10 +327,13 @@ try {
   $ready.Dispose()
   Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
 }
-`).pipe(
+`,
+      60_000,
+      true,
+    ).pipe(
       Effect.tapError(() =>
         detached(
-          `$trace=Join-Path ([IO.Path]::GetTempPath()) ${quote(traceFile)}; if(Test-Path -LiteralPath $trace){Get-Content -LiteralPath $trace -Tail 40; Remove-Item -LiteralPath $trace -Force}`,
+          `$trace=Join-Path ([Environment]::GetFolderPath('UserProfile')) ${quote(traceFile)}; if(Test-Path -LiteralPath $trace){Get-Content -LiteralPath $trace -Tail 40; Remove-Item -LiteralPath $trace -Force}else{Write-Output 'Owned fixture trace file was never created'}`,
           10_000,
         ).pipe(
           Effect.flatMap((result) => Effect.logInfo(`Owned job ${mode} trace: ${result.stdout}`)),
