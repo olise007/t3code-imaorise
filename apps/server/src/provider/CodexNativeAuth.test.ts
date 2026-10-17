@@ -233,7 +233,7 @@ it.effect.each(["win32", "linux"] as const)(
           create: () => Effect.die("unused"),
           getOrCreateRandom: () => Effect.die("unused"),
         });
-        const config = Schema.decodeSync(CodexSettings)({
+        const config = yield* Schema.decodeEffect(CodexSettings)({
           setupMode: "existing",
           binaryPath: platform === "win32" ? "C:\\custom\\codex.exe" : "/custom/codex",
           homePath: home,

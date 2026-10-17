@@ -10,12 +10,13 @@ export function windowsConsoleProcessList(shellPid: number): Promise<number[]> {
     delete env.WATCH_REPORT_DEPENDENCIES;
     let child: NodeChildProcess.ChildProcess;
     try {
-      child = NodeChildProcess.fork("__pty-console-list", [String(shellPid)], {
+      const options: NodeChildProcess.ForkOptions & { windowsHide: boolean } = {
         env,
         execArgv: [],
         windowsHide: true,
         stdio: ["ignore", "ignore", "ignore", "ipc"],
-      });
+      };
+      child = NodeChildProcess.fork("__pty-console-list", [String(shellPid)], options);
     } catch {
       resolve([shellPid]);
       return;
@@ -54,6 +55,7 @@ export function windowsConsoleProcessList(shellPid: number): Promise<number[]> {
 /** Console attachment changes process-wide state, so this runs only in an IPC child. */
 export function runWindowsConsoleProcessList(value: string | undefined) {
   const pid = Number(value);
+  // oxlint-disable-next-line t3code/no-global-process-runtime -- Private IPC helper runs before any Effect runtime.
   if (process.platform !== "win32" || !process.send || !Number.isInteger(pid) || pid <= 0) {
     process.exitCode = 1;
     return;

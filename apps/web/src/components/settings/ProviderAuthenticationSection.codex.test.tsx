@@ -86,6 +86,9 @@ it.each(["Windows server", "Linux server"])(
       auth: { status: "unauthenticated" as const },
       checkedAt: "2026-10-17T00:00:00Z",
       models: [],
+      version: "0.156.1",
+      slashCommands: [],
+      skills: [],
       setup: { canAuthenticate: true, canInstall: false },
     };
     try {

@@ -214,7 +214,12 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         managedDirectory: "unused-managed-installation",
       }),
     ),
-    Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
+    Layer.provideMerge(
+      Layer.mock(ServerSecretStore.ServerSecretStore)({
+        get: () => Effect.succeedNone,
+        remove: () => Effect.void,
+      }),
+    ),
     Layer.provideMerge(
       Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
         getEnvironmentId: Effect.succeed(

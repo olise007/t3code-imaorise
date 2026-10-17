@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { EventEmitter } from "node:events";
+import * as NodeEvents from "node:events";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { windowsConsoleProcessList } from "./WindowsConsoleProcessList.ts";
 const state = vi.hoisted(() => ({ fork: vi.fn() }));
@@ -8,7 +8,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
 });
-const peer = () => Object.assign(new EventEmitter(), { kill: vi.fn() });
+const peer = () => Object.assign(new NodeEvents.EventEmitter(), { kill: vi.fn() });
 it("returns a verified shell console list through the narrow packaged helper", async () => {
   const child = peer();
   state.fork.mockReturnValue(child);

@@ -5,11 +5,23 @@ import * as NodePath from "node:path";
 
 /** Assert the SEA dispatch really replies over IPC instead of silently using a fallback. */
 export async function verifyPackagedPtyHelper(executable: string) {
+  // oxlint-disable-next-line t3code/no-global-process-runtime -- This fixture executes the real host-native addon without an Effect runtime.
   if (process.platform !== "win32") return;
   const require = NodeModule.createRequire(
     NodePath.join(NodePath.dirname(executable), "package.json"),
   );
-  const pty = require("node-pty") as typeof import("node-pty");
+  const pty = require("node-pty") as {
+    spawn: (
+      shell: string,
+      args: string[],
+      options: { cwd: string; cols: number; rows: number; env: NodeJS.ProcessEnv },
+    ) => {
+      pid: number;
+      onData: (callback: (data: string) => void) => { dispose: () => void };
+      onExit: (callback: () => void) => { dispose: () => void };
+      kill: () => void;
+    };
+  };
   const terminal = pty.spawn("powershell.exe", ["-NoLogo", "-NoProfile"], {
     cwd: NodePath.dirname(executable),
     cols: 80,
@@ -39,12 +51,13 @@ export async function verifyPackagedPtyHelper(executable: string) {
       });
     });
     await new Promise<void>((resolve, reject) => {
-      const child = NodeChildProcess.fork("__pty-console-list", [String(terminal.pid)], {
+      const options: NodeChildProcess.ForkOptions & { windowsHide: boolean } = {
         execPath: executable,
         execArgv: [],
         stdio: ["ignore", "ignore", "ignore", "ipc"],
         windowsHide: true,
-      });
+      };
+      const child = NodeChildProcess.fork("__pty-console-list", [String(terminal.pid)], options);
       let finished = false;
       const done = (error?: Error) => {
         if (finished) return;

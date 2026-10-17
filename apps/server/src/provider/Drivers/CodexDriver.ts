@@ -33,6 +33,7 @@ import { ChildProcessSpawner } from "effect/process";
 import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneration.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import type { ServerProviderDraft } from "@t3tools/provider-core/server/snapshotProbe";
 import * as ServerConfig from "../../config.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
@@ -192,7 +193,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
         homeLayout,
       });
       const resolveRuntime = cliAuth.resolve;
-      const withSetup = (draft: import("@t3tools/contracts").ServerProvider) => ({
+      const withSetup = (draft: ServerProviderDraft) => ({
         ...draft,
         setup: { canAuthenticate: true, canInstall: false },
       });
@@ -252,6 +253,16 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
               ),
               cliAuth.controller.withAccess!,
               Effect.scoped,
+              Effect.catch((cause) =>
+                makePendingCodexProvider(effectiveConfig).pipe(
+                  Effect.map((draft) => ({
+                    ...draft,
+                    models: [],
+                    auth: { status: "unknown" as const },
+                    message: cause.detail,
+                  })),
+                ),
+              ),
             ),
             currentCatalog,
             (draft, catalog) => stampIdentity(withSetup(applyCodexModelCatalog(draft, catalog))),

@@ -1039,7 +1039,7 @@ describe("providerMaintenanceRunner", () => {
             PATH: "C:\\fake\\npm",
             PATHEXT: ".COM;.EXE;.BAT;.CMD",
           }),
-          Layer.succeed(SpawnExecutableResolution, (command, environment) => {
+          Layer.succeed(SpawnExecutableResolution, (command, _platform, environment) => {
             assert.equal(environment?.PATH, "C:\\custom-provider\\bin");
             return command === "npm" ? "C:\\custom-provider\\bin\\npm.cmd" : undefined;
           }),

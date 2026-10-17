@@ -1,7 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - Disposable packaged-runtime fixture.
 import * as NodeCrypto from "node:crypto";
-import { stripVTControlCharacters } from "node:util";
-import { WS_METHODS, type ServerConfig, type TerminalAttachStreamEvent } from "@t3tools/contracts";
+import * as NodeUtil from "node:util";
+import {
+  WS_METHODS,
+  type ServerConfig,
+  type TerminalAttachStreamEvent,
+} from "../../packages/contracts/src/index.ts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Stream from "effect/Stream";
@@ -21,28 +25,29 @@ export const verifyTerminalIsolation = (session: RpcSession, config: ServerConfi
           cols: 80,
           rows: 24,
         });
-      const observe = (
+      const observe = <E>(
         terminalId: string,
-        action: Effect.Effect<unknown, unknown>,
+        action: Effect.Effect<unknown, E>,
         matches: (event: TerminalAttachStreamEvent, output: string) => boolean,
       ) =>
         Effect.scoped(
           Effect.gen(function* () {
-            const ready = yield* Deferred.make<void, unknown>();
-            const matched = yield* Deferred.make<void, unknown>();
+            const ready = yield* Deferred.make<void, Error>();
+            const matched = yield* Deferred.make<void, Error>();
             let output = "";
             yield* client[WS_METHODS.terminalObserve]({ threadId, terminalId }).pipe(
               Stream.runForEach((event) =>
                 Effect.gen(function* () {
                   if (event.type === "snapshot") yield* Deferred.succeed(ready, undefined);
                   if (event.type === "output")
-                    output = stripVTControlCharacters((output + event.data).slice(-32768));
+                    output = NodeUtil.stripVTControlCharacters((output + event.data).slice(-32768));
                   if (matches(event, output)) yield* Deferred.succeed(matched, undefined);
                 }),
               ),
-              Effect.catch((error) =>
-                Effect.all([Deferred.fail(ready, error), Deferred.fail(matched, error)]),
-              ),
+              Effect.catch((cause) => {
+                const error = new Error("Terminal observation failed", { cause });
+                return Effect.all([Deferred.fail(ready, error), Deferred.fail(matched, error)]);
+              }),
               Effect.forkScoped,
             );
             yield* Deferred.await(ready);

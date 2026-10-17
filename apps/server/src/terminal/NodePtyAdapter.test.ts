@@ -185,7 +185,7 @@ it.effect.each(["win32", "linux", "darwin"] as const)(
 
       assert.deepEqual(
         nativeProcess.kill.mock.calls,
-        platform === "win32" ? [[undefined]] : [["SIGTERM"], ["SIGKILL"], [undefined]],
+        platform === "win32" ? [[]] : [["SIGTERM"], ["SIGKILL"], [undefined]],
       );
     }).pipe(Effect.provide(layerTestFor(platform))),
 );

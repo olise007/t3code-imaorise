@@ -4929,7 +4929,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const nextItems = completedItems ?? new Map<string, string>();
             nextItems.set(payload.item.id, payload.item.text);
             completedAgentMessages.set(payload.turnId, nextItems);
-          });
+          }).pipe(Effect.orDie);
 
         yield* client.handleServerNotification("item/completed", (payload) =>
           Effect.gen(function* () {

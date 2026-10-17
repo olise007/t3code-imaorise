@@ -547,7 +547,7 @@ function AccessGatedProviderSettings({
       environmentLabel={environment.label}
       platformLabel={
         environment.serverConfig
-          ? `${environment.serverConfig.environment.platform.os === "win32" ? "Windows" : environment.serverConfig.environment.platform.os} · ${environment.serverConfig.environment.platform.arch}`
+          ? `${environment.serverConfig.environment.platform.os === "windows" ? "Windows" : environment.serverConfig.environment.platform.os} · ${environment.serverConfig.environment.platform.arch}`
           : undefined
       }
       readOnly={access.kind === "read-only"}

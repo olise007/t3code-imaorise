@@ -620,19 +620,31 @@ it.layer(
 
   it.effect("preserves non-notFound cwd stat failures", () =>
     Effect.gen(function* () {
-      if ((yield* HostProcess.Platform) === "win32") return;
-
       const path = yield* Path.Path;
-
-      const { manager, baseDir } = yield* createManager();
+      const fs = yield* FileSystem.FileSystem;
+      // Permission bits do not reject stat when CI runs as root. Inject the
+      // filesystem failure so the manager's error mapping is tested on every host.
+      const { manager, baseDir } = yield* createManager().pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          stat: (value) =>
+            String(value).endsWith(path.join("blocked-root", "cwd"))
+              ? Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "PermissionDenied",
+                    module: "FileSystem",
+                    method: "stat",
+                    pathOrDescriptor: String(value),
+                    description: "Fixture permission denied.",
+                  }),
+                )
+              : fs.stat(value),
+        }),
+      );
       const blockedRoot = path.join(baseDir, "blocked-root");
       const blockedCwd = path.join(blockedRoot, "cwd");
       yield* makeDirectory(blockedCwd);
-      yield* chmod(blockedRoot, 0o000);
-
-      const error = yield* Effect.flip(manager.open(openInput({ cwd: blockedCwd }))).pipe(
-        Effect.ensuring(chmod(blockedRoot, 0o755).pipe(Effect.ignore)),
-      );
+      const error = yield* Effect.flip(manager.open(openInput({ cwd: blockedCwd })));
 
       expect(error).toMatchObject({
         _tag: "TerminalCwdStatError",
