@@ -106,7 +106,9 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
         // which a bare ChildProcess.spawn cannot launch (spawn npm ENOENT);
         // resolveSpawnCommand finds the real `.cmd` and routes it through the
         // shell. On Linux/macOS (incl. the WSL backend) this is a no-op.
-        const resolved = yield* resolveSpawnCommand(input.command, input.args);
+        const resolved = yield* resolveSpawnCommand(input.command, input.args, {
+          ...(input.env ? { env: input.env, extendEnv: true } : {}),
+        });
         const child = yield* input.spawner
           .spawn(
             ChildProcess.make(resolved.command, resolved.args, {

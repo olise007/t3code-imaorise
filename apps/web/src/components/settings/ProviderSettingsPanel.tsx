@@ -545,6 +545,11 @@ function AccessGatedProviderSettings({
     <EnvironmentProviderSettings
       environmentId={environment.environmentId}
       environmentLabel={environment.label}
+      platformLabel={
+        environment.serverConfig
+          ? `${environment.serverConfig.environment.platform.os === "win32" ? "Windows" : environment.serverConfig.environment.platform.os} · ${environment.serverConfig.environment.platform.arch}`
+          : undefined
+      }
       readOnly={access.kind === "read-only"}
       deviceTabs={deviceTabs}
       targetInstanceId={targetInstanceId}
@@ -556,6 +561,7 @@ function AccessGatedProviderSettings({
 export function EnvironmentProviderSettings({
   environmentId,
   environmentLabel,
+  platformLabel,
   readOnly = false,
   deviceTabs,
   targetInstanceId,
@@ -563,6 +569,7 @@ export function EnvironmentProviderSettings({
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
+  readonly platformLabel?: string | undefined;
   readonly deviceTabs?: ReactNode;
   readonly targetInstanceId?: ProviderInstanceId | undefined;
   /** The project's checkouts on this environment, if a project is in scope. */
@@ -1022,6 +1029,21 @@ export function EnvironmentProviderSettings({
                 })
               }
             />
+          ) : mode === "editor" && row.driver === "codex" ? (
+            liveProvider?.setup?.canAuthenticate ? (
+              <ProviderAuthenticationSection
+                environmentId={environmentId}
+                environmentLabel={environmentLabel}
+                instanceId={row.instanceId}
+                provider={liveProvider}
+                readOnly={readOnly}
+              />
+            ) : (
+              <SettingsRow
+                title="Codex sign-in unavailable"
+                description="Reconnect or update this environment to manage native Codex sign-in. Existing CLI credentials remain available."
+              />
+            )
           ) : mode === "editor" &&
             !readOnly &&
             liveProvider &&
@@ -1187,6 +1209,12 @@ export function EnvironmentProviderSettings({
         {deviceTabs ? (
           <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 sm:px-4">{deviceTabs}</div>
         ) : null}
+        <SettingsGroup divided={false}>
+          <SettingsRow
+            title="Execution environment"
+            description={`${environmentLabel} · ${platformLabel ?? "Platform details not advertised by this environment"}. Installation and sign-in run on this machine.`}
+          />
+        </SettingsGroup>
         {readOnly ? (
           <SettingsGroup divided={false} className="overflow-hidden">
             <SettingsRow

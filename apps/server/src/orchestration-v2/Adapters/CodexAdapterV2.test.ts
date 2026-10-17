@@ -3733,6 +3733,124 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     });
   };
 
+  it.effect.each(["missing-completion", "fuller-snapshot", "duplicate-snapshot", "interrupted"])(
+    "reconciles final agent message snapshots: %s",
+    (scenario) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const nativeThreadId = `native-${scenario}-thread`;
+          const nativeTurnId = `native-${scenario}-turn`;
+          const full = "The server is reachable, but authentication still needs attention.";
+          const message = {
+            type: "agentMessage" as const,
+            id: "snapshot-answer",
+            text: full,
+            phase: "final_answer" as const,
+            memoryCitation: null,
+          };
+          const interrupted = scenario === "interrupted";
+          const snapshot = interrupted
+            ? []
+            : [
+                message,
+                ...(scenario === "duplicate-snapshot" ? [message] : []),
+                {
+                  ...message,
+                  id: "snapshot-commentary",
+                  text: "A separate explanation.",
+                  phase: "commentary" as const,
+                },
+              ];
+          const transcript = makeCodexReplayTranscript({
+            scenario,
+            entries: [
+              ...codexReplayPreamble({
+                nativeThreadId,
+                nativeTurnId,
+                prompt: "Inspect connection status.",
+              }),
+              {
+                type: "emit_inbound",
+                label: "partial message",
+                frame: {
+                  method: "item/agentMessage/delta",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    itemId: message.id,
+                    delta: "The server is reachable, but",
+                  },
+                },
+              },
+              ...(scenario === "fuller-snapshot"
+                ? [
+                    {
+                      type: "emit_inbound" as const,
+                      label: "partial completion",
+                      frame: {
+                        method: "item/completed",
+                        params: {
+                          threadId: nativeThreadId,
+                          turnId: nativeTurnId,
+                          item: { ...message, text: "The server is reachable, but" },
+                        },
+                      },
+                    },
+                  ]
+                : []),
+              {
+                type: "emit_inbound",
+                label: "authoritative turn snapshot",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: {
+                      ...makeCodexReplayTurn({
+                        id: nativeTurnId,
+                        status: interrupted ? "interrupted" : "completed",
+                      }),
+                      items: snapshot,
+                    },
+                  },
+                },
+              },
+            ],
+          });
+          const harness = yield* makeCodexReplayHarness(transcript);
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attempt-${scenario}`),
+              text: "Inspect connection status.",
+            }),
+          );
+          yield* harness.firstTerminal;
+          const messages = new Map(
+            assistantMessages(harness.events).map((event) => [event.message.id, event.message]),
+          );
+          const items = new Map(assistantTurnItems(harness.events).map((item) => [item.id, item]));
+          assert.deepEqual(
+            [...messages.values()].map((message) => message.text),
+            interrupted ? ["The server is reachable, but"] : [full, "A separate explanation."],
+          );
+          assert.deepEqual(
+            [...items.values()].map((item) => item.text),
+            [...messages.values()].map((message) => message.text),
+          );
+          assert.isTrue([...messages.values()].every((message) => !message.streaming));
+          if (scenario === "duplicate-snapshot")
+            assert.equal(assistantMessages(harness.events).length, 2);
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+          ),
+        ),
+      ),
+  );
+
   it.effect("suppresses a trailing empty final answer after a non-empty final answer", () =>
     Effect.scoped(
       Effect.gen(function* () {

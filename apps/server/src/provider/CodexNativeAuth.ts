@@ -101,6 +101,8 @@ export const makeCodexNativeAuth = Effect.fn("makeCodexNativeAuth")(function* (o
   readonly stateDir: string;
   readonly homeLayout: CodexHomeLayout;
   readonly environment: NodeJS.ProcessEnv;
+  readonly existingHomePath?: string;
+  readonly disconnectExistingOnLogout?: boolean;
   readonly executable: Effect.Effect<
     { executablePath: string },
     ProviderSetupError,
@@ -169,7 +171,7 @@ export const makeCodexNativeAuth = Effect.fn("makeCodexNativeAuth")(function* (o
     const executable = yield* options.executable;
     const existing = method === "codex-existing";
     const homePath = existing
-      ? options.homeLayout.sharedHomePath
+      ? (options.existingHomePath ?? options.homeLayout.sharedHomePath)
       : path.join(
           options.stateDir,
           "providers",
@@ -295,7 +297,7 @@ export const makeCodexNativeAuth = Effect.fn("makeCodexNativeAuth")(function* (o
         ),
       ),
     logout: Effect.gen(function* () {
-      if (Option.isNone(yield* read)) return false;
+      if (Option.isNone(yield* read) && !options.disconnectExistingOnLogout) return false;
       yield* saveSelection({ mode: "disconnected", homePath: "" });
       return true;
     }).pipe(Effect.mapError(() => fail("logout", "Could not disconnect native Codex."))),

@@ -16,15 +16,14 @@ import * as Deferred from "effect/Deferred";
 import { sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
 
 import { connectionAtomRuntime } from "./runtime";
+import { createSshSetupOperations } from "./sshSetupOperations";
 import { sshSetupProgress, sshSetupTargetKey } from "./sshSetupProgress";
 
 const onboardingScheduler = createAtomCommandScheduler();
-const setupCancellations = new Map<string, () => Promise<unknown>>();
-const setupKey = sshSetupTargetKey;
+const operations = createSshSetupOperations(sshSetupProgress.forgetEnvironment);
 const isConnectionTransientError = Schema.is(ConnectionTransientError);
-export const cancelSshEnvironmentSetup = async (target: DesktopSshEnvironmentTarget) => {
-  await setupCancellations.get(setupKey(target))?.();
-};
+export const cancelSshEnvironmentSetup = operations.cancel;
+export const withSshEnvironmentRemoval = operations.remove;
 
 export const connectPairing = createRuntimeCommand(connectionAtomRuntime, {
   label: "web:connection:connect-pairing",
@@ -53,7 +52,12 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
     },
   ) =>
     Effect.gen(function* () {
-      const key = setupKey(input.target);
+      if (operations.isRemoving(input.target))
+        return yield* new ConnectionTransientError({
+          reason: "remote-unavailable",
+          detail:
+            "This connection is being removed. Wait for removal to finish before adding it again.",
+        });
       const progressId = sshSetupProgress.begin(input.target);
       sshSetupProgress.append(progressId, "Starting SSH environment setup");
       let lastSequence = 0;
@@ -97,7 +101,11 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
         await Effect.runPromise(Deferred.succeed(cancellation, undefined));
         await cancelCurrent().finally(() => Effect.runPromise(Deferred.await(completed)));
       };
-      setupCancellations.set(key, cancel);
+      if (!operations.register(input.target, progressId, cancel)) {
+        unsubscribe?.();
+        sshSetupProgress.finish(progressId, "cancelled");
+        return yield* Effect.interrupt;
+      }
       const environments = yield* EnvironmentRegistry.EnvironmentRegistry;
       const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
       return yield* Effect.gen(function* () {
@@ -138,6 +146,7 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
             ? { expectedEnvironmentId: input.expectedEnvironmentId }
             : {}),
         });
+        sshSetupProgress.associateEnvironment(progressId, environmentId);
         yield* environments.stateChanges(environmentId).pipe(
           Stream.filter(
             (state) =>
@@ -207,7 +216,7 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
         Effect.ensuring(Deferred.succeed(completed, undefined)),
         Effect.ensuring(
           Effect.sync(() => {
-            if (setupCancellations.get(key) === cancel) setupCancellations.delete(key);
+            operations.end(input.target, progressId);
           }),
         ),
       );

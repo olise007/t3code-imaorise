@@ -1588,7 +1588,7 @@ export type CodexAdapterV2DriverEnv =
 
 export const createCodexAdapterV2 = (
   { instanceId, environment, enabled, config }: ProviderAdapterDriverCreateInput<CodexSettings>,
-  hooks: Pick<CodexAdapterV2Options, "onUsageLimits" | "resolveRuntime"> = {},
+  hooks: Pick<CodexAdapterV2Options, "onUsageLimits" | "resolveRuntime" | "omitServiceTier"> = {},
 ) =>
   Effect.gen(function* () {
     const clientFactory = yield* CodexAppServerClientFactory;
@@ -1686,6 +1686,7 @@ export interface CodexAdapterV2Options {
    * Codex with a current access token.
    */
   readonly resolveRuntime?: Effect.Effect<CodexEffectiveRuntime, ProviderSetupError, Scope.Scope>;
+  readonly omitServiceTier?: boolean;
   readonly crypto: Crypto.Crypto;
   readonly fileSystem: FileSystem.FileSystem;
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
@@ -4824,6 +4825,112 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
         );
 
+        const completedAgentMessages = new Map<string, Map<string, string>>();
+        const completeAgentMessage = (
+          context: ActiveCodexTurnContext,
+          payload: {
+            readonly turnId: string;
+            readonly item: Extract<
+              CodexSchema.V2ItemCompletedNotification__ThreadItem,
+              { type: "agentMessage" }
+            >;
+          },
+        ) =>
+          Effect.gen(function* () {
+            if (payload.item.delivery === "async" && payload.item.questions?.length) {
+              const artifacts = yield* buildUserInputRequestArtifacts({
+                context,
+                nativeItemId: payload.item.id,
+                nativeRequestId: `async:${payload.item.id}`,
+                responseMode: "message",
+                questions: payload.item.questions.map((question, index) => ({
+                  id: String(index),
+                  header: "Question",
+                  question: question.title,
+                  options: (question.options ?? []).map((label) => ({ label, description: "" })),
+                })),
+              });
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: artifacts.node,
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: artifacts.turnItem,
+              });
+              yield* emitProviderEvent({
+                type: "runtime_request.updated",
+                driver: CODEX_PROVIDER,
+                threadId: artifacts.node.threadId,
+                runtimeRequest: artifacts.request,
+              });
+              yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
+                const ids = current.get(payload.turnId);
+                if (!ids?.has(payload.item.id)) return current;
+                const next = new Map(current);
+                const remaining = new Set(ids);
+                remaining.delete(payload.item.id);
+                if (remaining.size === 0) next.delete(payload.turnId);
+                else next.set(payload.turnId, remaining);
+                return next;
+              });
+              return;
+            }
+
+            const completedItems = completedAgentMessages.get(payload.turnId);
+            if (completedItems?.get(payload.item.id) === payload.item.text) return;
+
+            const finalAnswer = payload.item.phase !== "commentary";
+            if (finalAnswer) {
+              yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
+                const updated = new Map(current);
+                const itemIds = new Set(updated.get(payload.turnId) ?? []);
+                itemIds.add(payload.item.id);
+                updated.set(payload.turnId, itemIds);
+                return updated;
+              });
+            }
+            const completedTextsBefore =
+              (yield* Ref.get(completedFinalAnswerTextsByTurn)).get(payload.turnId) ??
+              new Set<string>();
+            const text = yield* agentMessageDeltas.complete({
+              turnId: payload.turnId,
+              itemId: payload.item.id,
+              finalText: payload.item.text,
+            });
+            yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
+              const itemIds = current.get(payload.turnId);
+              if (itemIds === undefined || !itemIds.has(payload.item.id)) {
+                return current;
+              }
+              const updated = new Map(current);
+              const remainingItemIds = new Set(itemIds);
+              remainingItemIds.delete(payload.item.id);
+              if (remainingItemIds.size === 0) {
+                updated.delete(payload.turnId);
+              } else {
+                updated.set(payload.turnId, remainingItemIds);
+              }
+              return updated;
+            });
+            const emitted =
+              !finalAnswer ||
+              completedTextsBefore.size === 0 ||
+              (text.length > 0 && !completedTextsBefore.has(text));
+            if (emitted && context.subagent !== null && finalAnswer) {
+              yield* emitSubagentTaskUpdate({
+                subagent: context.subagent,
+                status: context.subagent.task.status,
+                result: text,
+              });
+            }
+            const nextItems = completedItems ?? new Map<string, string>();
+            nextItems.set(payload.item.id, payload.item.text);
+            completedAgentMessages.set(payload.turnId, nextItems);
+          });
+
         yield* client.handleServerNotification("item/completed", (payload) =>
           Effect.gen(function* () {
             if (payload.item.type === "contextCompaction")
@@ -5053,92 +5160,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return;
             }
 
-            if (payload.item.delivery === "async" && payload.item.questions?.length) {
-              const artifacts = yield* buildUserInputRequestArtifacts({
-                context,
-                nativeItemId: payload.item.id,
-                nativeRequestId: `async:${payload.item.id}`,
-                responseMode: "message",
-                questions: payload.item.questions.map((question, index) => ({
-                  id: String(index),
-                  header: "Question",
-                  question: question.title,
-                  options: (question.options ?? []).map((label) => ({ label, description: "" })),
-                })),
-              });
-              yield* emitProviderEvent({
-                type: "node.updated",
-                driver: CODEX_PROVIDER,
-                node: artifacts.node,
-              });
-              yield* emitProviderEvent({
-                type: "turn_item.updated",
-                driver: CODEX_PROVIDER,
-                turnItem: artifacts.turnItem,
-              });
-              yield* emitProviderEvent({
-                type: "runtime_request.updated",
-                driver: CODEX_PROVIDER,
-                threadId: artifacts.node.threadId,
-                runtimeRequest: artifacts.request,
-              });
-              yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
-                const ids = current.get(payload.turnId);
-                if (!ids?.has(payload.item.id)) return current;
-                const next = new Map(current);
-                const remaining = new Set(ids);
-                remaining.delete(payload.item.id);
-                if (remaining.size === 0) next.delete(payload.turnId);
-                else next.set(payload.turnId, remaining);
-                return next;
-              });
-              return;
-            }
-
-            const finalAnswer = payload.item.phase !== "commentary";
-            if (finalAnswer) {
-              yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
-                const updated = new Map(current);
-                const itemIds = new Set(updated.get(payload.turnId) ?? []);
-                itemIds.add(payload.item.id);
-                updated.set(payload.turnId, itemIds);
-                return updated;
-              });
-            }
-            const completedTextsBefore =
-              (yield* Ref.get(completedFinalAnswerTextsByTurn)).get(payload.turnId) ??
-              new Set<string>();
-            const text = yield* agentMessageDeltas.complete({
-              turnId: payload.turnId,
-              itemId: payload.item.id,
-              finalText: payload.item.text,
-            });
-            yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
-              const itemIds = current.get(payload.turnId);
-              if (itemIds === undefined || !itemIds.has(payload.item.id)) {
-                return current;
-              }
-              const updated = new Map(current);
-              const remainingItemIds = new Set(itemIds);
-              remainingItemIds.delete(payload.item.id);
-              if (remainingItemIds.size === 0) {
-                updated.delete(payload.turnId);
-              } else {
-                updated.set(payload.turnId, remainingItemIds);
-              }
-              return updated;
-            });
-            const emitted =
-              !finalAnswer ||
-              completedTextsBefore.size === 0 ||
-              (text.length > 0 && !completedTextsBefore.has(text));
-            if (emitted && context.subagent !== null && finalAnswer) {
-              yield* emitSubagentTaskUpdate({
-                subagent: context.subagent,
-                status: context.subagent.task.status,
-                result: text,
-              });
-            }
+            yield* completeAgentMessage(context, { turnId: payload.turnId, item: payload.item });
           }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
         );
 
@@ -5813,6 +5835,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly completedAt: DateTime.Utc;
           readonly failureMessage?: string;
           readonly failureCode?: string | null;
+          readonly agentMessages?: ReadonlyArray<
+            Extract<CodexSchema.V2ItemCompletedNotification__ThreadItem, { type: "agentMessage" }>
+          >;
           readonly commandItems?: ReadonlyArray<
             Parameters<typeof buildCommandExecutionArtifacts>[1]
           >;
@@ -5892,7 +5917,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   return updated;
                 });
               }
+              // The turn snapshot is authoritative when deltas or item completion
+              // notifications were missed. Reuse item completion before flushing.
+              for (const item of input.agentMessages ?? []) {
+                yield* completeAgentMessage(input.context, { turnId: input.nativeTurnId, item });
+              }
               yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
+              completedAgentMessages.delete(input.nativeTurnId);
               yield* reasoningDeltas.flushTurn(input.nativeTurnId);
               for (const [key, part] of reasoningParts) {
                 if (part.turnId === input.nativeTurnId) reasoningParts.delete(key);
@@ -6121,6 +6152,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             yield* finalizeCodexTurn({
               context,
               nativeTurnId: payload.turn.id,
+              agentMessages: payload.turn.items.filter((item) => item.type === "agentMessage"),
               commandItems: payload.turn.items.filter((item) => item.type === "commandExecution"),
               status,
               completedAt: codexTimestamp(payload.turn.completedAt),
@@ -6329,7 +6361,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               hasT3Mcp: mcpSession !== undefined,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
-              omitServiceTier: adapterOptions.resolveRuntime !== undefined,
+              omitServiceTier:
+                adapterOptions.omitServiceTier ?? adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });
             yield* Ref.update(pendingRootTurns, (current) => {

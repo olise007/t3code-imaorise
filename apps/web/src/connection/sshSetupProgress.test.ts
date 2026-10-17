@@ -39,3 +39,22 @@ it("retains active work and only ten completed attempts with bounded, sanitized 
   expect(item.lines).toHaveLength(2000);
   expect(item.lines.at(-1)?.text).not.toMatch(/hidden|private|auth.openai/);
 });
+
+it("forgets removed environment attempts without erasing another source or accepting late output", () => {
+  vi.useFakeTimers();
+  const store = createSshSetupProgress();
+  const local = store.begin(target);
+  const wsl = store.begin({ ...target, executionSource: { type: "wsl", distro: "Ubuntu" } });
+  store.associateEnvironment(local, "removed");
+  store.append(local, "Private connection details");
+  store.finish(local, "succeeded");
+  store.forgetEnvironment("removed", [target]);
+  store.append(local, "Late progress");
+  store.finish(local, "failed");
+  expect(store.snapshot().map((attempt) => attempt.id)).toEqual([wsl]);
+  store.dismiss(wsl);
+  expect(store.snapshot()).toHaveLength(1);
+  store.finish(wsl, "failed");
+  store.dismiss(wsl);
+  expect(store.snapshot()).toEqual([]);
+});

@@ -1,5 +1,7 @@
 import * as NodeModule from "node:module";
 import * as NodeNet from "node:net";
+import * as NodeSea from "node:sea";
+import { windowsConsoleProcessList } from "./WindowsConsoleProcessList.ts";
 
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -175,6 +177,7 @@ class NodePtyProcess implements PtyAdapter.PtyProcess {
   private readonly process: import("node-pty").IPty;
   private readonly platform: NodeJS.Platform;
   private exitEvent: PtyAdapter.PtyExitEvent | undefined;
+  private killed = false;
   private readonly exitListeners = new Set<(event: PtyAdapter.PtyExitEvent) => void>();
   private readonly exitSubscription: import("node-pty").IDisposable;
 
@@ -204,8 +207,13 @@ class NodePtyProcess implements PtyAdapter.PtyProcess {
   }
 
   kill(signal?: string): void {
-    // node-pty terminates the Windows process tree without a POSIX signal.
-    this.process.kill(this.platform === "win32" ? undefined : signal);
+    // ConPTY has one close operation, not TERM/KILL escalation. Closing the
+    // same native pseudoconsole twice can invalidate the host process.
+    if (this.platform === "win32") {
+      if (this.killed || this.exitEvent) return;
+      this.process.kill();
+      this.killed = true;
+    } else this.process.kill(signal);
   }
 
   onData(callback: (data: string) => void): () => void {
@@ -288,6 +296,17 @@ export const make = Effect.fn("NodePtyAdapter.make")(function* () {
           }),
       });
       if (platform === "win32") {
+        if (NodeSea.isSea()) {
+          const native = ptyProcess.nativeProcess;
+          if (
+            "_agent" in native &&
+            native._agent &&
+            typeof native._agent === "object" &&
+            "_getConsoleProcessList" in native._agent
+          ) {
+            native._agent._getConsoleProcessList = () => windowsConsoleProcessList(native.pid);
+          }
+        }
         yield* waitForWindowsPid(ptyProcess.nativeProcess, ptyProcess.process, input.shell).pipe(
           Effect.onError(() =>
             Effect.sync(() => ptyProcess.process.disposeExitSubscription()).pipe(

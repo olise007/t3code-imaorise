@@ -39,7 +39,7 @@ function Attempt({ attempt }: { attempt: SshSetupAttempt }) {
               size="xs"
               variant="outline"
               onClick={() => {
-                void cancelSshEnvironmentSetup(attempt.target).catch(() =>
+                void cancelSshEnvironmentSetup(attempt.target, attempt.id).catch(() =>
                   setError(
                     "Could not confirm cancellation. Check the active setup before retrying.",
                   ),
@@ -48,7 +48,15 @@ function Attempt({ attempt }: { attempt: SshSetupAttempt }) {
             >
               Cancel setup
             </Button>
-          ) : null}
+          ) : (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => sshSetupProgress.dismiss(attempt.id)}
+            >
+              Dismiss
+            </Button>
+          )}
         </div>
       </div>
       {open ? (

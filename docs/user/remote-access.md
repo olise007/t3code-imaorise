@@ -228,6 +228,13 @@ and custom provider installations are preserved. After connecting, choose **Set 
 in Connections to install providers and sign in. Agent setup is separate from connecting;
 local credentials are never copied.
 Providers without a verified automatic recipe show their manual setup guidance.
+Provider settings identify the destination platform and installation owner. Existing
+Codex installations can use native browser or device-code sign-in without becoming
+T3-managed installations. Review versions in that environment's provider settings;
+an externally owned installation keeps its own supported update method.
+
+Removing a connection clears its setup history from this client and leaves the remote
+server running. Closing an integrated terminal closes that terminal, not the connection.
 
 Cancel setup to stop owned installation work. Completed packages remain installed;
 retry explicitly after resolving a failure. Reconnecting never repeats approved

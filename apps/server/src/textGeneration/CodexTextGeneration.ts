@@ -43,6 +43,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     import("@t3tools/contracts").ProviderSetupError,
     Scope.Scope
   >,
+  omitServiceTier = resolveRuntime !== undefined,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -188,7 +189,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const reasoningEffort =
         getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
         DEFAULT_TEXT_GENERATION_REASONING_EFFORT;
-      const serviceTier = resolved ? undefined : getCodexServiceTierOptionValue(modelSelection);
+      const serviceTier = omitServiceTier
+        ? undefined
+        : getCodexServiceTierOptionValue(modelSelection);
       const spawnCommand = yield* resolveSpawnCommand(
         effectiveConfig.binaryPath || "codex",
         [

@@ -7,6 +7,8 @@ import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
 import * as Effect from "effect/Effect";
+import { verifyTerminalIsolation } from "./ssh-terminal-lifecycle.ts";
+import { verifyPackagedPtyHelper } from "./packaged-pty-helper.ts";
 import { sanitizeSetupOutput } from "../../packages/shared/src/setupDetails.ts";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as Socket from "effect/socket/Socket";
@@ -43,6 +45,7 @@ const start = async (resume: string) => {
   return JSON.parse(line) as { remotePort: number };
 };
 try {
+  await verifyPackagedPtyHelper(executable);
   const first = await start("yes");
   const descriptor = await fetch(
     `http://127.0.0.1:${first.remotePort}/.well-known/t3/environment`,
@@ -87,7 +90,8 @@ try {
             });
             yield* session.ready;
             yield* session.probe;
-            yield* session.initialConfig;
+            const config = yield* session.initialConfig;
+            if (attempt === 0) yield* verifyTerminalIsolation(session, config);
           }),
         );
       }

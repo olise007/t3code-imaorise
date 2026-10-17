@@ -17,7 +17,11 @@ if (
   })
 ) {
   const command = process.argv[2];
-  if (command === "desktop-runtime") {
+  if (command === "__pty-console-list") {
+    const { runWindowsConsoleProcessList } =
+      await import("./terminal/WindowsConsoleProcessList.ts");
+    runWindowsConsoleProcessList(process.argv[3]);
+  } else if (command === "desktop-runtime") {
     const { runDesktopRuntime } = await import("./desktopRuntime.ts");
     await runDesktopRuntime(process.argv.slice(3));
   } else if (command === "acp-mcp-bridge" || command === "acp-mcp-call") {

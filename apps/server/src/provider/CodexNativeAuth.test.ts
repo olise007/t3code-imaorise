@@ -1,7 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
-import { ProviderInstanceId, type ProviderAuthInteraction } from "@t3tools/contracts";
+import {
+  CodexSettings,
+  ProviderInstanceId,
+  type ProviderAuthInteraction,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -13,6 +17,9 @@ import * as Path from "effect/Path";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { makeCodexCliAuth } from "./CodexCliAuth.ts";
 import { makeCodexNativeAuth } from "./CodexNativeAuth.ts";
 
 let verified = true;
@@ -194,4 +201,95 @@ it.effect.each(["codex-browser", "codex-device", "codex-existing"])(
       const disconnected = yield* native.read;
       assert.isTrue(Option.isSome(disconnected) && disconnected.value.mode === "disconnected");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each(["win32", "linux"] as const)(
+  "keeps external installation ownership while signing in on %s",
+  (platform) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        verified = true;
+        holdCompletion = false;
+        calls = [];
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "cli-auth-parity-" });
+        const home = path.join(root, "original-home");
+        yield* fs.makeDirectory(home);
+        const originalCredentials = "fixture-owned-cli-credentials";
+        yield* fs.writeFileString(path.join(home, "auth.json"), originalCredentials);
+        const values = new Map<string, Uint8Array>();
+        const secrets = ServerSecretStore.ServerSecretStore.of({
+          directory: root,
+          get: (key) => Effect.sync(() => Option.fromUndefinedOr(values.get(key))),
+          set: (key, value) =>
+            Effect.sync(() => {
+              values.set(key, value);
+            }),
+          remove: (key) =>
+            Effect.sync(() => {
+              values.delete(key);
+            }),
+          create: () => Effect.die("unused"),
+          getOrCreateRandom: () => Effect.die("unused"),
+        });
+        const config = Schema.decodeSync(CodexSettings)({
+          setupMode: "existing",
+          binaryPath: platform === "win32" ? "C:\\custom\\codex.exe" : "/custom/codex",
+          homePath: home,
+        });
+        const runtime = yield* makeCodexCliAuth({
+          instanceId: ProviderInstanceId.make(`external-${platform}`),
+          stateDir: root,
+          config,
+          environment: { CUSTOM_VALUE: "retained" },
+          homeLayout: {
+            mode: "direct",
+            sharedHomePath: home,
+            effectiveHomePath: home,
+            continuationKey: "fixture",
+          },
+        }).pipe(
+          Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+          Effect.provideService(HostProcess.Platform, platform),
+        );
+        assert.deepEqual((yield* runtime.resolve).config, config);
+        // Disconnect implicit CLI credentials as well as an explicitly selected home.
+        yield* runtime.controller.logout(Effect.void);
+        assert.include((yield* runtime.resolve.pipe(Effect.flip)).detail, "Sign in with Codex");
+        yield* runtime.controller.start("owner", Effect.void, "codex-existing");
+        yield* runtime.controller.subscribe("owner").pipe(
+          Stream.filter((state) => state.phase === "succeeded"),
+          Stream.runHead,
+        );
+        assert.equal((yield* runtime.resolve).config.homePath, home);
+        yield* runtime.controller.logout(Effect.void);
+        assert.include((yield* runtime.resolve.pipe(Effect.flip)).detail, "Sign in with Codex");
+        assert.equal(yield* fs.readFileString(path.join(home, "auth.json")), originalCredentials);
+        const initial = yield* runtime.controller.start("owner", Effect.void, "codex-browser");
+        assert.deepEqual(
+          initial.methods?.map((method) => method.id),
+          ["codex-browser", "codex-device", "codex-existing"],
+        );
+        yield* runtime.controller.subscribe("owner").pipe(
+          Stream.filter((state) => state.phase === "succeeded"),
+          Stream.runHead,
+        );
+        const selected = yield* runtime.resolve;
+        assert.equal(selected.config.binaryPath, config.binaryPath);
+        assert.equal(selected.config.setupMode, "existing");
+        assert.notEqual(selected.config.homePath, home);
+        assert.equal(selected.environment.CUSTOM_VALUE, "retained");
+        verified = false;
+        yield* runtime.controller.start("owner", Effect.void, "codex-device");
+        yield* runtime.controller.subscribe("owner").pipe(
+          Stream.filter((state) => state.phase === "failed"),
+          Stream.runHead,
+        );
+        assert.deepEqual(yield* runtime.resolve, selected);
+        yield* runtime.controller.logout(Effect.void);
+        const failure = yield* runtime.resolve.pipe(Effect.flip);
+        assert.include(failure.detail, "Sign in with Codex");
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
 );

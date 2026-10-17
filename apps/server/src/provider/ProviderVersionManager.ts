@@ -20,6 +20,7 @@ import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as NodeCrypto from "node:crypto";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
 import { makeTargetedProviderUpdateAction } from "@t3tools/provider-core/server/maintenanceResolver";
@@ -52,6 +53,8 @@ const decodeCodexRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(Codex
 /** Coordinates approval, immutable staging, ownership checks, and activation in the destination environment. */
 export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make")(function* () {
   const catalog = yield* makeProviderVersionCatalog();
+  const platform = yield* HostProcess.Platform;
+  const architecture = yield* HostProcess.Architecture;
   const sessionManager = yield* Effect.serviceOption(
     ProviderSessionManager.ProviderSessionManagerV2,
   );
@@ -252,6 +255,32 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
                 : null;
       return {
         ...result,
+        runtime: {
+          platform,
+          architecture,
+          executablePath:
+            group.installation?.binary ??
+            (group.installation?.kind === "codex"
+              ? yield* codex.resolve().pipe(
+                  Effect.map((value) => value.executablePath),
+                  Effect.orElseSucceed(() => null),
+                )
+              : null),
+          ownership:
+            group.installation === null
+              ? ("not-installed" as const)
+              : group.installation.kind === "external"
+                ? ("external" as const)
+                : group.installation.kind === "unverified"
+                  ? ("unverified" as const)
+                  : ("managed" as const),
+          updateMethod:
+            group.installation?.kind === "external"
+              ? (group.capabilities?.update?.command ?? null)
+              : group.installation?.kind === "unverified"
+                ? null
+                : "T3 verified version installer",
+        },
         ...(externalUnsupported
           ? {
               message:

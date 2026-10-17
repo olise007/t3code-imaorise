@@ -96,6 +96,69 @@ const noSpawn = ChildProcessSpawner.make(() =>
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(layerTest)("CodexDriver", (it) => {
+  it.effect("sign-out cancels existing CLI generation after runtime resolution", () =>
+    Effect.gen(function* () {
+      const values = new Map<string, Uint8Array>();
+      const secrets = ServerSecretStore.ServerSecretStore.of({
+        get: (key) => Effect.sync(() => Option.fromUndefinedOr(values.get(key))),
+        set: (key, value) =>
+          Effect.sync(() => {
+            values.set(key, value);
+          }),
+        remove: (key) =>
+          Effect.sync(() => {
+            values.delete(key);
+          }),
+        create: () => Effect.die("unused"),
+        getOrCreateRandom: () => Effect.die("unused"),
+      });
+      const started = yield* Deferred.make<void>();
+      const stopped = yield* Deferred.make<void>();
+      const spawner = ChildProcessSpawner.make(() =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Deferred.succeed(stopped, undefined)),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const instanceId = ProviderInstanceId.make("existing-auth-cancellation");
+        const instance = yield* CodexDriver.create({
+          instanceId,
+          displayName: "Existing CLI",
+          enabled: false,
+          environment: [],
+          config: { ...CodexDriver.defaultConfig(), binaryPath: process.execPath },
+        });
+        const generation = yield* instance.textGeneration
+          .generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "test",
+            stagedSummary: "M README.md",
+            stagedPatch: "fixture",
+            modelSelection: { instanceId, model: "gpt-5.4" },
+          })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(started);
+        yield* instance.auth!.logout(Effect.void);
+        yield* Deferred.await(stopped);
+        expect((yield* Fiber.await(generation))._tag).toBe("Failure");
+        const next = yield* instance.textGeneration
+          .generateCommitMessage({
+            cwd: process.cwd(),
+            branch: "test",
+            stagedSummary: "M README.md",
+            stagedPatch: "fixture",
+            modelSelection: { instanceId, model: "gpt-5.4" },
+          })
+          .pipe(Effect.result);
+        expect(next._tag).toBe("Failure");
+      }).pipe(
+        Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("disconnect refreshes a restored managed account while its auth flow is idle", () =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("restored-managed-account");

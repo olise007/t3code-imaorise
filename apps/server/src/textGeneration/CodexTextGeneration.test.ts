@@ -138,6 +138,7 @@ function withFakeCodexEnv<A, E, R>(
     environment?: NodeJS.ProcessEnv;
     models?: ReadonlyArray<string>;
     managedRuntime?: boolean;
+    existingRuntime?: boolean;
   },
   effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
 ) {
@@ -157,13 +158,14 @@ function withFakeCodexEnv<A, E, R>(
           capabilities: null,
         })),
       ),
-      input.managedRuntime
+      input.managedRuntime || input.existingRuntime
         ? Effect.succeed({
             config,
             environment: input.environment ?? process.env,
             revision: "test",
           })
         : undefined,
+      input.existingRuntime ? false : undefined,
     );
     return yield* effectFn(textGeneration);
   }).pipe(Effect.scoped);
@@ -219,9 +221,9 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
     ),
   );
 
-  it.effect(
-    "forwards codex service tier and non-default reasoning effort into codex exec config",
-    () =>
+  it.effect.each([false, true])(
+    "forwards service tier with an existing CLI runtime resolver: %s",
+    (existingRuntime) =>
       withFakeCodexEnv(
         {
           output: JSON.stringify({
@@ -229,6 +231,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             body: "",
           }),
           requireServiceTier: "priority",
+          existingRuntime,
           requireReasoningEffort: "xhigh",
           stdinMustNotContain: "branch must be a short semantic git branch fragment",
         },

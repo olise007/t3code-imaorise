@@ -997,6 +997,15 @@ export const ProviderVersionRelease = Schema.Struct({
 });
 export type ProviderVersionRelease = typeof ProviderVersionRelease.Type;
 export const ProviderVersionCatalog = Schema.Struct({
+  runtime: Schema.optionalKey(
+    Schema.Struct({
+      platform: Schema.String,
+      architecture: Schema.String,
+      executablePath: Schema.NullOr(Schema.String),
+      ownership: Schema.Literals(["managed", "external", "unverified", "not-installed"]),
+      updateMethod: Schema.NullOr(Schema.String),
+    }),
+  ),
   releases: Schema.Array(ProviderVersionRelease),
   page: Schema.Number,
   hasMore: Schema.Boolean,

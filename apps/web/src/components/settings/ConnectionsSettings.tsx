@@ -182,6 +182,7 @@ import {
   connectPairing as connectPairingAtom,
   connectSshEnvironment as connectSshEnvironmentAtom,
   cancelSshEnvironmentSetup,
+  withSshEnvironmentRemoval,
 } from "~/connection/onboarding";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useEnvironmentQuery } from "~/state/query";
@@ -3340,38 +3341,55 @@ export function ConnectionsSettings() {
       const environmentId = environment.environmentId;
       setRemovingSavedEnvironmentId(environmentId);
       setSavedBackendError(null);
+      const targets = connectionRoutes(environment.entry).flatMap((route) =>
+        Option.isSome(route.profile) && route.profile.value._tag === "SshConnectionProfile"
+          ? [route.profile.value.target]
+          : [],
+      );
       try {
-        for (const route of connectionRoutes(environment.entry)) {
-          if (
-            Option.isSome(route.profile) &&
-            route.profile.value._tag === "SshConnectionProfile" &&
-            route.profile.value.target.manual
-          )
-            await window.desktopBridge?.forgetSshCredentials?.(route.profile.value.target);
-        }
-      } catch {
-        setRemovingSavedEnvironmentId(null);
-        toastManager.add({
-          type: "error",
-          title: "Could not forget the saved SSH credential",
-          description:
-            "The environment was retained. Retry removal after reconnecting the desktop client.",
+        await withSshEnvironmentRemoval(environmentId, targets, async () => {
+          try {
+            for (const route of connectionRoutes(environment.entry)) {
+              if (
+                Option.isSome(route.profile) &&
+                route.profile.value._tag === "SshConnectionProfile" &&
+                route.profile.value.target.manual
+              )
+                await window.desktopBridge?.forgetSshCredentials?.(route.profile.value.target);
+            }
+          } catch {
+            setRemovingSavedEnvironmentId(null);
+            toastManager.add({
+              type: "error",
+              title: "Could not forget the saved SSH credential",
+              description:
+                "The environment was retained. Retry removal after reconnecting the desktop client.",
+            });
+            return false;
+          }
+          const result = await removeEnvironment(environmentId);
+          if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+            const error = squashAtomCommandFailure(result);
+            const message = error instanceof Error ? error.message : "Failed to remove backend.";
+            setSavedBackendError(message);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Could not remove backend",
+                description: message,
+              }),
+            );
+          }
+          return result._tag === "Success";
         });
-        return;
-      }
-      const result = await removeEnvironment(environmentId);
-      setRemovingSavedEnvironmentId(null);
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        const message = error instanceof Error ? error.message : "Failed to remove backend.";
-        setSavedBackendError(message);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not remove backend",
-            description: message,
-          }),
+      } catch (error) {
+        setSavedBackendError(
+          error instanceof Error
+            ? error.message
+            : "Could not finish cancelling setup. The connection was retained.",
         );
+      } finally {
+        setRemovingSavedEnvironmentId(null);
       }
     },
     [removeEnvironment],

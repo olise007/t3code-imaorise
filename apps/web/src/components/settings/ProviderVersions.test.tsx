@@ -55,6 +55,13 @@ it("requires an exact artifact review, preserves independent labels, and allows 
       selectedVersion: "1.0.0",
       affectedInstances: ["Work", "Personal"],
       message: null,
+      runtime: {
+        platform: "win32",
+        architecture: "x64",
+        ownership: "external",
+        executablePath: "C:\\custom\\codex.exe",
+        updateMethod: "npm install --global",
+      },
     },
   });
   fixtures.update.mockResolvedValue({ _tag: "Success", value: { providers: [] } });
@@ -79,6 +86,8 @@ it("requires an exact artifact review, preserves independent labels, and allows 
       button("Check for updates").click();
     });
     expect(container.textContent).toContain("Installed: 1.0.0");
+    expect(container.textContent).toContain("Windows · x64 · external");
+    expect(container.textContent).toContain("C:\\custom\\codex.exe");
     expect(container.textContent).toContain("Selected: 1.0.0");
     expect(container.textContent).toContain("Work, Personal");
     const radios = container.querySelectorAll<HTMLInputElement>('input[type="radio"]');

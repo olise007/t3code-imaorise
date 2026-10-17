@@ -22,6 +22,7 @@ import {
 import { appendOrchestrationProtocol } from "../../packages/client-runtime/src/connection/compatibility.ts";
 import * as RpcSession from "../../packages/client-runtime/src/rpc/session.ts";
 import { SshEnvironmentManager } from "../../packages/ssh/src/tunnel.ts";
+import { verifyTerminalIsolation } from "./ssh-terminal-lifecycle.ts";
 
 /** Uses the real SSH manager and forwarded endpoint after setup has returned. */
 export const verifyPackagedSshConnection = (input: {
@@ -112,7 +113,8 @@ export const verifyPackagedSshConnection = (input: {
               () => Effect.void,
             );
             yield* lease.session.probe;
-            yield* lease.session.initialConfig;
+            const config = yield* lease.session.initialConfig;
+            if (attempt === 0) yield* verifyTerminalIsolation(lease.session, config);
           }),
         );
         // First close only the socket; next close the owned tunnel, leaving the remote server alive.

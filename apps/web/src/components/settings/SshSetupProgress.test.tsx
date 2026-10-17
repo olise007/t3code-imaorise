@@ -76,13 +76,65 @@ it("keeps one live attempt through refreshes and navigation, retaining scroll an
     await act(async () => {
       button("Cancel setup").click();
     });
-    expect(cancelSshEnvironmentSetup).toHaveBeenCalledWith(target);
+    expect(cancelSshEnvironmentSetup).toHaveBeenCalledWith(target, id);
   } finally {
     await act(async () => {
       root.unmount();
     });
     container.remove();
     sshSetupProgress.finish(id, "cancelled");
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("removes expanded details after connection removal and dismisses unregistered failures", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const target = { alias: "removed-connection", hostname: "192.0.2.8", port: 22, username: "user" };
+  const id = sshSetupProgress.begin(target);
+  sshSetupProgress.associateEnvironment(id, "removed-environment");
+  sshSetupProgress.append(id, "Removed environment detail");
+  sshSetupProgress.finish(id, "succeeded");
+  const failed = sshSetupProgress.begin({ ...target, alias: "unregistered-failure" });
+  sshSetupProgress.finish(failed, "failed");
+  try {
+    await act(async () => root.render(<SshSetupProgress />));
+    const section = Array.from(container.querySelectorAll("p")).find((p) =>
+      p.textContent?.includes("removed-connection"),
+    )!.parentElement!.parentElement!;
+    await act(async () => {
+      Array.from(section.querySelectorAll("button"))
+        .find((b) => b.textContent === "View progress")!
+        .click();
+    });
+    expect(section.textContent).toContain("Removed environment detail");
+    await act(async () => {
+      sshSetupProgress.forgetEnvironment("removed-environment", [target]);
+      vi.advanceTimersByTime(100);
+    });
+    expect(container.textContent).not.toContain("removed-connection");
+    expect(container.textContent).not.toContain("Removed environment detail");
+    expect(container.textContent).toContain("unregistered-failure");
+    const failedRow = Array.from(container.querySelectorAll("p")).find((p) =>
+      p.textContent?.includes("unregistered-failure"),
+    )!.parentElement!.parentElement!;
+    await act(async () => {
+      Array.from(failedRow.querySelectorAll("button"))
+        .find((b) => b.textContent === "Dismiss")!
+        .click();
+      vi.advanceTimersByTime(100);
+    });
+    expect(container.textContent).not.toContain("unregistered-failure");
+    await act(async () => root.render(<SshSetupProgress />));
+    expect(container.textContent).not.toContain("Removed environment detail");
+  } finally {
+    await act(async () => root.unmount());
+    sshSetupProgress.dismiss(id);
+    sshSetupProgress.dismiss(failed);
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
     vi.unstubAllGlobals();

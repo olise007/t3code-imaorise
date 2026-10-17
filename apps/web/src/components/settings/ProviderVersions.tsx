@@ -135,10 +135,27 @@ export function ProviderVersions({
               ) : null}
               {data ? (
                 <p className="text-xs">
+                  {data.runtime ? (
+                    <>
+                      {data.runtime.platform === "win32" ? "Windows" : data.runtime.platform} ·{" "}
+                      {data.runtime.architecture} · {data.runtime.ownership}
+                      <br />
+                      Executable: {data.runtime.executablePath ?? "Not detected"}
+                      <br />
+                      Update method:{" "}
+                      {data.runtime.updateMethod ?? "Unavailable for this installation"}
+                      <br />
+                    </>
+                  ) : null}
                   Installed: {data.installedVersion ?? "Not detected"} · Selected:{" "}
                   {data.selectedVersion ?? "Not pinned"}
                   <br />
                   Affected instances: {data.affectedInstances.join(", ") || instanceId}
+                </p>
+              ) : null}
+              {readOnly || !canUpdate ? (
+                <p role="status" className="text-sm">
+                  This session can inspect versions but cannot update this environment's providers.
                 </p>
               ) : null}
               <ul className="max-h-72 space-y-2 overflow-y-auto">

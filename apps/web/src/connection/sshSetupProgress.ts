@@ -49,6 +49,18 @@ export function createSshSetupProgress() {
       };
     },
     snapshot: () => attempts,
+    forgetEnvironment: (environmentId: string, targets: readonly DesktopSshEnvironmentTarget[]) => {
+      const keys = new Set(targets.map(sshSetupTargetKey));
+      attempts = attempts.filter(
+        (attempt) =>
+          attempt.environmentId !== environmentId && !keys.has(sshSetupTargetKey(attempt.target)),
+      );
+      notify();
+    },
+    dismiss: (id: string) => {
+      attempts = attempts.filter((attempt) => attempt.id !== id || attempt.status === "running");
+      notify();
+    },
     runningOperation: (target: DesktopSshEnvironmentTarget) =>
       attempts.find(
         (attempt) =>

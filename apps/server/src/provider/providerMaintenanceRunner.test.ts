@@ -994,6 +994,76 @@ describe("providerMaintenanceRunner", () => {
       ),
     );
   });
+  it.effect("resolves Windows updater shims using the provider installation environment", () => {
+    const captured: Array<{
+      readonly command: string;
+      readonly args: ReadonlyArray<string>;
+      readonly shell: boolean | string | undefined;
+    }> = [];
+    return Effect.gen(function* () {
+      const { registry } = yield* makeRegistry(baseProvider);
+      const capabilities = lifecycleFor(CODEX_DRIVER);
+      const runner = yield* makeTestRunner({
+        ...registry,
+        getProviderMaintenanceCapabilitiesForInstance: () =>
+          Effect.succeed({
+            ...capabilities,
+            update: { ...capabilities.update!, env: { PATH: "C:\\custom-provider\\bin" } },
+          }),
+      });
+
+      const result = yield* runner.updateProvider(CODEX_DRIVER);
+
+      // On win32, resolveSpawnCommand resolves `npm` to the `.cmd` shim and
+      // routes the spawn through cmd.exe (shell: true), escaping every arg.
+      assert.strictEqual(captured.length, 1);
+      const call = captured[0];
+      assert.ok(call, "expected the spawner to be invoked once");
+      // The resolved command is the escaped `.cmd` path. Asserting the precise
+      // escaped string is brittle, so verify it carries the resolved shim and
+      // that shell mode was used.
+      assert.match(call.command, /npm\.cmd/i);
+      assert.strictEqual(call.shell, true);
+      // Args are escaped for cmd.exe shell mode (each quoted) but still carry
+      // the original install command (`install -g @openai/codex@latest`) in order.
+      assert.strictEqual(call.args.length, 3);
+      assert.match(call.args[0] ?? "", /install/);
+      assert.match(call.args[1] ?? "", /-g/);
+      assert.match(call.args[2] ?? "", /@openai\/codex@latest/);
+      assert.strictEqual(result.providers[0]?.updateState?.status, "succeeded");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(HostProcess.Platform, "win32"),
+          Layer.succeed(HostProcess.Environment, {
+            PATH: "C:\\fake\\npm",
+            PATHEXT: ".COM;.EXE;.BAT;.CMD",
+          }),
+          Layer.succeed(SpawnExecutableResolution, (command, environment) => {
+            assert.equal(environment?.PATH, "C:\\custom-provider\\bin");
+            return command === "npm" ? "C:\\custom-provider\\bin\\npm.cmd" : undefined;
+          }),
+          layerLatestVersionHttpClient("0.0.0"),
+          Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make((command) => {
+              const childProcess = command as unknown as {
+                readonly command: string;
+                readonly args: ReadonlyArray<string>;
+                readonly options: { readonly shell?: boolean | string | undefined };
+              };
+              captured.push({
+                command: childProcess.command,
+                args: childProcess.args,
+                shell: childProcess.options.shell,
+              });
+              return Effect.succeed(mockHandle({ stdout: "updated" }));
+            }),
+          ),
+        ),
+      ),
+    );
+  });
 });
 
 it.effect("refuses incompatible latest versions and unapproved or unpinnable targets", () => {
