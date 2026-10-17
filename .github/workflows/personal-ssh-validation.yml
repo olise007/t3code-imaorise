@@ -37,12 +37,15 @@ jobs:
           vp run --filter @t3tools/shared typecheck
           vp run --filter @t3tools/provider-core typecheck
           vp exec tsc-rs --project scripts/tsconfig.ssh-setup.json --noEmit
-      - name: Client typechecks
+      - name: Client runtime typecheck
         if: ${{ !cancelled() }}
-        run: |
-          vp run --filter @t3tools/client-runtime typecheck
-          vp run --filter @t3tools/web typecheck
-          vp run --filter @t3tools/desktop typecheck
+        run: vp run --filter @t3tools/client-runtime typecheck
+      - name: Web typecheck
+        if: ${{ !cancelled() }}
+        run: vp run --filter @t3tools/web typecheck
+      - name: Desktop typecheck
+        if: ${{ !cancelled() }}
+        run: vp run --filter @t3tools/desktop typecheck
       - name: Server typecheck
         if: ${{ !cancelled() }}
         run: vp run --filter t3 typecheck

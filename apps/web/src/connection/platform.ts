@@ -33,6 +33,7 @@ import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -245,7 +246,8 @@ export const provisionDesktopSshEnvironment = Effect.fn(
 });
 
 const layerCapabilities = Layer.effectContext(
-  Effect.sync(() => {
+  Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
     const presentation = ClientCapabilities.ClientPresentation.of({
       metadata: clientMetadata(),
     });
@@ -319,7 +321,7 @@ const layerCapabilities = Layer.effectContext(
             detail:
               "Update the desktop client to reconnect this manual SSH profile. Its saved source and authentication settings are unchanged.",
           });
-        const operationId = yield* Effect.sync(() => globalThis.crypto.randomUUID());
+        const operationId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
         const bootstrap = yield* Effect.tryPromise({
           try: () =>
             bridge.ensureSshEnvironment(input.target, {
