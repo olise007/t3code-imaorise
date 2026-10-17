@@ -234,12 +234,13 @@ const program = Effect.gen(function* () {
     "powershell.exe",
   );
   const commandLine = `"${powershell}" -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(childScript, "utf16le").toString("base64")}`;
-  const detached = (script: string) =>
+  const detached = (script: string, timeoutMs = 60_000) =>
     runSshCommand(target, {
       interactiveAuth: true,
       authSecret: input.password,
       remoteCommandArgs: powershellFileArgs(),
       stdin: script,
+      timeoutMs,
     });
   try {
     yield* detached(
@@ -265,12 +266,17 @@ const program = Effect.gen(function* () {
     const root = `$live=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(rootLive)}); try { $info=[Diagnostics.ProcessStartInfo]::new(${quote(powershell)}); $info.UseShellExecute=$false; $info.Arguments='-NoProfile -NonInteractive -EncodedCommand ${Buffer.from(descendant, "utf16le").toString("base64")}'; $child=[Diagnostics.Process]::Start($info); [void]$live.WaitOne(60000) } finally { $live.Dispose() }`;
     const serverCommand = `"${powershell}" -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(root, "utf16le").toString("base64")}`;
     const jobScript = windowsServerJobScript(powershell, serverCommand, process.env.SystemRoot!);
+    const traceFile = `t3-job-${suffix}-${mode}.log`;
     yield* detached(`$ready=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(jobReady)})
 $file=Join-Path ([IO.Path]::GetTempPath()) '${suffix}-${mode}.ps1'
+$trace=Join-Path ([IO.Path]::GetTempPath()) ${quote(traceFile)}
+function Trace-Fixture($stage) { [IO.File]::AppendAllText($trace,([DateTime]::UtcNow.ToString('o')+' '+$stage+[Environment]::NewLine)) }
 $helper=$null
 $writer=$null
 function Read-FixtureStream($task) {
+  Trace-Fixture 'starting bounded stream drain'
   if($task.Wait(2000)){return $task.GetAwaiter().GetResult()}
+  Trace-Fixture 'stream drain deadline'
   return 'Owned fixture stream remained open after helper exit.'
 }
 try {
@@ -281,14 +287,19 @@ try {
   $info.RedirectStandardOutput=$true
   $info.RedirectStandardError=$true
   $info.Arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$file+'"'
+  Trace-Fixture 'starting helper'
   $helper=[Diagnostics.Process]::Start($info)
   $writer=$helper.StandardInput
   $output=$helper.StandardOutput.ReadToEndAsync()
   $errors=$helper.StandardError.ReadToEndAsync()
   $writer.AutoFlush=$true
+  Trace-Fixture 'waiting for descendant readiness'
   if(!$ready.WaitOne(15000)){throw 'Owned job descendant did not become ready'}
+  Trace-Fixture 'descendant ready; sending control'
   ${mode === "stop" ? "$writer.WriteLine('stop')" : "$writer.Close()"}
+  Trace-Fixture 'control sent; waiting for helper exit'
   if(!$helper.WaitForExit(12000)){throw 'Owned job helper did not finish'}
+  Trace-Fixture ('helper exited '+$helper.ExitCode)
   if($helper.ExitCode -ne 0){throw ('Owned job helper failed: '+(Read-FixtureStream $errors))}
   [void](Read-FixtureStream $output)
   foreach($name in @(${quote(rootLive)},${quote(descendantLive)})) {
@@ -296,13 +307,27 @@ try {
     try { $remaining=[Threading.EventWaitHandle]::OpenExisting($name) } catch [Threading.WaitHandleCannotBeOpenedException] {}
     if($remaining){$remaining.Dispose(); throw 'Owned server or descendant survived job shutdown'}
   }
-} finally {
+} catch { Trace-Fixture ('failure '+$_.Exception.Message); throw } finally {
+  Trace-Fixture 'finally closing writer'
   if($writer){try {$writer.Close()} catch {}}
+  Trace-Fixture 'writer close complete'
+  Trace-Fixture 'finally waiting for helper'
   if($helper){if($helper.WaitForExit(12000)){[Console]::Error.Write((Read-FixtureStream $errors))}; $helper.Dispose()}
+  Trace-Fixture 'finally complete'
   $ready.Dispose()
   Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
 }
-`);
+`).pipe(
+      Effect.tapError(() =>
+        detached(
+          `$trace=Join-Path ([IO.Path]::GetTempPath()) ${quote(traceFile)}; if(Test-Path -LiteralPath $trace){Get-Content -LiteralPath $trace -Tail 40; Remove-Item -LiteralPath $trace -Force}`,
+          10_000,
+        ).pipe(
+          Effect.flatMap((result) => Effect.logInfo(`Owned job ${mode} trace: ${result.stdout}`)),
+          Effect.ignore,
+        ),
+      ),
+    );
     yield* Effect.logInfo(`Passed standard-user owned server/descendant job cleanup: ${mode}.`);
   }
   if (process.env.T3_SSH_FIXTURE_ARCHIVE && process.env.T3_SSH_FIXTURE_VERSION) {
