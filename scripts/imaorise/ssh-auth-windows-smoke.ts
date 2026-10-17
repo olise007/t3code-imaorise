@@ -268,6 +268,7 @@ const program = Effect.gen(function* () {
     yield* detached(`$ready=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(jobReady)})
 $file=Join-Path ([IO.Path]::GetTempPath()) '${suffix}-${mode}.ps1'
 $helper=$null
+$writer=$null
 function Read-FixtureStream($task) {
   if($task.Wait(2000)){return $task.GetAwaiter().GetResult()}
   return 'Owned fixture stream remained open after helper exit.'
@@ -281,11 +282,12 @@ try {
   $info.RedirectStandardError=$true
   $info.Arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$file+'"'
   $helper=[Diagnostics.Process]::Start($info)
+  $writer=$helper.StandardInput
   $output=$helper.StandardOutput.ReadToEndAsync()
   $errors=$helper.StandardError.ReadToEndAsync()
-  $helper.StandardInput.AutoFlush=$true
+  $writer.AutoFlush=$true
   if(!$ready.WaitOne(15000)){throw 'Owned job descendant did not become ready'}
-  ${mode === "stop" ? "$helper.StandardInput.WriteLine('stop')" : "$helper.StandardInput.Close()"}
+  ${mode === "stop" ? "$writer.WriteLine('stop')" : "$writer.Close()"}
   if(!$helper.WaitForExit(12000)){throw 'Owned job helper did not finish'}
   if($helper.ExitCode -ne 0){throw ('Owned job helper failed: '+(Read-FixtureStream $errors))}
   [void](Read-FixtureStream $output)
@@ -295,7 +297,8 @@ try {
     if($remaining){$remaining.Dispose(); throw 'Owned server or descendant survived job shutdown'}
   }
 } finally {
-  if($helper){$helper.StandardInput.Close(); if($helper.WaitForExit(12000)){[Console]::Error.Write((Read-FixtureStream $errors))}; $helper.Dispose()}
+  if($writer){try {$writer.Close()} catch {}}
+  if($helper){if($helper.WaitForExit(12000)){[Console]::Error.Write((Read-FixtureStream $errors))}; $helper.Dispose()}
   $ready.Dispose()
   Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
 }

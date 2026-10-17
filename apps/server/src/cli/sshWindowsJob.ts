@@ -62,6 +62,7 @@ public static class T3ServerJob {
   [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle,uint milliseconds);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int kind);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool ReadFile(IntPtr file,byte[] buffer,uint size,out uint read,IntPtr overlapped);
   [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool DuplicateHandle(IntPtr sourceProcess,IntPtr source,IntPtr targetProcess,out IntPtr target,uint access,bool inherit,uint options);
   static void Check(bool value) { if(!value) throw new Win32Exception(Marshal.GetLastWin32Error()); }
@@ -110,7 +111,13 @@ public static class T3ServerJob {
       Check(AssignProcessToJobObject(job,child.process));
       assigned=true;
       if(ResumeThread(child.thread)==0xffffffff) throw new Win32Exception(Marshal.GetLastWin32Error());
-      Task control=Task.Run(()=>Console.In.ReadLine());
+      Task control=Task.Run(()=>{
+        uint read;
+        if(!ReadFile(GetStdHandle(-10),new byte[1],1,out read,IntPtr.Zero)) {
+          int code=Marshal.GetLastWin32Error();
+          if(code!=109 && code!=232) throw new Win32Exception(code);
+        }
+      });
       Task exited=Task.Run(()=>{ if(WaitForSingleObject(child.process,0xffffffff)!=0) throw new Win32Exception(Marshal.GetLastWin32Error()); });
       int completed=Task.WaitAny(control,exited);
       (completed==0 ? control : exited).GetAwaiter().GetResult();
