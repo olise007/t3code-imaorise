@@ -1,4 +1,4 @@
-/** Breaks out of OpenSSH's kill-on-close job without WMI or inherited SSH pipes. */
+/** Uses a hidden console outside OpenSSH's job, without WMI or inherited SSH pipes. */
 export function windowsSupervisorLaunchScript(
   executable: string,
   commandLine: string,
@@ -39,7 +39,7 @@ $startup.wShowWindow=0
 $process=New-Object T3DetachedProcess+ProcessInformation
 $command=[Text.StringBuilder]::new(${quote(commandLine)})
 try {
-  $created=[T3DetachedProcess]::CreateProcessW(${quote(executable)},$command,[IntPtr]::Zero,[IntPtr]::Zero,$false,0x01000208,[IntPtr]::Zero,${quote(home)},[ref]$startup,[ref]$process)
+  $created=[T3DetachedProcess]::CreateProcessW(${quote(executable)},$command,[IntPtr]::Zero,[IntPtr]::Zero,$false,0x01000010,[IntPtr]::Zero,${quote(home)},[ref]$startup,[ref]$process)
   if(!$created) {
     $code=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
     throw ('Could not launch a persistent SSH server (Win32 '+$code+'). This SSH session must allow process breakaway; no server settings were changed.')
