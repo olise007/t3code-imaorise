@@ -253,16 +253,17 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
               ),
               cliAuth.controller.withAccess!,
               Effect.scoped,
-              Effect.catchTag("ProviderSetupError", (cause) =>
-                makePendingCodexProvider(effectiveConfig).pipe(
-                  Effect.map((draft) => ({
-                    ...draft,
-                    models: [],
-                    auth: { status: "unknown" as const },
-                    message: cause.detail,
-                  })),
-                ),
-              ),
+              Effect.catchTags({
+                ProviderSetupError: (cause) =>
+                  makePendingCodexProvider(effectiveConfig).pipe(
+                    Effect.map((draft) => ({
+                      ...draft,
+                      models: [],
+                      auth: { status: "unknown" as const },
+                      message: cause.detail,
+                    })),
+                  ),
+              }),
             ),
             currentCatalog,
             (draft, catalog) => stampIdentity(withSetup(applyCodexModelCatalog(draft, catalog))),
