@@ -268,24 +268,34 @@ const program = Effect.gen(function* () {
     yield* detached(`$ready=[Threading.EventWaitHandle]::new($false,[Threading.EventResetMode]::ManualReset,${quote(jobReady)})
 $file=Join-Path ([IO.Path]::GetTempPath()) '${suffix}-${mode}.ps1'
 $helper=$null
+function Read-FixtureStream($task) {
+  if($task.Wait(2000)){return $task.GetAwaiter().GetResult()}
+  return 'Owned fixture stream remained open after helper exit.'
+}
 try {
   [IO.File]::WriteAllText($file,${quote(jobScript)},[Text.UTF8Encoding]::new($true))
   $info=[Diagnostics.ProcessStartInfo]::new(${quote(powershell)})
   $info.UseShellExecute=$false
   $info.RedirectStandardInput=$true
+  $info.RedirectStandardOutput=$true
+  $info.RedirectStandardError=$true
   $info.Arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$file+'"'
   $helper=[Diagnostics.Process]::Start($info)
+  $output=$helper.StandardOutput.ReadToEndAsync()
+  $errors=$helper.StandardError.ReadToEndAsync()
+  $helper.StandardInput.AutoFlush=$true
   if(!$ready.WaitOne(15000)){throw 'Owned job descendant did not become ready'}
   ${mode === "stop" ? "$helper.StandardInput.WriteLine('stop')" : "$helper.StandardInput.Close()"}
   if(!$helper.WaitForExit(12000)){throw 'Owned job helper did not finish'}
-  if($helper.ExitCode -ne 0){throw 'Owned job helper failed'}
+  if($helper.ExitCode -ne 0){throw ('Owned job helper failed: '+(Read-FixtureStream $errors))}
+  [void](Read-FixtureStream $output)
   foreach($name in @(${quote(rootLive)},${quote(descendantLive)})) {
     $remaining=$null
     try { $remaining=[Threading.EventWaitHandle]::OpenExisting($name) } catch [Threading.WaitHandleCannotBeOpenedException] {}
     if($remaining){$remaining.Dispose(); throw 'Owned server or descendant survived job shutdown'}
   }
 } finally {
-  if($helper){$helper.StandardInput.Close(); [void]$helper.WaitForExit(12000); $helper.Dispose()}
+  if($helper){$helper.StandardInput.Close(); if($helper.WaitForExit(12000)){[Console]::Error.Write((Read-FixtureStream $errors))}; $helper.Dispose()}
   $ready.Dispose()
   Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
 }
