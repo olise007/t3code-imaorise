@@ -8,6 +8,8 @@ import {
 } from "~/rpc/environmentAccess";
 import { SessionPermissions } from "./SessionPermissions";
 import { sshServerLifecycle } from "~/connection/sshServerLifecycle";
+import { setSshConnectionEnabled } from "~/connection/sshConnectionActions";
+import { SshConnectionSwitch } from "./SshConnectionSwitch";
 import { SshServerControls } from "./SshServerControls";
 import { SshSetupProgress } from "./SshSetupProgress";
 import { BackendStartupSettings } from "./BackendStartupSettings";
@@ -1486,7 +1488,11 @@ function NetworkAccessDescription({
 type SavedBackendListRowProps = {
   environment: EnvironmentPresentation;
   removingEnvironmentId: EnvironmentId | null;
-  onSetEnabled: (environmentId: EnvironmentId, enabled: boolean) => Promise<boolean>;
+  onSetEnabled: (
+    environmentId: EnvironmentId,
+    enabled: boolean,
+    prepared?: boolean,
+  ) => Promise<boolean>;
   onRemove: (environment: EnvironmentPresentation) => void;
   onAddRoute: (environment: EnvironmentPresentation) => void;
   onEditSsh: (environment: EnvironmentPresentation, route: ConnectionRoute) => void;
@@ -1786,7 +1792,7 @@ function SavedBackendListRow({
                     environmentId={environmentId}
                     label={environment.label}
                     bridge={desktopBridge}
-                    setEnabled={(value) => onSetEnabled(environmentId, value)}
+                    setEnabled={(value) => onSetEnabled(environmentId, value, true)}
                     confirmStop={async () =>
                       (await requestConfirmDialog(
                         `Stop the T3-managed server on ${environment.label}? This stops its agents and tools. Disconnecting alone leaves them running.`,
@@ -1868,17 +1874,20 @@ function SavedBackendListRow({
       <Tooltip>
         <TooltipTrigger
           render={
-            <Switch
-              size="sm"
-              checked={enabled}
+            <SshConnectionSwitch
+              enabled={enabled}
               disabled={isRemoving || unsupported}
-              aria-label={`${enabled ? "Switch off" : "Switch on"} ${environment.label}`}
-              onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
+              label={environment.label}
+              onChange={(checked) => onSetEnabled(environmentId, checked)}
             />
           }
         />
         <TooltipPopup side="top">
-          {unsupported ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
+          {unsupported
+            ? "Client not supported"
+            : enabled
+              ? "Disconnect this client; leave the remote server running"
+              : "Connect this client"}
         </TooltipPopup>
       </Tooltip>
       <Menu>
@@ -3278,9 +3287,19 @@ export function ConnectionsSettings() {
   );
 
   const handleSetSavedBackendEnabled = useCallback(
-    async (environmentId: EnvironmentId, enabled: boolean) => {
+    async (environmentId: EnvironmentId, enabled: boolean, prepared = false) => {
       setSavedBackendError(null);
-      if (enabled && window.desktopBridge?.ensureSshEnvironment) {
+      const persistEnabled = async (value: boolean) => {
+        const result = await setEnvironmentEnabled({ environmentId, enabled: value });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          throw error instanceof Error
+            ? error
+            : new Error(`Could not ${value ? "connect" : "disconnect"} this client.`);
+        }
+        return result._tag === "Success";
+      };
+      try {
         const environment = savedEnvironments.find(
           (entry) => entry.environmentId === environmentId,
         );
@@ -3291,57 +3310,44 @@ export function ConnectionsSettings() {
               Option.isSome(candidate.profile) &&
               candidate.profile.value._tag === "SshConnectionProfile",
           );
+        const bridge = window.desktopBridge;
         if (
+          !prepared &&
+          environment &&
+          bridge &&
           route &&
           Option.isSome(route.profile) &&
           route.profile.value._tag === "SshConnectionProfile"
         ) {
-          try {
-            if (sshServerLifecycle.read(route.profile.value.target).stopIntent)
-              throw new Error(
-                "Remote server was explicitly stopped. Choose Start remote server to resume it.",
-              );
-            const bootstrap = await window.desktopBridge.ensureSshEnvironment(
-              route.profile.value.target,
-              {
-                purpose: "reconnect",
-                expectedEnvironmentId: environmentId,
-              },
-            );
-            if (bootstrap.serverState === "stopped")
-              throw new Error(
-                "Remote server was explicitly stopped. Choose Start remote server to resume it.",
-              );
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : "Could not start remote server.";
-            setSavedBackendError(message);
-            toastManager.add({
-              type: "error",
-              title: "Could not switch backend on",
-              description: message,
-            });
-            return false;
-          }
+          return await setSshConnectionEnabled(
+            {
+              target: route.profile.value.target,
+              environmentId,
+              label: environment.label,
+              bridge,
+              setEnabled: persistEnabled,
+              confirmStart: async (signal) =>
+                (await requestConfirmDialog(
+                  `Start server and connect to ${environment.label}?\nThis resumes the explicitly stopped remote T3 server.`,
+                  { confirmLabel: "Start server and connect", signal },
+                )) === true,
+              notify: (title) => toastManager.add({ type: "success", title }),
+            },
+            enabled,
+          );
         }
-      }
-      const result = await setEnvironmentEnabled({ environmentId, enabled });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
+        return await persistEnabled(enabled);
+      } catch (error) {
         const message =
-          error instanceof Error
-            ? error.message
-            : `Failed to switch the backend ${enabled ? "on" : "off"}.`;
+          error instanceof Error ? error.message : "Could not change this connection.";
         setSavedBackendError(message);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: `Could not switch backend ${enabled ? "on" : "off"}`,
-            description: message,
-          }),
-        );
+        toastManager.add({
+          type: "error",
+          title: enabled ? "Could not connect" : "Could not disconnect",
+          description: message,
+        });
+        return false;
       }
-      return result._tag === "Success";
     },
     [savedEnvironments, setEnvironmentEnabled],
   );

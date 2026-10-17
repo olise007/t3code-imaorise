@@ -1666,8 +1666,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const authOptions =
       input.authSecret === null
         ? {
-            batchMode: promptService.isAvailable ? ("no" as const) : ("yes" as const),
-            interactiveAuth: promptService.isAvailable,
+            batchMode:
+              promptService.isAvailable || trustedHostPrompts.has(input.key)
+                ? ("no" as const)
+                : ("yes" as const),
+            interactiveAuth: promptService.isAvailable || trustedHostPrompts.has(input.key),
           }
         : {
             authSecret: input.authSecret,
@@ -1849,6 +1852,46 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     );
   });
 
+  const bootstrapTunnelEntry = Effect.fn("ssh/tunnel.bootstrapTunnelEntry")(function* (
+    entry: SshTunnelEntry,
+    runner: RemoteT3RunnerOptions | undefined,
+    issuePairingToken: boolean,
+  ) {
+    const pairingResult = issuePairingToken
+      ? yield* runWithSshAuth({
+          key: entry.key,
+          target: entry.target,
+          operation: (authOptions) => issueRemotePairingToken(entry.target, authOptions, runner),
+        })
+      : null;
+    const pairingToken = pairingResult?.credential ?? null;
+    yield* reportProgress(entry.target, "SSH tunnel ready");
+
+    yield* Effect.logInfo("ssh.environment.ensure.succeeded", {
+      ...sshTargetLogFields(entry.target),
+      key: entry.key,
+      localPort: entry.localPort,
+      remotePort: entry.remotePort,
+      ...(runner?.prepared?.selectedProviders?.length
+        ? { selectedProviders: runner.prepared.selectedProviders }
+        : {}),
+      remoteServerKind: entry.remoteServerKind,
+      issuedPairingToken: pairingToken !== null,
+    });
+    return {
+      target: entry.target,
+      ...(runner?.prepared?.selectedProviders?.length
+        ? { selectedProviders: runner.prepared.selectedProviders }
+        : {}),
+      httpBaseUrl: entry.httpBaseUrl,
+      wsBaseUrl: entry.wsBaseUrl,
+      pairingToken,
+      ...(entry.setupWarnings === undefined ? {} : { setupWarnings: entry.setupWarnings }),
+      remotePort: entry.remotePort,
+      ...(entry.remoteServerKind ? { remoteServerKind: entry.remoteServerKind } : {}),
+    };
+  });
+
   const ensureEnvironment = Effect.fn("ssh/tunnel.ensureEnvironment")(function* (
     target: DesktopSshEnvironmentTarget,
     requestOptions?: {
@@ -1902,6 +1945,51 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           }
         if (requestOptions?.authSecret !== undefined)
           authSecrets.set(key, requestOptions.authSecret);
+        // A verified live tunnel already owns authentication and runtime readiness.
+        // Reconnecting the application must not repeat setup or executable validation.
+        const existing = tunnels.get(key);
+        if (
+          reconnect &&
+          requestOptions?.expectedEnvironmentId &&
+          existing &&
+          (yield* existing.process.isRunning)
+        ) {
+          const healthy = yield* waitForHttpReady({
+            baseUrl: existing.httpBaseUrl,
+            timeoutMs: 2_000,
+          }).pipe(Effect.option);
+          if (healthy._tag === "Some") {
+            const http = yield* HttpClient.HttpClient;
+            const descriptor = yield* http
+              .get(new URL(".well-known/t3/environment", existing.httpBaseUrl).toString())
+              .pipe(
+                Effect.flatMap((response) => response.json),
+                Effect.flatMap(
+                  Schema.decodeUnknownEffect(Schema.Struct({ environmentId: Schema.String })),
+                ),
+                Effect.timeout("2 seconds"),
+                Effect.mapError(
+                  (cause) =>
+                    new SshReadinessError({
+                      message:
+                        "Could not verify the existing SSH environment identity. Retry the connection.",
+                      cause,
+                    }),
+                ),
+              );
+            if (descriptor.environmentId !== requestOptions.expectedEnvironmentId)
+              return yield* new SshLaunchError({
+                message: "Remote environment identity changed. Repair this connection explicitly.",
+                stdout: "",
+              });
+            const prepared = yield* savedRuntime(key);
+            return yield* bootstrapTunnelEntry(
+              existing,
+              prepared ? { ...configuredRunner, prepared } : configuredRunner,
+              requestOptions?.issuePairingToken === true,
+            );
+          }
+        }
         // Only this harmless preflight may retry authentication. Never replay
         // a mutating runtime/package command after a credential failure.
         yield* reportProgress(resolvedTarget, "Authenticating SSH connection…");
@@ -1944,6 +2032,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               operation: (auth) =>
                 runSshCommand(resolvedTarget, {
                   ...auth,
+                  readOnlyHostTrust: true,
                   ...remoteRuntimeInvocation(previous, [
                     "__ssh-helper",
                     "managed-status",
@@ -2084,40 +2173,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             serverState: "stopped" as const,
           };
 
-        const pairingResult = requestOptions?.issuePairingToken
-          ? yield* runWithSshAuth({
-              key,
-              target: entry.target,
-              operation: (authOptions) =>
-                issueRemotePairingToken(entry.target, authOptions, runner),
-            })
-          : null;
-        const pairingToken = pairingResult?.credential ?? null;
-        yield* reportProgress(resolvedTarget, "SSH tunnel ready");
-
-        yield* Effect.logInfo("ssh.environment.ensure.succeeded", {
-          ...sshTargetLogFields(entry.target),
-          key,
-          localPort: entry.localPort,
-          remotePort: entry.remotePort,
-          ...(runner?.prepared?.selectedProviders?.length
-            ? { selectedProviders: runner.prepared.selectedProviders }
-            : {}),
-          remoteServerKind: entry.remoteServerKind,
-          issuedPairingToken: pairingToken !== null,
-        });
-        return {
-          target: entry.target,
-          ...(runner?.prepared?.selectedProviders?.length
-            ? { selectedProviders: runner.prepared.selectedProviders }
-            : {}),
-          httpBaseUrl: entry.httpBaseUrl,
-          wsBaseUrl: entry.wsBaseUrl,
-          pairingToken,
-          ...(entry.setupWarnings === undefined ? {} : { setupWarnings: entry.setupWarnings }),
-          remotePort: entry.remotePort,
-          ...(entry.remoteServerKind ? { remoteServerKind: entry.remoteServerKind } : {}),
-        };
+        return yield* bootstrapTunnelEntry(
+          entry,
+          runner,
+          requestOptions?.issuePairingToken === true,
+        );
       }).pipe(
         Effect.ensuring(
           Effect.sync(() => {
@@ -2204,6 +2264,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               operation: (auth) =>
                 runSshCommand(resolved, {
                   ...auth,
+                  readOnlyHostTrust: true,
                   ...remoteRuntimeInvocation(runtime, ["__ssh-helper", "managed-status", stateKey]),
                   timeoutMs: 15_000,
                 }),

@@ -36,6 +36,7 @@ export interface SshAskpassHelperDescriptor {
 }
 
 export interface SshAuthOptions {
+  readonly readOnlyHostTrust?: boolean;
   readonly trustedHostPrompt?: string;
   readonly authSecret?: string | null;
   readonly batchMode?: "yes" | "no";

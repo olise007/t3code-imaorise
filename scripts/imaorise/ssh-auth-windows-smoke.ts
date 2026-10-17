@@ -349,6 +349,7 @@ try {
       archive: process.env.T3_SSH_FIXTURE_ARCHIVE,
       version: process.env.T3_SSH_FIXTURE_VERSION,
       authSecret: input.password,
+      trustFile: NodePath.join(home, ".t3-imaorise", "ssh", "known_hosts"),
     }).pipe(Effect.provideService(SshAuth.SshPasswordPrompt, prompt));
   }
   const trust = NodePath.join(home, ".t3-imaorise", "ssh", "known_hosts");

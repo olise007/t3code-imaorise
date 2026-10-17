@@ -21,6 +21,7 @@ import {
   type SshAuthOptions,
 } from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
+import { snapshotUserTrust, userTrustPaths } from "./hostTrust.ts";
 import { createSetupDetails, sanitizeSetupOutput } from "./setupDetails.ts";
 
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
@@ -96,8 +97,11 @@ export function targetConnectionKey(target: DesktopSshEnvironmentTarget): string
 const WSL_SSH_WRAPPER = String.raw`set -eu
 IFS= read -r secret
 IFS= read -r trusted
+IFS= read -r trust_paths
 umask 077
-mkdir -p "$HOME/.t3-imaorise/ssh"
+inspection=false
+for arg do if [ "$arg" = "-G" ]; then inspection=true; fi; done
+if [ -z "$trust_paths" ] && [ "$inspection" = false ]; then mkdir -p "$HOME/.t3-imaorise/ssh"; fi
 helper=$(mktemp -d)
 cleanup() { rm -rf "$helper"; }
 trap cleanup EXIT HUP INT TERM
@@ -117,6 +121,26 @@ export SSH_ASKPASS="$helper/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=t3code
 unset secret trusted
 program=$1
 shift
+if [ -n "$trust_paths" ]; then
+  printf '%s' "$trust_paths" | base64 -d > "$helper/trust-paths"
+  trust_files=""
+  index=0
+  while IFS= read -r original; do
+    case "$original" in
+      none|NUL|/dev/null) trust_files="$trust_files \"$original\""; continue ;;
+      '~/'*) original="$HOME/$(printf '%s' "$original" | cut -c3-)" ;;
+    esac
+    case "$original" in *'%'*|*'$'*) printf 'Unsupported SSH trust path expansion\n' >&2; exit 1 ;; esac
+    copy="$helper/known-hosts-$index"
+    if [ -e "$original" ]; then cat "$original" > "$copy"; else
+      if [ -L "$original" ]; then printf 'Unreadable SSH trust file\n' >&2; exit 1; fi
+      : > "$copy"
+    fi
+    trust_files="$trust_files \"$copy\""
+    index=$((index + 1))
+  done < "$helper/trust-paths"
+  set -- -o "UpdateHostKeys=no" -o "UserKnownHostsFile=$trust_files" "$@"
+fi
 "$program" "$@"
 `;
 
@@ -126,6 +150,7 @@ export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function
   input: SshAuthOptions & {
     readonly stdin?: Stream.Stream<Uint8Array>;
     readonly sourceCommand?: "ssh" | "scp";
+    readonly readOnlyTrustPaths?: readonly string[];
   },
 ) {
   const manualArgs: string[] = [];
@@ -168,14 +193,23 @@ export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function
     const fs = yield* FileSystem.FileSystem;
     const home = yield* HostProcess.HomeDirectory;
     const trust = path.join(home, ".t3-imaorise", "ssh");
-    if (target.executionSource?.type !== "wsl")
+    if (target.executionSource?.type !== "wsl" && !input.readOnlyTrustPaths)
       yield* fs.makeDirectory(trust, { recursive: true, mode: 0o700 }).pipe(Effect.orDie);
     manualArgs.push(
       "-o",
       `UserKnownHostsFile="${target.executionSource?.type === "wsl" ? "~/.t3-imaorise/ssh/known_hosts" : path.join(trust, "known_hosts").replaceAll("\\", "/").replaceAll('"', '\\"')}"`,
     );
   }
-  const sshArgs = [...manualArgs, ...args];
+  const trustArgs =
+    input.readOnlyTrustPaths && target.executionSource?.type !== "wsl"
+      ? [
+          "-o",
+          "UpdateHostKeys=no",
+          "-o",
+          `UserKnownHostsFile=${input.readOnlyTrustPaths.map((file) => '"' + file.replaceAll("\\", "/").replaceAll('"', '\\"') + '"').join(" ")}`,
+        ]
+      : [];
+  const sshArgs = [...trustArgs, ...manualArgs, ...args];
   if (target.executionSource?.type === "wsl") {
     if ((yield* HostProcess.Platform) !== "win32") {
       return yield* new SshInvalidTargetError({
@@ -199,7 +233,7 @@ export const prepareSshSpawn = Effect.fn("ssh/command.prepareSshSpawn")(function
       stdin: Stream.concat(
         Stream.make(
           encoder.encode(
-            `${Buffer.from(input.authSecret ?? "").toString("base64")}\n${Buffer.from(input.trustedHostPrompt ?? "").toString("base64")}\n`,
+            `${Buffer.from(input.authSecret ?? "").toString("base64")}\n${Buffer.from(input.trustedHostPrompt ?? "").toString("base64")}\n${Buffer.from(input.readOnlyTrustPaths ? input.readOnlyTrustPaths.join("\n") + "\n" : "").toString("base64")}\n`,
           ),
         ),
         input.stdin ?? Stream.empty,
@@ -415,8 +449,50 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
         hostSpec,
         ...(input.remoteCommandArgs ?? []),
       ];
+  let readOnlyTrustPaths: readonly string[] | undefined;
+  if (input.readOnlyHostTrust) {
+    // -G inspects the selected source's configuration; it never opens a connection.
+    let paths: readonly string[];
+    if (target.manual) {
+      const path = yield* Path.Path;
+      const home = yield* HostProcess.HomeDirectory;
+      // Manual profile boundaries are authoritative, including homes containing spaces.
+      paths = [
+        target.executionSource?.type === "wsl"
+          ? "~/.t3-imaorise/ssh/known_hosts"
+          : path.join(home, ".t3-imaorise", "ssh", "known_hosts"),
+      ];
+    } else {
+      const config = yield* runSshCommand(target, {
+        preHostArgs: ["-G", ...(input.preHostArgs ?? [])],
+        timeoutMs: 5_000,
+      });
+      paths = yield* Effect.try({
+        try: () => userTrustPaths(config.stdout),
+        catch: (cause) =>
+          new SshInvalidTargetError({
+            message:
+              cause instanceof Error ? cause.message : "Could not inspect SSH trust configuration.",
+          }),
+      });
+    }
+    if (target.executionSource?.type === "wsl") readOnlyTrustPaths = paths;
+    else {
+      const copies = yield* snapshotUserTrust(paths).pipe(
+        Effect.provideService(Scope.Scope, commandScope),
+        Effect.mapError(
+          (cause) =>
+            new SshInvalidTargetError({
+              message: `Could not safely inspect SSH trust files: ${cause instanceof Error ? cause.message : "Check file permissions."}`,
+            }),
+        ),
+      );
+      readOnlyTrustPaths = copies;
+    }
+  }
   const prepared = yield* prepareSshSpawn(target, args, {
     ...auth,
+    ...(readOnlyTrustPaths ? { readOnlyTrustPaths } : {}),
     ...(input.upload ? { sourceCommand: "scp" as const } : {}),
     stdin:
       input.stdinBytes === undefined ? stdinStream(input.stdin) : Stream.make(input.stdinBytes),

@@ -106,3 +106,49 @@ describe("confirm dialog coordinator", () => {
     return expect(confirmation).resolves.toBe(true);
   });
 });
+
+it("retains an explicit Start action label through confirmation and close", async () => {
+  resetConfirmDialogForTests();
+  const unregister = registerConfirmDialogHost();
+  const pending = requestConfirmDialog("Start the server?", {
+    confirmLabel: "Start server and connect",
+  });
+  expect(readConfirmDialogState()).toMatchObject({ confirmLabel: "Start server and connect" });
+  respondToConfirmDialog(true);
+  expect(await pending).toBe(true);
+  expect(readConfirmDialogState()).toMatchObject({ confirmLabel: "Start server and connect" });
+  completeConfirmDialogClose();
+  unregister();
+});
+
+it("cancels only the owned confirmation when its connection is removed", async () => {
+  resetConfirmDialogForTests();
+  const unregister = registerConfirmDialogHost();
+  const controller = new AbortController();
+  const first = requestConfirmDialog("Start?", { signal: controller.signal });
+  const next = requestConfirmDialog("Unrelated action?");
+  controller.abort();
+  expect(await first).toBe(false);
+  completeConfirmDialogClose();
+  expect(readConfirmDialogState()).toMatchObject({ message: "Unrelated action?" });
+  respondToConfirmDialog(true);
+  expect(await next).toBe(true);
+  completeConfirmDialogClose();
+  unregister();
+});
+
+it("removes a cancelled queued Start without closing another confirmation", async () => {
+  resetConfirmDialogForTests();
+  const unregister = registerConfirmDialogHost();
+  const first = requestConfirmDialog("Unrelated action?");
+  const controller = new AbortController();
+  const queued = requestConfirmDialog("Start?", { signal: controller.signal });
+  controller.abort();
+  expect(await queued).toBe(false);
+  expect(readConfirmDialogState()).toMatchObject({ message: "Unrelated action?" });
+  respondToConfirmDialog(true);
+  expect(await first).toBe(true);
+  completeConfirmDialogClose();
+  expect(readConfirmDialogState()).toEqual({ status: "idle" });
+  unregister();
+});

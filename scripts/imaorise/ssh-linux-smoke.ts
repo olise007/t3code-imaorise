@@ -136,11 +136,21 @@ try {
         target,
         archive: process.env.T3_SSH_FIXTURE_ARCHIVE,
         version: process.env.T3_SSH_FIXTURE_VERSION,
+        trustFile: NodePath.join(home, ".t3-imaorise", "ssh", "known_hosts"),
       }).pipe(
         Effect.provide(NodeServices.layer),
         Effect.provide(NodeHttpClient.layerUndici),
         Effect.provide(NetService.layer),
-        Effect.provide(SshAuth.SshPasswordPrompt.disabledLayer),
+        Effect.provideService(
+          SshAuth.SshPasswordPrompt,
+          SshAuth.SshPasswordPrompt.of({
+            isAvailable: true,
+            request: (request) =>
+              request.challenge === "host-key"
+                ? Effect.succeed("yes")
+                : Effect.die("Unexpected Linux fixture authentication challenge."),
+          }),
+        ),
         Effect.provideService(HostProcess.HomeDirectory, home),
       ),
     );

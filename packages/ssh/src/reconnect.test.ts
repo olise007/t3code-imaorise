@@ -46,30 +46,32 @@ it.effect(
           const script = yield* Deferred.make<string>();
           let running = args.includes("-N");
           if (running) tunnels++;
-          const reply = args.includes("-N")
-            ? Effect.succeed("")
-            : args.includes("echo T3_SSH_AUTH_OK")
-              ? Effect.succeed("T3_SSH_AUTH_OK\n")
-              : Deferred.await(script).pipe(
-                  Effect.map((value) => {
-                    scripts.push(value);
-                    if (value.includes("managed-start"))
-                      return '{"remotePort":4773,"serverKind":"managed"}\n';
-                    if (value.includes("managed-status"))
-                      return JSON.stringify({
-                        state: serverState,
-                        checkedAt: "2026-10-17T12:00:00Z",
-                        ...(serverState === "running" ? { environmentId: "fixture" } : {}),
-                      });
-                    if (value.includes("managed-stop")) {
-                      serverState = "stopped";
-                      return "";
-                    }
-                    if (value.includes("managed-pair")) return '{"credential":"fixture"}\n';
-                    if (value.includes("--version")) return "2.0.1-test\n";
-                    throw new Error("Reconnect attempted an unexpected remote operation");
-                  }),
-                );
+          const reply = args.includes("-G")
+            ? Effect.succeed("userknownhostsfile none\n")
+            : args.includes("-N")
+              ? Effect.succeed("")
+              : args.includes("echo T3_SSH_AUTH_OK")
+                ? Effect.succeed("T3_SSH_AUTH_OK\n")
+                : Deferred.await(script).pipe(
+                    Effect.map((value) => {
+                      scripts.push(value);
+                      if (value.includes("managed-start"))
+                        return '{"remotePort":4773,"serverKind":"managed"}\n';
+                      if (value.includes("managed-status"))
+                        return JSON.stringify({
+                          state: serverState,
+                          checkedAt: "2026-10-17T12:00:00Z",
+                          ...(serverState === "running" ? { environmentId: "fixture" } : {}),
+                        });
+                      if (value.includes("managed-stop")) {
+                        serverState = "stopped";
+                        return "";
+                      }
+                      if (value.includes("managed-pair")) return '{"credential":"fixture"}\n';
+                      if (value.includes("--version")) return "2.0.1-test\n";
+                      throw new Error("Reconnect attempted an unexpected remote operation");
+                    }),
+                  );
           const stdout = Stream.fromEffect(
             reply.pipe(Effect.map((text) => new TextEncoder().encode(text))),
           );
@@ -100,7 +102,12 @@ it.effect(
         }),
       );
       const http = HttpClient.make((request) =>
-        Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response(JSON.stringify({ environmentId: "fixture" }), { status: 200 }),
+          ),
+        ),
       );
       const net = NetService.NetService.of({
         canListenOnHost: () => Effect.succeed(true),
@@ -133,7 +140,23 @@ it.effect(
           SshEnvironmentManager,
         );
         yield* manager.ensureEnvironment(target, { purpose: "setup", issuePairingToken: true });
-        yield* manager.ensureEnvironment(target, { purpose: "reconnect", issuePairingToken: true });
+        scripts.length = 0;
+        yield* manager.ensureEnvironment(target, {
+          purpose: "reconnect",
+          expectedEnvironmentId: "fixture",
+          issuePairingToken: true,
+        });
+        expect(scripts).toHaveLength(1);
+        expect(scripts[0]).toContain("managed-pair");
+        const wrong = yield* Effect.result(
+          manager.ensureEnvironment(target, {
+            purpose: "reconnect",
+            expectedEnvironmentId: "different",
+            issuePairingToken: true,
+          }),
+        );
+        expect(wrong._tag).toBe("Failure");
+        expect(scripts).toHaveLength(1);
         expect(tunnels).toBe(1);
         expect(killed).toBe(0);
         expect(prepareBundledRuntime).toHaveBeenCalledTimes(1);

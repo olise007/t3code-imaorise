@@ -22,6 +22,7 @@ import {
 import { appendOrchestrationProtocol } from "../../packages/client-runtime/src/connection/compatibility.ts";
 import * as RpcSession from "../../packages/client-runtime/src/rpc/session.ts";
 import { SshEnvironmentManager } from "../../packages/ssh/src/tunnel.ts";
+import * as SshAuth from "../../packages/ssh/src/auth.ts";
 import { verifyTerminalIsolation } from "./ssh-terminal-lifecycle.ts";
 
 /** Uses the real SSH manager and forwarded endpoint after setup has returned. */
@@ -30,6 +31,7 @@ export const verifyPackagedSshConnection = (input: {
   readonly archive: string;
   readonly version: string;
   readonly authSecret?: string;
+  readonly trustFile?: string;
 }) =>
   Effect.gen(function* () {
     if (process.env.GITHUB_ACTIONS !== "true") return yield* Effect.die("Hosted fixture only.");
@@ -41,6 +43,10 @@ export const verifyPackagedSshConnection = (input: {
     const stages: string[] = [];
     return yield* Effect.gen(function* () {
       const ssh = yield* SshEnvironmentManager;
+      // Force an explicit fingerprint approval, then remove only this fixture's
+      // trust record to exercise readonly reuse without a password or UI prompt.
+      if (input.trustFile)
+        yield* Effect.promise(() => NodeFSP.rm(input.trustFile!, { force: true }));
       let first = yield* ssh.ensureEnvironment(input.target, {
         purpose: "setup",
         issuePairingToken: true,
@@ -52,6 +58,30 @@ export const verifyPackagedSshConnection = (input: {
           issuePairingToken: true,
         });
       yield* Effect.addFinalizer(() => ssh.stopEnvironment(input.target).pipe(Effect.ignore));
+      if (input.trustFile) {
+        const trust = yield* Effect.promise(() => NodeFSP.readFile(input.trustFile!));
+        yield* Effect.promise(() => NodeFSP.rm(input.trustFile!));
+        try {
+          const status = yield* ssh.serverStatus!(input.target).pipe(
+            Effect.provide(SshAuth.SshPasswordPrompt.disabledLayer),
+          );
+          if (status.state !== "running")
+            return yield* Effect.die("Readonly status did not reuse approved host trust.");
+          const absent = yield* Effect.promise(() =>
+            NodeFSP.stat(input.trustFile!).then(
+              () => false,
+              (error: NodeJS.ErrnoException) => {
+                if (error.code !== "ENOENT") throw error;
+                return true;
+              },
+            ),
+          );
+          if (!absent) return yield* Effect.die("Readonly status wrote a persistent trust record.");
+        } finally {
+          yield* Effect.promise(() => NodeFSP.writeFile(input.trustFile!, trust));
+        }
+      }
+
       const descriptor = yield* fetchRemoteEnvironmentDescriptor({
         httpBaseUrl: first.httpBaseUrl,
       });
@@ -70,6 +100,7 @@ export const verifyPackagedSshConnection = (input: {
             preparation++;
             const bootstrap = yield* ssh.ensureEnvironment(input.target, {
               purpose: "reconnect",
+              expectedEnvironmentId: descriptor.environmentId,
               issuePairingToken: true,
             });
             if (preparation === 1 && bootstrap.httpBaseUrl !== first.httpBaseUrl)
