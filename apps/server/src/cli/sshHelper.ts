@@ -9,7 +9,9 @@ import * as NodeNet from "node:net";
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import { Argument, Command } from "effect/cli";
+import { DesktopSshServerStatusSchema } from "@t3tools/contracts";
 import * as SshManagedRuntime from "./sshManagedRuntime.ts";
 
 /**
@@ -126,11 +128,17 @@ const managedStart = Command.make("managed-start", {
   key: Argument.String("key"),
   version: Argument.String("version"),
   resume: Argument.String("resume"),
+  environmentId: Argument.String("environment-id").pipe(Argument.optional),
 }).pipe(
-  Command.withHandler(({ key, version, resume }) =>
+  Command.withHandler(({ key, version, resume, environmentId }) =>
     Effect.gen(function* () {
       const service = yield* SshManagedRuntime.SshManagedRuntime;
-      const result = yield* service.start(key, version, resume === "yes");
+      const result = yield* service.start(
+        key,
+        version,
+        resume === "yes",
+        Option.getOrUndefined(environmentId),
+      );
       yield* Effect.sync(() => {
         // @effect-diagnostics-next-line preferSchemaOverJson:off - Internal process-boundary helper prints its bounded result.
         process.stdout.write(JSON.stringify(result));
@@ -138,11 +146,24 @@ const managedStart = Command.make("managed-start", {
     }).pipe(Effect.provide(SshManagedRuntime.layer)),
   ),
 );
-const managedStop = Command.make("managed-stop", { key: Argument.String("key") }).pipe(
+const managedStatus = Command.make("managed-status", { key: Argument.String("key") }).pipe(
   Command.withHandler(({ key }) =>
-    Effect.flatMap(SshManagedRuntime.SshManagedRuntime, (service) => service.stop(key)).pipe(
-      Effect.provide(SshManagedRuntime.layer),
-    ),
+    Effect.gen(function* () {
+      const service = yield* SshManagedRuntime.SshManagedRuntime;
+      const result = yield* service.status(key);
+      const output = Schema.encodeSync(Schema.fromJsonString(DesktopSshServerStatusSchema))(result);
+      yield* Effect.sync(() => process.stdout.write(output));
+    }).pipe(Effect.provide(SshManagedRuntime.layer)),
+  ),
+);
+const managedStop = Command.make("managed-stop", {
+  key: Argument.String("key"),
+  environmentId: Argument.String("environment-id").pipe(Argument.optional),
+}).pipe(
+  Command.withHandler(({ key, environmentId }) =>
+    Effect.flatMap(SshManagedRuntime.SshManagedRuntime, (service) =>
+      service.stop(key, Option.getOrUndefined(environmentId)),
+    ).pipe(Effect.provide(SshManagedRuntime.layer)),
   ),
 );
 const encodeManagedPairing = Schema.encodeSync(
@@ -188,6 +209,7 @@ export const sshHelperCommand = Command.make("__ssh-helper").pipe(
     waitReady,
     runtimePort,
     managedStart,
+    managedStatus,
     managedStop,
     managedPair,
     supervise,

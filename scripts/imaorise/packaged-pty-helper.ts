@@ -28,6 +28,10 @@ export async function verifyPackagedPtyHelper(executable: string) {
     rows: 24,
     env: process.env,
   });
+  let terminalExited = false;
+  const lifetime = terminal.onExit(() => {
+    terminalExited = true;
+  });
   try {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -59,6 +63,7 @@ export async function verifyPackagedPtyHelper(executable: string) {
       };
       const child = NodeChildProcess.fork("__pty-console-list", [String(terminal.pid)], options);
       let finished = false;
+      let validReply = false;
       const done = (error?: Error) => {
         if (finished) return;
         finished = true;
@@ -81,14 +86,32 @@ export async function verifyPackagedPtyHelper(executable: string) {
           Array.isArray(value.consoleProcessList) &&
           value.consoleProcessList.includes(terminal.pid)
         )
-          done();
+          validReply = true;
         else done(new Error("Packaged PTY helper did not return its captured shell"));
       });
-      child.once("exit", () => {
-        if (!finished) done(new Error("Packaged PTY helper exited without a valid IPC reply"));
+      child.once("exit", (code) => {
+        if (!finished)
+          done(
+            validReply && code === 0
+              ? undefined
+              : new Error(`Packaged PTY helper exited without a valid reply (exit ${code})`),
+          );
       });
     });
   } finally {
-    terminal.kill();
+    if (!terminalExited)
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          listener.dispose();
+          reject(new Error("Owned fixture PTY did not finish shutdown"));
+        }, 10000);
+        const listener = terminal.onExit(() => {
+          clearTimeout(timer);
+          listener.dispose();
+          resolve();
+        });
+        terminal.kill();
+      });
+    lifetime.dispose();
   }
 }

@@ -37,6 +37,7 @@ it.effect(
       const scripts: string[] = [];
       let tunnels = 0;
       let killed = 0;
+      let serverState = "running";
       const spawner = ChildProcessSpawner.make((command) =>
         Effect.gen(function* () {
           if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected pipeline");
@@ -54,6 +55,16 @@ it.effect(
                     scripts.push(value);
                     if (value.includes("managed-start"))
                       return '{"remotePort":4773,"serverKind":"managed"}\n';
+                    if (value.includes("managed-status"))
+                      return JSON.stringify({
+                        state: serverState,
+                        checkedAt: "2026-10-17T12:00:00Z",
+                        ...(serverState === "running" ? { environmentId: "fixture" } : {}),
+                      });
+                    if (value.includes("managed-stop")) {
+                      serverState = "stopped";
+                      return "";
+                    }
                     if (value.includes("managed-pair")) return '{"credential":"fixture"}\n';
                     if (value.includes("--version")) return "2.0.1-test\n";
                     throw new Error("Reconnect attempted an unexpected remote operation");
@@ -138,6 +149,11 @@ it.effect(
           issuePairingToken: true,
         });
         expect(tunnels).toBe(2);
+        expect(prepareBundledRuntime).toHaveBeenCalledTimes(1);
+        expect((yield* reopened.serverStatus!(target)).state).toBe("running");
+        yield* reopened.stopEnvironment(target);
+        expect((yield* reopened.serverStatus!(target)).state).toBe("stopped");
+        yield* reopened.stopEnvironment(target);
         expect(prepareBundledRuntime).toHaveBeenCalledTimes(1);
         const starts = scripts.filter((script) => script.includes("managed-start"));
         expect(starts[0]).toContain("'no'");

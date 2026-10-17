@@ -13,12 +13,43 @@ import { makeManagedProviderArchives } from "../ManagedProviderArchives.ts";
 import * as ServerConfig from "../../config.ts";
 import * as CodexInstallation from "../CodexInstallation.ts";
 import * as AntigravityInstallation from "../AntigravityInstallation.ts";
+import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
+import { makeProviderVersionCatalog } from "../ProviderVersionCatalog.ts";
+import * as ProviderRegistry from "../ProviderRegistry.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 
 if (process.env.GITHUB_ACTIONS !== "true")
   throw new Error("Vendor smoke runs only in hosted fixtures.");
 await Effect.runPromise(
   Effect.gen(function* () {
+    const catalog = yield* makeProviderVersionCatalog().pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+          Layer.mock(ModelManifest.ModelManifest)({
+            current: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+          }),
+        ),
+      ),
+    );
+    for (const externalPackage of [undefined, "@openai/codex"]) {
+      const page = yield* catalog.page(
+        {
+          provider: ProviderDriverKind.make("codex"),
+          instanceId: ProviderInstanceId.make("catalog-smoke"),
+          page: 1,
+          prereleases: true,
+        },
+        externalPackage,
+      );
+      NodeAssert.ok(
+        page.releases.length > 0 && page.releases.length <= 50,
+        "Live official catalog must fit one bounded 50-entry page",
+      );
+    }
+    process.stdout.write(
+      "Codex: live GitHub ten-entry batches and compact npm catalog verified.\n",
+    );
     const fs = yield* FileSystem.FileSystem;
     const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-verified-provider-recipes-" });
     const service = yield* makeManagedProviderArchives().pipe(

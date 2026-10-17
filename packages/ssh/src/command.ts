@@ -335,18 +335,23 @@ function normalizeSshErrorMessage(input: {
   readonly fallbackMessage: string;
 }): string {
   const cleanedStderr = sanitizeSetupOutput(input.stderr).trim();
+  const substantiveStderr = cleanedStderr
+    .split(/\r?\n/)
+    .filter(
+      (line) => !/^Warning: Permanently added .* to the list of known hosts\.$/u.test(line.trim()),
+    )
+    .join("\n")
+    .trim();
+  const cleanedStdout = sanitizeSetupOutput(input.stdout ?? "").trim();
   if (
     /no space left on device|not enough space on (?:the )?disk|disk (?:is )?full/iu.test(
-      cleanedStderr,
+      `${substantiveStderr}\n${cleanedStdout}`,
     )
   ) {
     return "The remote host ran out of storage while preparing the runtime. Free space and file entries on the filesystem containing the remote user's .t3-imaorise directory, then retry setup. Existing servers have not been replaced.";
   }
-  if (cleanedStderr.length > 0) {
-    return cleanedStderr;
-  }
+  if (substantiveStderr.length > 0) return substantiveStderr;
 
-  const cleanedStdout = input.stdout?.trim() ?? "";
   return cleanedStdout.length > 0 ? cleanedStdout : input.fallbackMessage;
 }
 
@@ -516,6 +521,13 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       stdout: diagnosticStdout,
       stderr: sanitizeSetupOutput(diagnosticStderr),
     });
+    if (input.onDetails)
+      yield* input.onDetails(
+        `SSH command failed (exit ${exitCode}).\n${diagnosticStderr}\n${diagnosticStdout}`.slice(
+          0,
+          8192,
+        ),
+      );
     return yield* new SshCommandError({
       command: [sshCommand, ...args],
       exitCode,

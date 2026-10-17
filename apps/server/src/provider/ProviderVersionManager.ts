@@ -306,15 +306,16 @@ export const makeProviderVersionManager = Effect.fn("ProviderVersionManager.make
         affectedInstances: group.affected.map((id) => group.entries[id]?.displayName || id),
       };
     }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ServerProviderUpdateError({
-            provider: input.provider,
-            reason:
-              cause instanceof Error
-                ? cause.message
-                : "Could not inspect the selected installation.",
-          }),
+      Effect.mapError((cause) =>
+        cause instanceof ServerProviderUpdateError
+          ? cause
+          : new ServerProviderUpdateError({
+              provider: input.provider,
+              reason:
+                cause instanceof Error
+                  ? cause.message
+                  : "Could not inspect the selected installation.",
+            }),
       ),
     );
   const runUpdate = (input: ServerProviderUpdateInput) =>

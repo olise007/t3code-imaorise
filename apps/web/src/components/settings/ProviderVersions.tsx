@@ -37,11 +37,13 @@ export function ProviderVersions({
   const [prereleases, setPrereleases] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
+  const [requestedPage, setRequestedPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const canUpdate = useAtomValue(serverEnvironment.updateProvider.permissionAtom(environmentId));
   const query = useAtomCommand(serverEnvironment.providerVersions, { reportFailure: false });
   const update = useAtomCommand(serverEnvironment.updateProvider, { reportFailure: false });
   async function load(page = 1, includePrereleases = prereleases) {
+    setRequestedPage(page);
     setPending(true);
     setError(null);
     setSelected(null);
@@ -126,9 +128,19 @@ export function ProviderVersions({
                 </p>
               ) : null}
               {error ? (
-                <p role="alert" className="break-words text-sm text-destructive">
-                  {error}
-                </p>
+                <div className="space-y-2">
+                  <p role="alert" className="break-words text-sm text-destructive">
+                    {error}
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={pending}
+                    onClick={() => void load(requestedPage)}
+                  >
+                    Retry
+                  </Button>
+                </div>
               ) : null}
               {data?.message ? (
                 <p className="text-sm text-muted-foreground">{data.message}</p>

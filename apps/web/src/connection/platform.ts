@@ -62,6 +62,7 @@ import {
 } from "./desktopLocal";
 import * as ConnectionStorage from "./storage";
 import { clientPresentationMetadata } from "./clientMetadata";
+import { sshServerLifecycle } from "./sshServerLifecycle";
 import { sshSetupProgress } from "./sshSetupProgress";
 
 let nextObservedRpcRequestId = 0;
@@ -211,11 +212,22 @@ export const provisionDesktopSshEnvironment = Effect.fn(
         ...(sshSetupProgress.runningOperation(target)
           ? { operationId: sshSetupProgress.runningOperation(target)! }
           : {}),
+        ...(expectedEnvironmentId ? { expectedEnvironmentId } : {}),
         issuePairingToken: true,
         supportsSetupReview: bridge.resolveSshSetupReview !== undefined,
       }),
     catch: sshPreparationError,
   });
+  if (bootstrap.serverState === "stopped") {
+    sshServerLifecycle.observe(target, {
+      state: "stopped",
+      checkedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+    });
+    return yield* new ConnectionBlockedError({
+      reason: "configuration",
+      detail: "Remote server was explicitly stopped. Choose Start remote server or Cancel.",
+    });
+  }
   const pairingToken = bootstrap.pairingToken;
   if (pairingToken === null) {
     return yield* new ConnectionBlockedError({
@@ -321,11 +333,18 @@ const layerCapabilities = Layer.effectContext(
             detail:
               "Update the desktop client to reconnect this manual SSH profile. Its saved source and authentication settings are unchanged.",
           });
+        if (sshServerLifecycle.read(input.target).stopIntent)
+          return yield* new ConnectionBlockedError({
+            reason: "configuration",
+            detail:
+              "Remote server was explicitly stopped. Choose Start remote server to resume it.",
+          });
         const operationId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
         const bootstrap = yield* Effect.tryPromise({
           try: () =>
             bridge.ensureSshEnvironment(input.target, {
               purpose: "reconnect",
+              expectedEnvironmentId: input.expectedEnvironmentId,
               operationId,
               issuePairingToken: true,
             }),
@@ -337,6 +356,17 @@ const layerCapabilities = Layer.effectContext(
             ).pipe(Effect.ignore),
           ),
         );
+        if (bootstrap.serverState === "stopped") {
+          sshServerLifecycle.observe(input.target, {
+            state: "stopped",
+            checkedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+          });
+          return yield* new ConnectionBlockedError({
+            reason: "configuration",
+            detail:
+              "Remote server was explicitly stopped. Choose Start remote server to resume it.",
+          });
+        }
         if (bootstrap.pairingToken === null) {
           return yield* new ConnectionBlockedError({
             reason: "authentication",

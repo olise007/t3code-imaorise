@@ -1,3 +1,4 @@
+import { DesktopSshServerStatusSchema, type DesktopSshServerStatus } from "@t3tools/contracts";
 import type {
   DesktopSshEnvironmentBootstrap,
   DesktopSshEnvironmentTarget,
@@ -16,6 +17,7 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -78,6 +80,7 @@ const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
 
 export interface RemoteT3RunnerOptions {
   readonly resumeStoppedServer?: boolean;
+  readonly expectedEnvironmentId?: string;
   readonly bundles?: BundledSshArchives;
   readonly prepared?: PreparedSshRuntime;
   /**
@@ -176,12 +179,21 @@ interface SshAuthAttemptInput<T> extends SshAuthOperationInput<T> {
 export interface SshEnvironmentManagerShape {
   readonly forgetAuthentication?: (target: DesktopSshEnvironmentTarget) => Effect.Effect<void>;
   readonly authenticatedSecret?: (target: DesktopSshEnvironmentTarget) => string | undefined;
+  readonly serverStatus?: (
+    target: DesktopSshEnvironmentTarget,
+  ) => Effect.Effect<
+    DesktopSshServerStatus,
+    SshEnvironmentEffectError,
+    SshEnvironmentEffectContext
+  >;
   readonly stopEnvironment: (
     target: DesktopSshEnvironmentTarget,
+    lifecycleOptions?: { expectedEnvironmentId?: string; operationId?: string },
   ) => Effect.Effect<void, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
   readonly ensureEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: {
+      expectedEnvironmentId?: string;
       purpose?: "setup" | "reconnect";
       operationId?: string;
       authSecret?: string;
@@ -946,6 +958,7 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
     target: DesktopSshEnvironmentTarget,
     input?: SshAuth.SshAuthOptions,
     runner?: RemoteT3RunnerOptions,
+    onDetails?: (line: string) => Effect.Effect<void>,
   ): Effect.fn.Return<
     {
       readonly remotePort: number;
@@ -962,6 +975,7 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
       stateKey,
     });
     const result = yield* runSshCommand(target, {
+      ...(onDetails ? { onDetails } : {}),
       ...(runner?.prepared
         ? remoteRuntimeInvocation(runner.prepared, [
             "__ssh-helper",
@@ -969,6 +983,7 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
             stateKey,
             runner.prepared.version,
             runner.resumeStoppedServer ? "yes" : "no",
+            ...(runner.expectedEnvironmentId ? [runner.expectedEnvironmentId] : []),
           ])
         : {
             remoteCommandArgs: ["sh", "-l", "-s", "--", stateKey],
@@ -1091,6 +1106,7 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
   target: DesktopSshEnvironmentTarget,
   input?: SshAuth.SshAuthOptions,
   runner?: RemoteT3RunnerOptions,
+  onDetails?: (line: string) => Effect.Effect<void>,
 ): Effect.fn.Return<
   void,
   SshCommandError | SshInvalidTargetError,
@@ -1102,8 +1118,14 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
     stateKey,
   });
   yield* runSshCommand(target, {
+    ...(onDetails ? { onDetails } : {}),
     ...(runner?.prepared
-      ? remoteRuntimeInvocation(runner.prepared, ["__ssh-helper", "managed-stop", stateKey])
+      ? remoteRuntimeInvocation(runner.prepared, [
+          "__ssh-helper",
+          "managed-stop",
+          stateKey,
+          ...(runner.expectedEnvironmentId ? [runner.expectedEnvironmentId] : []),
+        ])
       : { remoteCommandArgs: ["sh", "-s"], stdin: buildRemoteStopScript(stateKey) }),
     ...(input?.trustedHostPrompt === undefined
       ? {}
@@ -1673,6 +1695,24 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     });
   });
 
+  const savedRuntime = Effect.fn("ssh.runtime.saved")(function* (key: string) {
+    let runtime = runtimes.get(key);
+    if (!runtime) {
+      const fs = yield* FileSystem.FileSystem;
+      const saved = yield* fs
+        .readFileString(yield* runtimeLocatorFile(key))
+        .pipe(Effect.flatMap(decodeRuntimeLocator), Effect.option);
+      if (
+        saved._tag === "Some" &&
+        /^\.t3-imaorise\/runtime\/sha256-[a-f0-9]{64}\/(?:t3|t3\.exe)$/.test(
+          saved.value.relativeExecutable,
+        )
+      )
+        runtime = saved.value;
+    }
+    return runtime;
+  });
+
   const createTunnelEntry = Effect.fn("ssh/tunnel.ensureTunnelEntry.create")(function* (input: {
     readonly key: string;
     readonly resolvedTarget: DesktopSshEnvironmentTarget;
@@ -1688,7 +1728,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       key: input.key,
       target: input.resolvedTarget,
       operation: (authOptions) =>
-        launchOrReuseRemoteServer(input.resolvedTarget, authOptions, input.runner),
+        launchOrReuseRemoteServer(input.resolvedTarget, authOptions, input.runner, (line) =>
+          reportProgress(input.resolvedTarget, line),
+        ),
     });
     const remotePort = remoteLaunch.remotePort;
     yield* Effect.logDebug("ssh.environment.remotePort.ready", {
@@ -1810,6 +1852,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   const ensureEnvironment = Effect.fn("ssh/tunnel.ensureEnvironment")(function* (
     target: DesktopSshEnvironmentTarget,
     requestOptions?: {
+      expectedEnvironmentId?: string;
       purpose?: "setup" | "reconnect";
       operationId?: string;
       authSecret?: string;
@@ -1890,30 +1933,62 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               "Authentication succeeded. No remote runtime was installed or started.",
             ],
           };
+        if (!requestOptions?.resumeStoppedServer && configuredRunner?.bundles) {
+          const previous = yield* savedRuntime(key);
+          if (previous) {
+            const stateKey = yield* remoteStateKey(resolvedTarget);
+            const status = yield* runWithSshAuth({
+              key,
+              target: resolvedTarget,
+              allowPrompt: false,
+              operation: (auth) =>
+                runSshCommand(resolvedTarget, {
+                  ...auth,
+                  ...remoteRuntimeInvocation(previous, [
+                    "__ssh-helper",
+                    "managed-status",
+                    stateKey,
+                  ]),
+                  timeoutMs: 15_000,
+                }),
+            }).pipe(
+              Effect.flatMap((output) =>
+                Schema.decodeUnknownEffect(Schema.fromJsonString(DesktopSshServerStatusSchema))(
+                  output.stdout.trim(),
+                ),
+              ),
+              Effect.option,
+            );
+            if (status._tag === "Some" && status.value.state === "stopped")
+              return {
+                target: resolvedTarget,
+                httpBaseUrl: "",
+                wsBaseUrl: "",
+                pairingToken: null,
+                serverState: "stopped" as const,
+              };
+          }
+        }
         const runner = configuredRunner?.bundles
           ? {
               ...configuredRunner,
               resumeStoppedServer: !reconnect && requestOptions?.resumeStoppedServer === true,
+              ...(requestOptions?.expectedEnvironmentId
+                ? { expectedEnvironmentId: requestOptions.expectedEnvironmentId }
+                : {}),
               prepared: yield* runWithSshAuth({
                 key,
                 target: resolvedTarget,
                 operation: (auth) =>
-                  reconnect
+                  reconnect || requestOptions?.resumeStoppedServer === true
                     ? Effect.gen(function* () {
-                        let runtime = runtimes.get(key);
-                        if (!runtime) {
-                          const fs = yield* FileSystem.FileSystem;
-                          const saved = yield* fs
-                            .readFileString(yield* runtimeLocatorFile(key))
-                            .pipe(Effect.flatMap(decodeRuntimeLocator), Effect.option);
-                          if (
-                            saved._tag === "Some" &&
-                            /^\.t3-imaorise\/runtime\/sha256-[a-f0-9]{64}\/(?:t3|t3\.exe)$/.test(
-                              saved.value.relativeExecutable,
-                            )
-                          )
-                            runtime = saved.value;
-                        }
+                        let runtime = yield* savedRuntime(key);
+                        if (!runtime && requestOptions?.resumeStoppedServer === true)
+                          return yield* new SshLaunchError({
+                            message:
+                              "Repair connection: no attested runtime is available for Start. Prepare this connection explicitly first.",
+                            stdout: "",
+                          });
                         if (!runtime) {
                           // Legacy profiles can reuse this build if it is already installed.
                           // Missing runtimes require explicit repair, never installation in a retry.
@@ -1976,17 +2051,6 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           ...sshRunnerLogFields(runner),
           key,
         });
-        const entry = yield* ensureTunnelEntry(key, resolvedTarget, runner);
-
-        const pairingResult = requestOptions?.issuePairingToken
-          ? yield* runWithSshAuth({
-              key,
-              target: entry.target,
-              operation: (authOptions) =>
-                issueRemotePairingToken(entry.target, authOptions, runner),
-            })
-          : null;
-        const pairingToken = pairingResult?.credential ?? null;
         if (runner?.prepared) {
           runtimes.set(key, runner.prepared);
           yield* saveRuntimeLocator(key, runner.prepared).pipe(
@@ -2001,6 +2065,34 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             ),
           );
         }
+        const entry = yield* ensureTunnelEntry(key, resolvedTarget, runner).pipe(
+          Effect.catchIf(
+            (cause) =>
+              cause instanceof SshCommandError &&
+              /Remote server was explicitly stopped\./u.test(
+                `${cause.stdout ?? ""}\n${cause.stderr}`,
+              ),
+            () => Effect.succeed(null),
+          ),
+        );
+        if (entry === null)
+          return {
+            target: resolvedTarget,
+            httpBaseUrl: "",
+            wsBaseUrl: "",
+            pairingToken: null,
+            serverState: "stopped" as const,
+          };
+
+        const pairingResult = requestOptions?.issuePairingToken
+          ? yield* runWithSshAuth({
+              key,
+              target: entry.target,
+              operation: (authOptions) =>
+                issueRemotePairingToken(entry.target, authOptions, runner),
+            })
+          : null;
+        const pairingToken = pairingResult?.credential ?? null;
         yield* reportProgress(resolvedTarget, "SSH tunnel ready");
 
         yield* Effect.logInfo("ssh.environment.ensure.succeeded", {
@@ -2083,7 +2175,56 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     authenticatedSecret: (target) => authSecrets.get(targetConnectionKey(target)),
     ensureEnvironment,
     disconnectEnvironment,
-    stopEnvironment: (target) =>
+    serverStatus: (target) =>
+      Effect.gen(function* () {
+        const base = target.manual
+          ? target
+          : yield* resolveSshTarget(target.alias || target.hostname, target.executionSource);
+        const resolved = {
+          ...base,
+          ...(target.username !== null ? { username: target.username } : {}),
+          ...(target.port !== null ? { port: target.port } : {}),
+        };
+        const key = targetConnectionKey(resolved);
+        return yield* withTargetLock(
+          key,
+          Effect.gen(function* () {
+            const runtime = yield* savedRuntime(key);
+            if (!runtime)
+              return {
+                state: "unknown" as const,
+                checkedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+                detail: "No attested runtime is available. Repair this connection explicitly.",
+              };
+            const stateKey = yield* remoteStateKey(resolved);
+            const result = yield* runWithSshAuth({
+              key,
+              target: resolved,
+              allowPrompt: false,
+              operation: (auth) =>
+                runSshCommand(resolved, {
+                  ...auth,
+                  ...remoteRuntimeInvocation(runtime, ["__ssh-helper", "managed-status", stateKey]),
+                  timeoutMs: 15_000,
+                }),
+            });
+            return yield* Schema.decodeUnknownEffect(
+              Schema.fromJsonString(DesktopSshServerStatusSchema),
+            )(result.stdout.trim()).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new SshLaunchError({
+                    message:
+                      "Status unknown: this runtime does not support verified lifecycle status. Repair the connection explicitly when safe.",
+                    stdout: "",
+                    cause,
+                  }),
+              ),
+            );
+          }),
+        );
+      }),
+    stopEnvironment: (target, lifecycleOptions) =>
       Effect.gen(function* () {
         const base = target.manual
           ? target
@@ -2099,6 +2240,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         yield* withTargetLock(
           key,
           Effect.gen(function* () {
+            if (lifecycleOptions?.operationId) operations.set(key, lifecycleOptions.operationId);
             const entry = tunnels.get(key);
             if (entry) {
               tunnels.delete(key);
@@ -2112,13 +2254,36 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
                   const runner = configured?.bundles
                     ? {
                         ...configured,
-                        prepared: yield* prepareBundledRuntime(resolved, auth, configured.bundles),
+                        ...(lifecycleOptions?.expectedEnvironmentId
+                          ? { expectedEnvironmentId: lifecycleOptions.expectedEnvironmentId }
+                          : {}),
+                        prepared: yield* savedRuntime(key).pipe(
+                          Effect.flatMap((runtime) =>
+                            runtime
+                              ? Effect.succeed(runtime)
+                              : Effect.fail(
+                                  new SshLaunchError({
+                                    message:
+                                      "Repair connection: no attested runtime is available for Stop. No packages or runtimes were installed.",
+                                    stdout: "",
+                                  }),
+                                ),
+                          ),
+                        ),
                       }
                     : configured;
-                  yield* stopRemoteServer(resolved, auth, runner);
+                  yield* stopRemoteServer(resolved, auth, runner, (line) =>
+                    reportProgress(resolved, line),
+                  );
                 }),
             });
-          }),
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                if (operations.get(key) === lifecycleOptions?.operationId) operations.delete(key);
+              }),
+            ),
+          ),
         );
       }),
   });

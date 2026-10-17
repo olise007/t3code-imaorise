@@ -61,7 +61,13 @@ it("reuses an authenticated supervisor after its launching command exits and sto
   const run = (...args: string[]) =>
     exec(process.execPath, [fixture, ...args], { env, timeout: 70_000 });
   try {
+    expect(JSON.parse((await run("status", key)).stdout).state).toBe("unknown");
+    await expect(NodeFSP.stat(NodePath.join(home, ".t3-imaorise"))).rejects.toThrow();
     const first = JSON.parse((await run("start", key, "2.0.1-test")).stdout);
+    expect(JSON.parse((await run("status", key)).stdout)).toMatchObject({
+      state: "running",
+      environmentId: "fixture-environment",
+    });
     const second = JSON.parse((await run("start", key, "2.0.1-test")).stdout);
     expect(second.remotePort).toBe(first.remotePort);
     const alternate = JSON.parse((await run("start", "ffffffffffffffff", "2.0.1-test")).stdout);
@@ -122,6 +128,11 @@ it("reuses an authenticated supervisor after its launching command exits and sto
     await expect(run("start", key, "2.0.2-newer")).rejects.toThrow("identity differs");
     await NodeFSP.rm(descriptorFile);
     expect(JSON.parse(await NodeFSP.readFile(file, "utf8"))).toEqual(record);
+    await expect(run("stop", key, "wrong-environment")).rejects.toThrow("identity changed");
+    await expect(run("resume", key, "2.0.1-test", "wrong-environment")).rejects.toThrow(
+      "identity changed",
+    );
+    expect(JSON.parse((await run("status", key)).stdout).state).toBe("running");
     const provider = JSON.parse(
       await NodeFSP.readFile(
         NodePath.join(home, ".t3-imaorise/userdata/fixture-provider.json"),
@@ -130,13 +141,22 @@ it("reuses an authenticated supervisor after its launching command exits and sto
     ) as { pid: number };
     await run("stop", key);
     expect(() => process.kill(provider.pid, 0)).toThrow();
+    expect(JSON.parse((await run("status", key)).stdout).state).toBe("stopped");
+    await run("stop", key);
     await expect(NodeFSP.stat(file)).rejects.toThrow();
     await expect(run("start", key, "2.0.1-test")).rejects.toThrow("explicitly stopped");
     await expect(run("start", "ffffffffffffffff", "2.0.1-test")).rejects.toThrow(
       "explicitly stopped",
     );
-    const resumed = JSON.parse((await run("resume", key, "2.0.1-test")).stdout);
+    await expect(run("resume", key, "2.0.1-test", "wrong-environment")).rejects.toThrow(
+      "identity changed",
+    );
+    expect(JSON.parse((await run("status", key)).stdout).state).toBe("stopped");
+    const resumed = JSON.parse(
+      (await run("resume", key, "2.0.1-test", "fixture-environment")).stdout,
+    );
     expect(resumed.remotePort).toBeGreaterThan(0);
+    expect(JSON.parse((await run("status", key)).stdout).state).toBe("running");
     await run("stop", key);
   } catch (error) {
     const log = await NodeFSP.readFile(

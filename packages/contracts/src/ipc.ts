@@ -489,7 +489,16 @@ export interface DesktopSshEnvironmentBootstrap {
   setupWarnings?: readonly string[];
 }
 
+export const DesktopSshServerStatusSchema = Schema.Struct({
+  state: Schema.Literals(["running", "stopped", "unknown"]),
+  checkedAt: Schema.String,
+  environmentId: Schema.optionalKey(Schema.String),
+  detail: Schema.optionalKey(Schema.String),
+});
+export type DesktopSshServerStatus = typeof DesktopSshServerStatusSchema.Type;
+
 export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
+  serverState: Schema.optionalKey(Schema.Literal("stopped")),
   selectedProviders: Schema.optionalKey(Schema.Array(Schema.String)),
   target: DesktopSshEnvironmentTargetSchema,
   httpBaseUrl: Schema.String,
@@ -519,6 +528,7 @@ export const DesktopSshPasswordPromptCancelledResultSchema = Schema.Struct({
 });
 
 export const DesktopSshEnvironmentEnsureOptionsSchema = Schema.Struct({
+  expectedEnvironmentId: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(128))),
   purpose: Schema.optionalKey(Schema.Literals(["setup", "reconnect"])),
   operationId: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(128))),
   authSecret: Schema.optionalKey(Schema.String),
@@ -1309,6 +1319,7 @@ export interface DesktopBridge {
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: {
+      expectedEnvironmentId?: string;
       purpose?: "setup" | "reconnect";
       operationId?: string;
       authSecret?: string;
@@ -1320,7 +1331,11 @@ export interface DesktopBridge {
     },
   ) => Promise<DesktopSshEnvironmentBootstrap>;
   disconnectSshEnvironment: (target: DesktopSshEnvironmentTarget) => Promise<void>;
-  stopSshEnvironment?: (target: DesktopSshEnvironmentTarget) => Promise<void>;
+  stopSshEnvironment?: (
+    target: DesktopSshEnvironmentTarget,
+    options?: { expectedEnvironmentId?: string; operationId?: string },
+  ) => Promise<void>;
+  sshServerStatus?: (target: DesktopSshEnvironmentTarget) => Promise<DesktopSshServerStatus>;
   cancelSshSetup?: (target: DesktopSshEnvironmentTarget, operationId?: string) => Promise<void>;
   forgetSshCredentials?: (target: DesktopSshEnvironmentTarget) => Promise<void>;
   fetchSshEnvironmentDescriptor: (httpBaseUrl: string) => Promise<ExecutionEnvironmentDescriptor>;

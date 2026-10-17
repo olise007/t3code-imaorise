@@ -18,6 +18,8 @@ import {
   DesktopSshEnvironmentRequestError,
   fetchSshEnvironmentDescriptor,
   resolveSshHost,
+  sshServerStatus,
+  stopSshEnvironment,
 } from "./sshEnvironment.ts";
 
 function jsonResponse(request: HttpClientRequest.HttpClientRequest, body: unknown, status = 200) {
@@ -209,3 +211,41 @@ describe("SSH environment IPC", () => {
     }).pipe(Effect.provide(layer));
   });
 });
+
+it.effect(
+  "decodes lifecycle status and expected destination identity without preparing a runtime",
+  () =>
+    Effect.gen(function* () {
+      const calls: unknown[] = [];
+      const target = {
+        alias: "fixture",
+        hostname: "192.0.2.1",
+        username: "user",
+        port: 22,
+        executionSource: { type: "wsl", distro: "Ubuntu" },
+      };
+      const layer = Layer.mock(DesktopSshEnvironment)({
+        serverStatus: (value) =>
+          Effect.sync(() => {
+            calls.push(value);
+            return { state: "stopped" as const, checkedAt: "2026-10-17T12:00:00Z" };
+          }),
+        stopEnvironment: (value, options) =>
+          Effect.sync(() => {
+            calls.push([value, options]);
+          }),
+      });
+      const result = yield* sshServerStatus.handler(target).pipe(Effect.provide(layer));
+      assert.deepEqual(result, { state: "stopped", checkedAt: "2026-10-17T12:00:00Z" });
+      yield* stopSshEnvironment
+        .handler({
+          target,
+          options: { expectedEnvironmentId: "verified", operationId: "operation" },
+        })
+        .pipe(Effect.provide(layer));
+      assert.deepEqual(calls, [
+        target,
+        [target, { expectedEnvironmentId: "verified", operationId: "operation" }],
+      ]);
+    }),
+);

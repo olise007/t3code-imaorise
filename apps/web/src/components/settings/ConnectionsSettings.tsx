@@ -7,6 +7,8 @@ import {
   revokeOtherEnvironmentClients,
 } from "~/rpc/environmentAccess";
 import { SessionPermissions } from "./SessionPermissions";
+import { sshServerLifecycle } from "~/connection/sshServerLifecycle";
+import { SshServerControls } from "./SshServerControls";
 import { SshSetupProgress } from "./SshSetupProgress";
 import { BackendStartupSettings } from "./BackendStartupSettings";
 import { useEnvironmentSessionState } from "~/state/session";
@@ -1762,6 +1764,33 @@ function SavedBackendListRow({
                   ))
               : null}
           </div>
+          {desktopBridge
+            ? connectionRoutes(environment.entry)
+                .flatMap((route) =>
+                  Option.isSome(route.profile) &&
+                  route.profile.value._tag === "SshConnectionProfile"
+                    ? [route.profile.value.target]
+                    : [],
+                )
+                .slice(0, 1)
+                .map((target) => (
+                  <SshServerControls
+                    key={sshTargetKey(target)}
+                    target={target}
+                    environmentId={environmentId}
+                    label={environment.label}
+                    bridge={desktopBridge}
+                    setEnabled={(value) => onSetEnabled(environmentId, value)}
+                    confirmStop={async () =>
+                      (await requestConfirmDialog(
+                        `Stop the T3-managed server on ${environment.label}? This stops its agents and tools. Disconnecting alone leaves them running.`,
+                        { variant: "destructive" },
+                      )) === true
+                    }
+                    notify={(title) => toastManager.add({ type: "success", title })}
+                  />
+                ))
+            : null}
           {Array.from(
             new Set(
               connectionRoutes(environment.entry).flatMap((route) =>
@@ -1876,48 +1905,6 @@ function SavedBackendListRow({
             <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
           ) : null}
           <MenuSeparator />
-          {desktopBridge?.stopSshEnvironment &&
-          connectionRoutes(environment.entry).some(
-            (route) =>
-              Option.isSome(route.profile) && route.profile.value._tag === "SshConnectionProfile",
-          ) ? (
-            <MenuItem
-              variant="destructive"
-              onClick={async () => {
-                const route = connectionRoutes(environment.entry).find(
-                  (candidate) =>
-                    Option.isSome(candidate.profile) &&
-                    candidate.profile.value._tag === "SshConnectionProfile",
-                );
-                if (
-                  !route ||
-                  Option.isNone(route.profile) ||
-                  route.profile.value._tag !== "SshConnectionProfile"
-                )
-                  return;
-                const confirmed = await requestConfirmDialog(
-                  `Stop the T3-managed server on ${environment.label}? This stops its agents and tools. Disconnecting alone leaves them running.`,
-                  { variant: "destructive" },
-                );
-                if (confirmed !== true) return;
-                try {
-                  if (!(await onSetEnabled(environmentId, false))) return;
-                  await desktopBridge.stopSshEnvironment?.(route.profile.value.target);
-                } catch (error) {
-                  toastManager.add({
-                    type: "error",
-                    title: "Could not stop remote server",
-                    description:
-                      error instanceof Error
-                        ? error.message
-                        : "Remote server ownership could not be verified.",
-                  });
-                }
-              }}
-            >
-              Stop remote server…
-            </MenuItem>
-          ) : null}
           <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
             {isRemoving ? "Removing…" : "Remove from this device…"}
           </MenuItem>
@@ -2580,6 +2567,9 @@ export function ConnectionsSettings() {
   const [sshSource, setSshSource] = useState<DesktopSshExecutionSource>({ type: "local" });
   const [isRefreshingSshHosts, setIsRefreshingSshHosts] = useState(false);
   const [sshProgress, setSshProgress] = useState<string | null>(null);
+  const [stoppedSshTarget, setStoppedSshTarget] = useState<DesktopSshEnvironmentTarget | null>(
+    null,
+  );
   const activeSshSetupTarget = useRef<DesktopSshEnvironmentTarget | null>(null);
   const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
   const [sshReport, setSshReport] = useState<DesktopSshDiscoveryReport | null>(null);
@@ -2987,6 +2977,7 @@ export function ConnectionsSettings() {
       testOnly = false,
     ) => {
       activeSshSetupTarget.current = target;
+      setStoppedSshTarget(null);
       setIsAddingSavedBackend(true);
       setSavedBackendError(null);
       const result = await connectSshEnvironment({
@@ -2998,6 +2989,7 @@ export function ConnectionsSettings() {
       });
       activeSshSetupTarget.current = null;
       if (result._tag === "Failure") {
+        if (sshServerLifecycle.read(target).state === "stopped") setStoppedSshTarget(target);
         if (!isAtomCommandInterrupted(result)) {
           setSavedBackendError(formatDesktopSshConnectionError(squashAtomCommandFailure(result)));
         }
@@ -3299,9 +3291,21 @@ export function ConnectionsSettings() {
           route.profile.value._tag === "SshConnectionProfile"
         ) {
           try {
-            await window.desktopBridge.ensureSshEnvironment(route.profile.value.target, {
-              resumeStoppedServer: true,
-            });
+            if (sshServerLifecycle.read(route.profile.value.target).stopIntent)
+              throw new Error(
+                "Remote server was explicitly stopped. Choose Start remote server to resume it.",
+              );
+            const bootstrap = await window.desktopBridge.ensureSshEnvironment(
+              route.profile.value.target,
+              {
+                purpose: "reconnect",
+                expectedEnvironmentId: environmentId,
+              },
+            );
+            if (bootstrap.serverState === "stopped")
+              throw new Error(
+                "Remote server was explicitly stopped. Choose Start remote server to resume it.",
+              );
           } catch (error) {
             const message =
               error instanceof Error ? error.message : "Could not start remote server.";
@@ -3934,6 +3938,32 @@ export function ConnectionsSettings() {
         >
           Test authentication
         </Button>
+        {stoppedSshTarget && desktopBridge ? (
+          <div className="space-y-2">
+            <SshServerControls
+              target={stoppedSshTarget}
+              label={stoppedSshTarget.hostname}
+              bridge={desktopBridge}
+              setEnabled={async () => true}
+              confirmStop={async () => false}
+              notify={() => {
+                setStoppedSshTarget(null);
+                setSavedBackendError(null);
+                setSshTestResult("Server started. Choose Add environment to finish connecting.");
+              }}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setStoppedSshTarget(null);
+                setSavedBackendError(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        ) : null}
         {savedBackendError || (!sshManual && discoveredSshHostsError) ? (
           <Alert variant="error">
             <AlertDescription>{savedBackendError ?? discoveredSshHostsError}</AlertDescription>

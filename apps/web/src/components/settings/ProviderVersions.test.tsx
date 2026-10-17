@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
+import * as Cause from "effect/Cause";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, ProviderInstanceId, ProviderDriverKind } from "@t3tools/contracts";
@@ -120,6 +121,62 @@ it("requires an exact artifact review, preserves independent labels, and allows 
     expect(fixtures.query).toHaveBeenLastCalledWith({
       environmentId: "remote",
       input: { provider: "codex", instanceId: "work", page: 1, prereleases: true },
+    });
+  } finally {
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("offers Retry after a failed catalog request without changing the selected environment", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  fixtures.query.mockClear();
+  // The command wrapper returns failures; the component never receives vendor response bodies.
+  fixtures.query
+    .mockReset()
+    .mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("Catalog HTTP 503")) })
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        releases: [],
+        page: 1,
+        hasMore: false,
+        installedVersion: null,
+        selectedVersion: null,
+        affectedInstances: [],
+        message: "Catalog available",
+      },
+    });
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => {
+      root.render(
+        <ProviderVersions
+          environmentId={EnvironmentId.make("retry-environment")}
+          instanceId={ProviderInstanceId.make("codex")}
+          provider={ProviderDriverKind.make("codex")}
+        />,
+      );
+    });
+    const button = (label: string) =>
+      Array.from(container.querySelectorAll("button")).find((node) => node.textContent === label)!;
+    await act(async () => {
+      button("Check for updates").click();
+    });
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    await act(async () => {
+      button("Retry").click();
+    });
+    expect(container.textContent).toContain("Catalog available");
+    expect(fixtures.query).toHaveBeenCalledTimes(2);
+    expect(fixtures.query).toHaveBeenLastCalledWith({
+      environmentId: "retry-environment",
+      input: { provider: "codex", instanceId: "codex", page: 1, prereleases: false },
     });
   } finally {
     await act(async () => {

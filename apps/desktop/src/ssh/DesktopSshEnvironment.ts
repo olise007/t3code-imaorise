@@ -22,6 +22,7 @@ import * as SshTunnel from "@t3tools/ssh/tunnel";
 import * as Context from "effect/Context";
 import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as Option from "effect/Option";
@@ -75,6 +76,7 @@ export class DesktopSshEnvironment extends Context.Service<
     readonly ensureEnvironment: (
       target: DesktopSshEnvironmentTarget,
       options?: {
+        expectedEnvironmentId?: string;
         purpose?: "setup" | "reconnect";
         operationId?: string;
         authSecret?: string;
@@ -88,8 +90,15 @@ export class DesktopSshEnvironment extends Context.Service<
     readonly disconnectEnvironment: (
       target: DesktopSshEnvironmentTarget,
     ) => Effect.Effect<void, DesktopSshEnvironmentOperationError>;
+    readonly serverStatus?: (
+      target: DesktopSshEnvironmentTarget,
+    ) => Effect.Effect<
+      import("@t3tools/contracts").DesktopSshServerStatus,
+      DesktopSshEnvironmentOperationError
+    >;
     readonly stopEnvironment: (
       target: DesktopSshEnvironmentTarget,
+      options?: { expectedEnvironmentId?: string; operationId?: string },
     ) => Effect.Effect<void, DesktopSshEnvironmentOperationError>;
   }
 >()("@t3tools/desktop/ssh/DesktopSshEnvironment") {}
@@ -218,7 +227,7 @@ export const make = Effect.gen(function* () {
     string,
     {
       operationId: string | undefined;
-      fiber?: Fiber.Fiber<DesktopSshEnvironmentBootstrap, DesktopSshEnvironmentOperationError>;
+      fiber?: Fiber.Fiber<unknown, DesktopSshEnvironmentOperationError>;
       cancelled: boolean;
       done: Deferred.Deferred<void>;
     }
@@ -330,13 +339,59 @@ export const make = Effect.gen(function* () {
           ),
         );
       }),
-    stopEnvironment: (target) =>
-      manager
-        .stopEnvironment(target)
-        .pipe(
-          Effect.provideService(SshAuth.SshPasswordPrompt, passwordPrompt),
-          Effect.provide(runtimeContext),
-        ),
+    serverStatus: (target) =>
+      (
+        manager.serverStatus?.(target) ??
+        Effect.map(Clock.currentTimeMillis, (now) => ({
+          state: "unknown" as const,
+          checkedAt: new Date(now).toISOString(),
+        }))
+      ).pipe(
+        Effect.provide(SshAuth.SshPasswordPrompt.disabledLayer),
+        Effect.provide(runtimeContext),
+      ),
+    stopEnvironment: (target, lifecycleOptions) =>
+      Effect.gen(function* () {
+        const operation = setups.get(targetConnectionKey(target));
+        if (operation) {
+          operation.cancelled = true;
+          if (operation.fiber) yield* Fiber.interrupt(operation.fiber);
+          yield* Deferred.await(operation.done);
+        }
+        const key = targetConnectionKey(target);
+        if (setups.has(key))
+          return yield* new SshLaunchError({
+            message: "Another SSH operation is active. Wait or cancel before retrying Stop.",
+            stdout: "",
+          });
+        const done = yield* Deferred.make<void>();
+        const current: {
+          operationId: string | undefined;
+          cancelled: boolean;
+          done: Deferred.Deferred<void>;
+          fiber?: Fiber.Fiber<unknown, DesktopSshEnvironmentOperationError>;
+        } = { operationId: lifecycleOptions?.operationId, cancelled: false, done };
+        setups.set(key, current);
+        yield* Effect.gen(function* () {
+          const fiber = yield* manager
+            .stopEnvironment(target, lifecycleOptions)
+            .pipe(
+              Effect.provideService(SshAuth.SshPasswordPrompt, passwordPrompt),
+              Effect.provide(runtimeContext),
+              Effect.forkChild,
+            );
+          current.fiber = fiber;
+          if (current.cancelled) yield* Fiber.interrupt(fiber);
+          yield* Fiber.join(fiber);
+        }).pipe(
+          Effect.ensuring(
+            Effect.gen(function* () {
+              if (setups.get(key) === current) setups.delete(key);
+              yield* Deferred.succeed(done, undefined);
+            }),
+          ),
+        );
+      }),
     disconnectEnvironment: (target) =>
       manager
         .disconnectEnvironment(target)

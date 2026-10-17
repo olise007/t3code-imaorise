@@ -156,8 +156,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.on(IpcChannels.SSH_CONNECTION_PROGRESS_CHANNEL, handler);
     return () => ipcRenderer.removeListener(IpcChannels.SSH_CONNECTION_PROGRESS_CHANNEL, handler);
   },
-  stopSshEnvironment: (target) =>
-    ipcRenderer.invoke(IpcChannels.STOP_SSH_ENVIRONMENT_CHANNEL, target),
+  sshServerStatus: (target) => ipcRenderer.invoke(IpcChannels.SSH_SERVER_STATUS_CHANNEL, target),
+  stopSshEnvironment: (target, options) =>
+    ipcRenderer.invoke(
+      IpcChannels.STOP_SSH_ENVIRONMENT_CHANNEL,
+      options === undefined ? target : { target, options },
+    ),
   cancelSshSetup: (target, operationId) =>
     ipcRenderer.invoke(
       IpcChannels.CANCEL_SSH_SETUP_CHANNEL,

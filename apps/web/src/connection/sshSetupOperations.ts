@@ -1,5 +1,6 @@
 import type { DesktopSshEnvironmentTarget } from "@t3tools/contracts";
-import { sshSetupTargetKey } from "./sshSetupProgress";
+import { sshServerLifecycle } from "./sshServerLifecycle";
+import { sshSetupProgress, sshSetupTargetKey } from "./sshSetupProgress";
 
 /** Cancellation and removal serialize by the complete SSH source/profile identity. */
 export function createSshSetupOperations(
@@ -16,7 +17,7 @@ export function createSshSetupOperations(
     isRemoving: (target: DesktopSshEnvironmentTarget) => removing.has(sshSetupTargetKey(target)),
     register: (target: DesktopSshEnvironmentTarget, id: string, cancel: () => Promise<unknown>) => {
       const key = sshSetupTargetKey(target);
-      if (removing.has(key)) return false;
+      if (removing.has(key) || active.has(key)) return false;
       active.set(key, { id, cancel });
       return true;
     },
@@ -43,3 +44,8 @@ export function createSshSetupOperations(
     },
   };
 }
+
+export const sshSetupOperations = createSshSetupOperations((environmentId, targets) => {
+  sshSetupProgress.forgetEnvironment(environmentId, targets);
+  sshServerLifecycle.forgetEnvironment(environmentId, targets);
+});

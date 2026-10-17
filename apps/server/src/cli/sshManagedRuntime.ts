@@ -41,11 +41,18 @@ export class SshManagedRuntime extends Context.Service<
       key: string,
       version: string,
       resume: boolean,
+      expectedEnvironmentId?: string,
     ) => Effect.Effect<
       { remotePort: number | undefined; serverKind: string },
       SshManagedRuntimeError
     >;
-    readonly stop: (key: string) => Effect.Effect<void, SshManagedRuntimeError>;
+    readonly status: (
+      key: string,
+    ) => Effect.Effect<import("@t3tools/contracts").DesktopSshServerStatus, SshManagedRuntimeError>;
+    readonly stop: (
+      key: string,
+      expectedEnvironmentId?: string,
+    ) => Effect.Effect<void, SshManagedRuntimeError>;
     readonly pair: (
       key: string,
       version: string,
@@ -81,11 +88,13 @@ export const layer = Layer.sync(SshManagedRuntime, () =>
         await verifyBundledResourceMonitor(root, platform, architecture);
       });
     }),
-    start: (key, version, resume) =>
+    start: (key, version, resume, expectedEnvironmentId) =>
       Effect.flatMap(HostProcess.Platform, (platform) =>
-        operation(() => startManagedSsh(key, version, platform, resume)),
+        operation(() => startManagedSsh(key, version, platform, resume, expectedEnvironmentId)),
       ),
-    stop: (key) => operation(() => stopManagedSsh(key)),
+    status: (key) => operation(() => statusManagedSsh(key)),
+    stop: (key, expectedEnvironmentId) =>
+      operation(() => stopManagedSsh(key, expectedEnvironmentId)),
     pair: (key, version) => operation(() => pairManagedSsh(key, version)),
     supervise: (key, version) =>
       Effect.flatMap(HostProcess.Platform, (platform) =>
@@ -301,13 +310,65 @@ export async function pairManagedSsh(key: string, version: string) {
   }
 }
 
-export async function stopManagedSsh(key: string) {
+/** A status check neither creates state nor launches a process. Only the supervisor attests live ownership. */
+export async function statusManagedSsh(
+  key: string,
+): Promise<import("@t3tools/contracts").DesktopSshServerStatus> {
+  const checkedAt = new Date().toISOString();
+  const record = await readRecord(key);
+  const stopped = await NodeFSP.stat(`${recordPath(key)}.stopped`).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    },
+  );
+  if (record === null) {
+    const environmentId = stopped
+      ? await persistedEnvironmentId().catch(() => undefined)
+      : undefined;
+    return {
+      state: stopped ? "stopped" : "unknown",
+      checkedAt,
+      ...(environmentId ? { environmentId } : {}),
+    };
+  }
+  try {
+    const health = await control(record, "health");
+    if (!health.environmentId) return { state: "unknown", checkedAt };
+    return { state: "running", checkedAt, environmentId: health.environmentId };
+  } catch {
+    // A disconnected socket or an unverified record cannot confirm tree shutdown.
+    return { state: "unknown", checkedAt };
+  }
+}
+
+const persistedEnvironmentId = () =>
+  NodeFSP.readFile(
+    NodePath.join(NodeOS.homedir(), ".t3-imaorise", "userdata", "environment-id"),
+    "utf8",
+  ).then((id) => id.trim());
+const assertEnvironmentId = (actual: string | undefined, expected: string | undefined) => {
+  if (expected !== undefined && actual !== expected)
+    throw new Error(
+      "Remote environment identity changed or could not be verified. No server lifecycle change was performed. Repair the connection explicitly.",
+    );
+};
+
+export async function stopManagedSsh(key: string, expectedEnvironmentId?: string) {
   const release = await acquireManagedLock(recordPath(key));
   try {
     const record = await readRecord(key);
-    if (record === null)
+    if (record === null) {
+      const status = await statusManagedSsh(key);
+      if (status.state === "stopped") {
+        assertEnvironmentId(status.environmentId, expectedEnvironmentId);
+        return;
+      }
       throw new Error("No verified T3-managed server exists for this connection.");
-    await control(record, "health");
+    }
+    const health = await control(record, "health");
+    assertEnvironmentId(health.environmentId, expectedEnvironmentId);
     await NodeFSP.writeFile(`${recordPath(key)}.stopped`, "explicit stop\n", { mode: 0o600 });
     await control(record, "stop");
   } finally {
@@ -362,27 +423,35 @@ export async function startManagedSsh(
   version: string,
   platform: NodeJS.Platform,
   resume = false,
+  expectedEnvironmentId?: string,
 ) {
   const file = recordPath(key);
   const release = await acquireManagedLock(file);
   try {
-    if (resume) await NodeFSP.rm(`${file}.stopped`, { force: true });
-    else if (
-      await NodeFSP.stat(`${file}.stopped`).then(
+    if (
+      !resume &&
+      (await NodeFSP.stat(`${file}.stopped`).then(
         () => true,
         (error: NodeJS.ErrnoException) => {
           if (error.code === "ENOENT") return false;
           throw error;
         },
-      )
+      ))
     )
       throw new Error(
-        "Remote server was explicitly stopped. Switch this connection on to start it again.",
+        "Remote server was explicitly stopped. Choose Start remote server to resume it.",
+      );
+    if (expectedEnvironmentId !== undefined)
+      assertEnvironmentId(
+        await persistedEnvironmentId().catch(() => undefined),
+        expectedEnvironmentId,
       );
     const existing = await readRecord(key);
     if (existing !== null) {
       try {
         const health = await compatibleServer(existing, version);
+        assertEnvironmentId(health.environmentId, expectedEnvironmentId);
+        if (resume) await NodeFSP.rm(`${file}.stopped`, { force: true });
         return {
           remotePort: health.remotePort,
           serverKind: "managed",
@@ -489,12 +558,15 @@ export async function startManagedSsh(
       const current = await readRecord(key);
       if (current !== null) {
         const health = await control(current, "health").catch(() => null);
-        if (health?.remotePort)
+        if (health?.remotePort) {
+          assertEnvironmentId(health.environmentId, expectedEnvironmentId);
+          if (resume) await NodeFSP.rm(`${file}.stopped`, { force: true });
           return {
             remotePort: health.remotePort,
             serverKind: "managed",
             setupWarnings: await providerSetupWarnings(platform),
           };
+        }
       }
       await new Promise((resolve) => setTimeout(resolve, 200));
     }

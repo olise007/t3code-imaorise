@@ -41,14 +41,16 @@ export const verifyPackagedSshConnection = (input: {
     const stages: string[] = [];
     return yield* Effect.gen(function* () {
       const ssh = yield* SshEnvironmentManager;
-      const first = yield* ssh.ensureEnvironment(input.target, {
+      let first = yield* ssh.ensureEnvironment(input.target, {
         purpose: "setup",
-        // Both Windows shell cases use the same disposable account. The prior
-        // case explicitly stopped its server; only this owned fixture resumes it.
-        resumeStoppedServer: true,
         issuePairingToken: true,
         ...(input.authSecret === undefined ? {} : { authSecret: input.authSecret }),
       });
+      if (first.serverState === "stopped")
+        first = yield* ssh.ensureEnvironment(input.target, {
+          resumeStoppedServer: true,
+          issuePairingToken: true,
+        });
       yield* Effect.addFinalizer(() => ssh.stopEnvironment(input.target).pipe(Effect.ignore));
       const descriptor = yield* fetchRemoteEnvironmentDescriptor({
         httpBaseUrl: first.httpBaseUrl,
@@ -123,11 +125,34 @@ export const verifyPackagedSshConnection = (input: {
       if (stages.filter((stage) => stage.includes("Inspecting remote prerequisites")).length > 1)
         return yield* Effect.die("Reconnect repeated prerequisite inspection.");
       yield* ssh.stopEnvironment(input.target);
-      const stopped = yield* ssh
-        .ensureEnvironment(input.target, { purpose: "reconnect", issuePairingToken: true })
-        .pipe(Effect.result);
-      if (stopped._tag !== "Failure")
+      if ((yield* ssh.serverStatus!(input.target)).state !== "stopped")
+        return yield* Effect.die("Owned-tree shutdown was not confirmed.");
+      const stopped = yield* ssh.ensureEnvironment(input.target, {
+        purpose: "reconnect",
+        issuePairingToken: true,
+      });
+      if (stopped.serverState !== "stopped")
         return yield* Effect.die("Pairing restarted an explicitly stopped server.");
+      yield* ssh.stopEnvironment(input.target);
+      const resumed = yield* ssh.ensureEnvironment(input.target, {
+        resumeStoppedServer: true,
+        issuePairingToken: true,
+      });
+      if (resumed.serverState || (yield* ssh.serverStatus!(input.target)).state !== "running")
+        return yield* Effect.die("Explicit Start did not resume the server.");
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const lease = yield* driver.connect(
+            { target, profile: Option.none(), enabled: true },
+            () => Effect.void,
+          );
+          yield* lease.session.probe;
+          yield* lease.session.initialConfig;
+        }),
+      );
+      yield* ssh.stopEnvironment(input.target);
+      if ((yield* ssh.serverStatus!(input.target)).state !== "stopped")
+        return yield* Effect.die("Second owned-tree stop failed.");
       yield* Effect.logInfo(
         "Passed packaged SSH setup return, application synchronization, socket/tunnel reconnect and explicit stop.",
       );

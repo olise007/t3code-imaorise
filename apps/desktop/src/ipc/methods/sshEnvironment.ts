@@ -11,6 +11,7 @@ import {
   DesktopDiscoveredSshHostSchema,
   DesktopSshBearerBootstrapInputSchema,
   DesktopSshBearerRequestInputSchema,
+  DesktopSshServerStatusSchema,
   DesktopSshEnvironmentEnsureInputSchema,
   DesktopSshEnvironmentEnsureResultSchema,
   DesktopSshEnvironmentTargetSchema,
@@ -33,6 +34,7 @@ import { SshHttpBridgeError } from "@t3tools/ssh/errors";
 import { resolveLoopbackSshHttpBaseUrl } from "@t3tools/ssh/tunnel";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Schema from "effect/Schema";
 
 import * as IpcChannels from "../channels.ts";
@@ -147,13 +149,39 @@ export const discoverSshConnections = DesktopIpc.makeIpcMethod({
   handler: (loadDistro) => discoverConnections(loadDistro),
 });
 
+export const sshServerStatus = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SSH_SERVER_STATUS_CHANNEL,
+  payload: DesktopSshEnvironmentTargetSchema,
+  result: DesktopSshServerStatusSchema,
+  handler: (target) =>
+    Effect.flatMap(
+      DesktopSshEnvironment.DesktopSshEnvironment,
+      (service) =>
+        service.serverStatus?.(target) ??
+        Effect.map(Clock.currentTimeMillis, (now) => ({
+          state: "unknown" as const,
+          checkedAt: new Date(now).toISOString(),
+        })),
+    ),
+});
 export const stopSshEnvironment = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.STOP_SSH_ENVIRONMENT_CHANNEL,
-  payload: DesktopSshEnvironmentTargetSchema,
+  payload: Schema.Union([
+    DesktopSshEnvironmentTargetSchema,
+    Schema.Struct({
+      target: DesktopSshEnvironmentTargetSchema,
+      options: Schema.Struct({
+        expectedEnvironmentId: Schema.optionalKey(Schema.NonEmptyString),
+        operationId: Schema.optionalKey(Schema.NonEmptyString),
+      }),
+    }),
+  ]),
   result: Schema.Void,
-  handler: (target) =>
+  handler: (input) =>
     Effect.flatMap(DesktopSshEnvironment.DesktopSshEnvironment, (service) =>
-      service.stopEnvironment(target),
+      "target" in input
+        ? service.stopEnvironment(input.target, input.options)
+        : service.stopEnvironment(input),
     ),
 });
 export const cancelSshSetup = DesktopIpc.makeIpcMethod({

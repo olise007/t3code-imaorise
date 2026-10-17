@@ -61,6 +61,7 @@ export const RESOLVE_SSH_HOST_CHANNEL = "desktop:resolve-ssh-host";
 export const ENSURE_SSH_ENVIRONMENT_CHANNEL = "desktop:ensure-ssh-environment";
 export const DISCONNECT_SSH_ENVIRONMENT_CHANNEL = "desktop:disconnect-ssh-environment";
 export const DISCOVER_SSH_CONNECTIONS_CHANNEL = "desktop:discover-ssh-connections";
+export const SSH_SERVER_STATUS_CHANNEL = "desktop:ssh-server-status";
 export const STOP_SSH_ENVIRONMENT_CHANNEL = "desktop:stop-ssh-environment";
 export const SSH_CONNECTION_PROGRESS_CHANNEL = "desktop:ssh-connection-progress";
 export const FETCH_SSH_ENVIRONMENT_DESCRIPTOR_CHANNEL = "desktop:fetch-ssh-environment-descriptor";

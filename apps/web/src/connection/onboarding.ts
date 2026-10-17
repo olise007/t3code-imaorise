@@ -16,11 +16,10 @@ import * as Deferred from "effect/Deferred";
 import { sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
 
 import { connectionAtomRuntime } from "./runtime";
-import { createSshSetupOperations } from "./sshSetupOperations";
+import { sshSetupOperations as operations } from "./sshSetupOperations";
 import { sshSetupProgress, sshSetupTargetKey } from "./sshSetupProgress";
 
 const onboardingScheduler = createAtomCommandScheduler();
-const operations = createSshSetupOperations(sshSetupProgress.forgetEnvironment);
 const isConnectionTransientError = Schema.is(ConnectionTransientError);
 export const cancelSshEnvironmentSetup = operations.cancel;
 export const withSshEnvironmentRemoval = operations.remove;

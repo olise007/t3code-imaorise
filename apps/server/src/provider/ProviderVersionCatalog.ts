@@ -15,6 +15,9 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Cache from "effect/Cache";
+import * as Exit from "effect/Exit";
+import * as Duration from "effect/Duration";
 import { HttpClient, HttpClientRequest } from "effect/http";
 import * as ModelManifest from "./ModelManifest.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
@@ -73,6 +76,46 @@ const npmNames: Readonly<Record<string, { linux: string; windows: string }>> = {
 };
 const versionPattern = /^\d+\.\d+\.\d+(?:-[\w.-]+)?$/;
 
+class CatalogFetchError extends Schema.TaggedError<CatalogFetchError>()("CatalogFetchError", {
+  source: Schema.String,
+  category: Schema.Literals([
+    "size",
+    "rate-limit",
+    "http",
+    "timeout",
+    "network",
+    "tls",
+    "metadata",
+  ]),
+  status: Schema.optionalKey(Schema.Number),
+  cause: Schema.optionalKey(Schema.Defect()),
+}) {
+  override get message() {
+    const reasons = {
+      size: "response exceeded the 16 MiB limit",
+      "rate-limit": "request rate limit reached; wait before retrying",
+      http: `request failed with HTTP ${this.status ?? "unknown"}`,
+      timeout: "request timed out",
+      network: "network request failed; check connectivity from the selected environment",
+      tls: "TLS verification failed; check the selected environment's certificate trust",
+      metadata: "returned invalid version metadata",
+    };
+    return `${this.source}: ${reasons[this.category]}.`;
+  }
+}
+const catalogTransportCategory = (cause: unknown): "network" | "tls" => {
+  for (let depth = 0; depth < 4 && cause && typeof cause === "object"; depth++) {
+    if (
+      "code" in cause &&
+      typeof cause.code === "string" &&
+      /CERT|TLS|UNABLE_TO_VERIFY|SELF_SIGNED/.test(cause.code)
+    )
+      return "tls";
+    cause = "cause" in cause ? cause.cause : "reason" in cause ? cause.reason : undefined;
+  }
+  return "network";
+};
+
 /** Official catalogs only; missing integrity or a changed layout never falls back to a bundled release. */
 export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make")(function* () {
   const http = yield* HttpClient.HttpClient;
@@ -87,34 +130,92 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
       reason:
         "Could not read the official version catalog. Check the environment's connection or try again later.",
     });
-  const get = <S extends Schema.Top>(url: string, schema: S, accept = "application/json") =>
-    http
-      .execute(
-        HttpClientRequest.get(url).pipe(
-          HttpClientRequest.setHeader("Accept", accept),
-          HttpClientRequest.setHeader("User-Agent", "T3-Code-Imaorise"),
-        ),
-      )
-      .pipe(
-        Effect.flatMap((response) =>
-          Effect.gen(function* () {
-            let bytes = 0;
-            const text = yield* response.stream.pipe(
-              Stream.mapEffect((chunk) => {
-                bytes += chunk.length;
-                return bytes <= 16 * 1024 * 1024
-                  ? Effect.succeed(chunk)
-                  : Effect.fail("The official catalog exceeds the supported response limit.");
-              }),
-              Stream.decodeText(),
-              Stream.mkString,
-            );
-            return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text);
+  const responses = yield* Cache.makeWith(
+    (key: string) => {
+      const [url, accept] = key.split("\n");
+      const source = new URL(url!).hostname;
+      return http
+        .execute(
+          HttpClientRequest.get(url!).pipe(
+            HttpClientRequest.setHeader("Accept", accept!),
+            HttpClientRequest.setHeader("User-Agent", "T3-Code-Imaorise"),
+          ),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new CatalogFetchError({ source, category: catalogTransportCategory(cause), cause }),
+          ),
+          Effect.flatMap((response) =>
+            Effect.gen(function* () {
+              if (response.status < 200 || response.status >= 300)
+                return yield* new CatalogFetchError({
+                  source,
+                  status: response.status,
+                  category:
+                    response.status === 429 ||
+                    (response.status === 403 && response.headers["x-ratelimit-remaining"] === "0")
+                      ? "rate-limit"
+                      : "http",
+                });
+              let bytes = 0;
+              return yield* response.stream.pipe(
+                Stream.mapError(
+                  (cause) =>
+                    new CatalogFetchError({
+                      source,
+                      category: catalogTransportCategory(cause),
+                      cause,
+                    }),
+                ),
+                Stream.mapEffect((chunk) => {
+                  bytes += chunk.length;
+                  return bytes <= 16 * 1024 * 1024
+                    ? Effect.succeed(chunk)
+                    : Effect.fail(new CatalogFetchError({ source, category: "size" }));
+                }),
+                Stream.decodeText(),
+                Stream.mkString,
+              );
+            }),
+          ),
+          Effect.scoped,
+          Effect.timeout("30 seconds"),
+          Effect.catchTags({
+            TimeoutError: (cause) =>
+              Effect.fail(new CatalogFetchError({ source, category: "timeout", cause })),
           }),
+        );
+    },
+    {
+      capacity: 8,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.seconds(30) : Duration.zero),
+    },
+  );
+  const get = <S extends Schema.Top>(url: string, schema: S, accept = "application/json") => {
+    const key = `${url}\n${accept}`;
+    return Cache.get(responses, key).pipe(
+      Effect.flatMap((text) =>
+        Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CatalogFetchError({ source: new URL(url).hostname, category: "metadata", cause }),
+          ),
         ),
-        Effect.scoped,
-        Effect.timeout("30 seconds"),
-      );
+      ),
+      Effect.tapError(() => Cache.invalidate(responses, key)),
+    );
+  };
+  const publicError = (provider: ProviderDriverKind, cause: unknown) =>
+    cause instanceof CatalogFetchError
+      ? new ServerProviderUpdateError({
+          provider,
+          reason: `Could not load versions from ${cause.message}`,
+          cause,
+        })
+      : cause instanceof ServerProviderUpdateError
+        ? cause
+        : error(provider);
   const classify = Effect.fn("ProviderVersionCatalog.classify")(function* (
     provider: ProviderDriverKind,
     version: string,
@@ -215,10 +316,15 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
     if (!externalPackage && (provider === "codex" || provider === "pi")) {
       const repository = provider === "codex" ? "openai/codex" : "earendil-works/pi";
       const base = `https://api.github.com/repos/${repository}/releases`;
-      const entries = yield* get(
-        `${base}?per_page=50&page=${input.page}`,
-        Schema.Array(GithubRelease),
-      );
+      const entries: Github[] = [];
+      for (let batch = 0; batch < 5; batch++) {
+        const page = yield* get(
+          `${base}?per_page=10&page=${(input.page - 1) * 5 + batch + 1}`,
+          Schema.Array(GithubRelease),
+        );
+        entries.push(...page);
+        if (page.length < 10) break;
+      }
       const latest = yield* get(`${base}/latest`, GithubRelease).pipe(
         Effect.map((release) => release.tag_name),
         Effect.orElseSucceed(() => null),
@@ -241,7 +347,7 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
       const metadata = yield* get(
         `https://registry.npmjs.org/${name.replace("/", "%2f")}`,
         NpmCatalog,
-        "application/json",
+        "application/vnd.npm.install-v1+json",
       );
       const versions = Object.keys(metadata.versions)
         .filter(
@@ -386,7 +492,7 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
         const found = data.releases.find((entry) => entry.release.version === version);
         if (!found) return yield* error(provider);
         return found;
-      }).pipe(Effect.mapError(() => error(provider))),
+      }).pipe(Effect.mapError((cause) => publicError(provider, cause))),
     page: (input: ProviderVersionCatalogInput, externalPackage?: string) =>
       Effect.gen(function* () {
         const data = yield* load(input, externalPackage);
@@ -406,6 +512,6 @@ export const makeProviderVersionCatalog = Effect.fn("ProviderVersionCatalog.make
             .map((provider) => provider.displayName || provider.instanceId),
           message: data.message,
         } satisfies Catalog;
-      }).pipe(Effect.mapError(() => error(input.provider))),
+      }).pipe(Effect.mapError((cause) => publicError(input.provider, cause))),
   };
 });

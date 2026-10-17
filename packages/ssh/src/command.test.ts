@@ -416,6 +416,41 @@ describe("ssh command", () => {
     }).pipe(Effect.provide(layerProcess));
   });
 
+  it.effect("does not let a harmless host-key warning hide a substantive stdout failure", () => {
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed(
+        makeFailedProcess({
+          stdout: "Pairing token creation failed\n",
+          stderr: "Warning: Permanently added '192.0.2.1' (ED25519) to the list of known hosts.\n",
+        }),
+      ),
+    );
+    const layerSpawner = Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner);
+    const layerProcess = Layer.mergeAll(NodeServices.layer, layerSpawner);
+
+    return Effect.gen(function* () {
+      const result = yield* Effect.result(
+        runSshCommand(
+          {
+            alias: "devbox",
+            hostname: "devbox.example.com",
+            username: "julius",
+            port: 2222,
+          },
+          { remoteCommandArgs: ["sh", "-s"] },
+        ),
+      );
+
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.instanceOf(result.failure, SshCommandError);
+        assert.equal(result.failure.message, "Pairing token creation failed");
+        assert.equal(result.failure.stdout, "Pairing token creation failed\n");
+        assert.include(result.failure.stderr, "Permanently added");
+      }
+    }).pipe(Effect.provide(layerProcess));
+  });
+
   it.effect("redacts credentials from stdout in non-zero command failures", () => {
     const spawner = ChildProcessSpawner.make(() =>
       Effect.succeed(makeFailedProcess({ stdout: '{"credential":"pairing-secret"}\n' })),
