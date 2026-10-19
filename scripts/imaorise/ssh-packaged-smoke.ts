@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalConsole:off - Hosted process fixture uses Node subprocess APIs and reports sanitized evidence.
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalConsole:off globalTimers:off - Hosted process fixture uses Node subprocess APIs, readiness deadlines, and sanitized evidence.
 // Disposable hosted-runner acceptance of the actual bundled executable.
 import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
@@ -9,6 +9,7 @@ import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
 import * as Effect from "effect/Effect";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { verifyTerminalIsolation } from "./ssh-terminal-lifecycle.ts";
 import { verifyPackagedPtyHelper } from "./packaged-pty-helper.ts";
 import { sanitizeSetupOutput } from "../../packages/shared/src/setupDetails.ts";
@@ -107,7 +108,7 @@ const startStandalone = async () => {
 const stopStandalone = async () => {
   if (!server?.pid || server.exitCode !== null || server.signalCode !== null) return;
   const exited = new Promise<void>((resolve) => server!.once("exit", () => resolve()));
-  if (process.platform === "win32")
+  if (HostProcess.Platform.defaultValue() === "win32")
     await exec("taskkill.exe", ["/pid", String(server.pid), "/t", "/f"], {
       timeout: 10_000,
       maxBuffer: 4096,
