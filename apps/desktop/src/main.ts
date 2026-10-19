@@ -15,13 +15,12 @@ import * as NodeOS from "node:os";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
-import { SshRuntimeRequirements } from "@t3tools/contracts";
 
 import * as Electron from "electron";
 
 import * as NetService from "@t3tools/shared/Net";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { OFFICIAL_SSH_SERVER_VERSION } from "@t3tools/shared/cliRelease";
 import type { RemoteT3RunnerOptions } from "@t3tools/ssh/tunnel";
 import serverPackageJson from "../../server/package.json" with { type: "json" };
 
@@ -108,9 +107,7 @@ const layerDesktopEnvironment = Layer.unwrap(
   }),
 );
 
-// The remote runs the exact release this app is on, from its self-contained
-// archive, so it needs neither Node nor npm. Development points the remote at
-// a source checkout instead so the two sides can be iterated together.
+// Personal desktop versions are independent from the official remote server release.
 const resolveDesktopSshCliRunner = (
   environment: DesktopEnvironment.DesktopEnvironment["Service"],
 ): RemoteT3RunnerOptions => {
@@ -121,54 +118,14 @@ const resolveDesktopSshCliRunner = (
       nodeEngineRange: serverPackageJson.engines.node,
     };
   }
-  if (environment.platform === "win32") {
-    const archive = (name: string) => {
-      const archivePath = environment.path.join(environment.resourcesPath, name);
-      let sha256 = "";
-      let requirements: SshRuntimeRequirements | undefined;
-      try {
-        sha256 = NodeFS.readFileSync(`${archivePath}.sha256`, "utf8").trim().split(/\s+/)[0] ?? "";
-        requirements = Schema.decodeUnknownSync(Schema.fromJsonString(SshRuntimeRequirements))(
-          NodeFS.readFileSync(`${archivePath}.requirements.json`, "utf8"),
-        );
-        if (
-          requirements.runtimeVersion !== environment.appVersion ||
-          requirements.platform !== (name.endsWith(".zip") ? "windows" : "linux")
-        )
-          sha256 = "";
-      } catch {
-        sha256 = "";
-        /* Setup reports missing artifacts without preventing desktop startup. */
-      }
-      return { path: archivePath, sha256, ...(requirements === undefined ? {} : { requirements }) };
-    };
-    return {
-      bundles: {
-        version: environment.appVersion,
-        linux: archive("wsl-runtime.tar.gz"),
-        windows: archive("ssh-windows-runtime.zip"),
-      },
-    };
-  }
-  return { archiveVersion: environment.appVersion };
+  return { archiveVersion: OFFICIAL_SSH_SERVER_VERSION };
 };
 
 const layerDesktopSshEnvironment = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
-    const electronWindow = yield* ElectronWindow.ElectronWindow;
     return DesktopSshEnvironment.layer({
       resolveCliRunner: Effect.succeed(resolveDesktopSshCliRunner(environment)),
-      onProgress: (target, stage, correlation) =>
-        Effect.gen(function* () {
-          const window = yield* electronWindow.main;
-          if (Option.isSome(window) && !window.value.isDestroyed())
-            window.value.webContents.send("desktop:ssh-connection-progress", {
-              target,
-              stage,
-              ...correlation,
-            });
-        }).pipe(Effect.ignoreCause),
     });
   }),
 );

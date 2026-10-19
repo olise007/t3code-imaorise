@@ -1,4 +1,7 @@
+import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import type { DesktopSshPasswordPromptRequest } from "@t3tools/contracts";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
+import * as Cause from "effect/Cause";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { Button } from "../ui/button";
@@ -46,15 +49,6 @@ export function SshPasswordPromptDialog() {
   if (!currentRequest) {
     return null;
   }
-
-  if (currentRequest.purpose === "setup-review" && currentRequest.setupReview)
-    return (
-      <SshSetupReviewDialog
-        key={currentRequest.requestId}
-        request={currentRequest}
-        onRemove={() => setQueue((queue) => queue.slice(1))}
-      />
-    );
 
   return (
     <ActiveSshPasswordPrompt
@@ -127,19 +121,16 @@ function ActiveSshPasswordPrompt({
     isRespondingRef.current = true;
     setIsResponding(true);
     setResponseError(null);
-    try {
-      await window.desktopBridge?.resolveSshPasswordPrompt(requestId, nextPassword);
+    const result = await settlePromise(async () =>
+      window.desktopBridge?.resolveSshPasswordPrompt(requestId, nextPassword),
+    );
+    if (AsyncResult.isSuccess(result) || nextPassword === null) {
       onRemove(requestId);
-    } catch (error) {
-      if (nextPassword === null) {
-        onRemove(requestId);
-      } else {
-        setResponseError(getPromptErrorMessage(error));
-      }
-    } finally {
-      isRespondingRef.current = false;
-      setIsResponding(false);
+    } else {
+      setResponseError(getPromptErrorMessage(Cause.squash(result.cause)));
     }
+    isRespondingRef.current = false;
+    setIsResponding(false);
   };
 
   const dismissExpiredPrompt = () => {
@@ -167,31 +158,10 @@ function ActiveSshPasswordPrompt({
     >
       <DialogPopup className="max-w-md" showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle>
-            {request.prompt.startsWith("Verify SSH host key")
-              ? "Verify SSH host key"
-              : request.purpose === "elevation"
-                ? "Remote package installation: sudo"
-                : "SSH authentication required"}
-          </DialogTitle>
+          <DialogTitle>SSH Password Required</DialogTitle>
           <DialogDescription>
-            {request.prompt.startsWith("Verify SSH host key") ? (
-              <>
-                Check the fingerprint for <code>{target}</code> before trusting this host.
-              </>
-            ) : request.purpose === "elevation" ? (
-              <>
-                Enter the remote sudo password for the packages you approved. This credential is
-                separate from SSH authentication and is never saved.
-              </>
-            ) : (
-              <>
-                Enter the{" "}
-                {request.challenge === "key-passphrase" ? "private key passphrase" : "SSH password"}{" "}
-                for <code>{target}</code>. It is passed to the selected SSH client and is not saved
-                by T3 Code.
-              </>
-            )}
+            T3 needs your SSH password to connect to <code>{target}</code>. The password is passed
+            to the local SSH process for this connection attempt and is not saved by T3 Code.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel scrollFade={false}>
@@ -223,7 +193,7 @@ function ActiveSshPasswordPrompt({
                 autoComplete="current-password"
                 disabled={isResponding || isExpired}
                 name="ssh-password"
-                type={request.prompt.startsWith("Verify SSH host key") ? "text" : "password"}
+                type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
               />
@@ -232,9 +202,7 @@ function ActiveSshPasswordPrompt({
               <p className="text-sm text-destructive">{visibleResponseError}</p>
             ) : (
               <p className="text-sm text-muted-foreground">
-                {request.purpose === "elevation"
-                  ? "Cancelling leaves completed package installations in place."
-                  : "Use SSH keys to avoid repeated password prompts on new SSH sessions."}
+                Use SSH keys to avoid repeated password prompts on new SSH sessions.
               </p>
             )}
           </form>
@@ -245,121 +213,6 @@ function ActiveSshPasswordPrompt({
           </Button>
           <Button disabled={isResponding || isExpired} form={formId} type="submit">
             Continue
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
-  );
-}
-
-function SshSetupReviewDialog({
-  request,
-  onRemove,
-}: {
-  request: DesktopSshPasswordPromptRequest;
-  onRemove: () => void;
-}) {
-  const review = request.setupReview!;
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [expired, setExpired] = useState(false);
-  useEffect(() => {
-    const timer = window.setTimeout(
-      () => setExpired(true),
-      Math.max(0, Date.parse(request.expiresAt) - Date.now()),
-    );
-    return () => window.clearTimeout(timer);
-  }, [request.expiresAt]);
-  const respond = async (approved: boolean) => {
-    if (pending) return;
-    setPending(true);
-    try {
-      await window.desktopBridge?.resolveSshSetupReview?.(
-        request.requestId,
-        approved ? { reviewId: review.reviewId, approved: true, providers: [] } : null,
-      );
-      onRemove();
-    } catch {
-      setError("This review expired or setup was cancelled. Start a new connection attempt.");
-    } finally {
-      setPending(false);
-    }
-  };
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) void respond(false);
-      }}
-    >
-      <DialogPopup className="max-w-2xl" showCloseButton={false}>
-        <DialogHeader>
-          <DialogTitle>Review remote setup</DialogTitle>
-          <DialogDescription>
-            Approve requirements for {review.destination}. Provider account sign-in happens
-            separately after connection.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel scrollFade={false}>
-          <div className="space-y-4 text-sm">
-            <p>
-              {review.platform} · {review.architecture} · {review.distribution} ·{" "}
-              {review.packageManager}
-              <br />
-              Elevation: {review.elevation}. Runtime {review.requirements.runtimeVersion}, Node{" "}
-              {review.requirements.nodeVersion}.
-            </p>
-            <details>
-              <summary>SSH source and remote identity</summary>
-              <p className="break-all">
-                {review.source}
-                <br />
-                {review.remoteIdentity}
-              </p>
-            </details>
-            <ul className="space-y-1">
-              {review.items.map((item) => (
-                <li key={item.id}>
-                  {item.installed ? "✓" : "Missing:"} {item.label}
-                  {!item.installed ? ` — ${item.guidance}` : ""}
-                </li>
-              ))}
-            </ul>
-            <div>
-              <p>Approved system commands use the remote OS repositories:</p>
-              <pre className="overflow-x-auto whitespace-pre-wrap">
-                {review.commands.join("\n") || "No system package changes required."}
-              </pre>
-            </div>
-            <p>
-              Agent CLI installation and sign-in are separate. Connect first, then choose Set up
-              agents in Connections.
-            </p>
-            {review.blockers.map((blocker) => (
-              <p key={blocker} className="text-destructive">
-                {blocker}
-              </p>
-            ))}
-            <p>
-              Cancellation stops setup and removes owned staging. Completed package installations
-              remain. T3 will not change the OS, firewall, SSH server, or restart this machine.
-            </p>
-            {error || expired ? (
-              <p className="text-destructive">
-                {error ?? "This review expired. Start a new connection attempt."}
-              </p>
-            ) : null}
-          </div>
-        </DialogPanel>
-        <DialogFooter>
-          <Button variant="outline" disabled={pending} onClick={() => void respond(false)}>
-            Cancel
-          </Button>
-          <Button
-            disabled={pending || expired || review.blockers.length > 0}
-            onClick={() => void respond(true)}
-          >
-            Approve and continue
           </Button>
         </DialogFooter>
       </DialogPopup>

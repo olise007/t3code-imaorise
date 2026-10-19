@@ -176,20 +176,7 @@ export const make = Effect.gen(function* () {
       entry,
       (route) => checkRoute(entry, route),
       Effect.fnUntraced(function* (route) {
-        const preparation = resolver.prepare(routeEntry(entry, route));
-        const prepared = yield* route.target._tag === "SshConnectionTarget"
-          ? preparation.pipe(
-              Effect.timeout("60 seconds"),
-              Effect.mapError((error) =>
-                error._tag === "TimeoutError"
-                  ? new ConnectionTransientError({
-                      reason: "timeout",
-                      detail: `${entry.target.label}: SSH preparation timed out. Review authentication or repair the connection.`,
-                    })
-                  : error,
-              ),
-            )
-          : preparation;
+        const prepared = yield* resolver.prepare(routeEntry(entry, route));
         yield* reportProgress({ stage: "opening", prepared });
         const session = yield* Effect.gen(function* () {
           const session = yield* sessions.connect(prepared);

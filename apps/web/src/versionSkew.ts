@@ -1,3 +1,4 @@
+import { OFFICIAL_SSH_SERVER_VERSION } from "@t3tools/shared/cliRelease";
 import type {
   EnvironmentId,
   ServerConfig,
@@ -67,6 +68,13 @@ export function resolveVersionMismatch(
   if (!normalizedClientVersion || !normalizedServerVersion) {
     return null;
   }
+
+  // These release trains have independent numbers; wire compatibility is checked at connection.
+  if (
+    normalizedServerVersion === OFFICIAL_SSH_SERVER_VERSION &&
+    /^2\.0\.1-beta\./u.test(normalizedClientVersion)
+  )
+    return null;
 
   const clientCore = versionCore(normalizedClientVersion);
   const serverCore = versionCore(normalizedServerVersion);

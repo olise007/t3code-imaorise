@@ -11,12 +11,9 @@ import {
   DesktopDiscoveredSshHostSchema,
   DesktopSshBearerBootstrapInputSchema,
   DesktopSshBearerRequestInputSchema,
-  DesktopSshServerStatusSchema,
   DesktopSshEnvironmentEnsureInputSchema,
   DesktopSshEnvironmentEnsureResultSchema,
   DesktopSshEnvironmentTargetSchema,
-  DesktopSshExecutionSourceSchema,
-  DesktopSshDiscoveryReportSchema,
   DesktopSshHttpBaseUrlInputSchema,
   DesktopSshPasswordPromptCancelledType,
   DesktopSshPasswordPromptResolutionInputSchema,
@@ -28,20 +25,17 @@ import {
   AuthAccessTokenResult,
   AuthSessionState,
   AuthWebSocketTicketResult,
-  SshSetupApproval,
 } from "@t3tools/contracts";
 import { SshHttpBridgeError } from "@t3tools/ssh/errors";
 import { resolveLoopbackSshHttpBaseUrl } from "@t3tools/ssh/tunnel";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import * as DesktopSshEnvironment from "../../ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "../../ssh/DesktopSshPasswordPrompts.ts";
-import { discoverConnections } from "../../ssh/DesktopSshDiscovery.ts";
 
 type DesktopSshEnvironmentRequestOperation =
   | "fetch-environment-descriptor"
@@ -125,91 +119,12 @@ export const discoverSshHosts = DesktopIpc.makeIpcMethod({
 
 export const resolveSshHost = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.RESOLVE_SSH_HOST_CHANNEL,
-  payload: Schema.Union([
-    Schema.String,
-    Schema.Struct({
-      alias: Schema.String,
-      executionSource: Schema.optional(DesktopSshExecutionSourceSchema),
-    }),
-  ]),
+  payload: Schema.String,
   result: DesktopSshEnvironmentTargetSchema,
   handler: Effect.fn("desktop.ipc.sshEnvironment.resolveHost")(function* (alias) {
     const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
-    return yield* sshEnvironment.resolveHost(
-      typeof alias === "string" ? alias : alias.alias,
-      typeof alias === "string" ? { type: "local" } : (alias.executionSource ?? { type: "local" }),
-    );
+    return yield* sshEnvironment.resolveHost(alias);
   }),
-});
-
-export const discoverSshConnections = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.DISCOVER_SSH_CONNECTIONS_CHANNEL,
-  payload: Schema.optional(Schema.String),
-  result: DesktopSshDiscoveryReportSchema,
-  handler: (loadDistro) => discoverConnections(loadDistro),
-});
-
-export const sshServerStatus = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.SSH_SERVER_STATUS_CHANNEL,
-  payload: DesktopSshEnvironmentTargetSchema,
-  result: DesktopSshServerStatusSchema,
-  handler: (target) =>
-    Effect.flatMap(
-      DesktopSshEnvironment.DesktopSshEnvironment,
-      (service) =>
-        service.serverStatus?.(target) ??
-        Effect.map(DateTime.now, (now) => ({
-          state: "unknown" as const,
-          checkedAt: DateTime.formatIso(now),
-        })),
-    ),
-});
-export const stopSshEnvironment = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.STOP_SSH_ENVIRONMENT_CHANNEL,
-  payload: Schema.Union([
-    DesktopSshEnvironmentTargetSchema,
-    Schema.Struct({
-      target: DesktopSshEnvironmentTargetSchema,
-      options: Schema.Struct({
-        expectedEnvironmentId: Schema.optionalKey(Schema.NonEmptyString),
-        operationId: Schema.optionalKey(Schema.NonEmptyString),
-      }),
-    }),
-  ]),
-  result: Schema.Void,
-  handler: (input) =>
-    Effect.flatMap(DesktopSshEnvironment.DesktopSshEnvironment, (service) =>
-      "target" in input
-        ? service.stopEnvironment(input.target, input.options)
-        : service.stopEnvironment(input),
-    ),
-});
-export const cancelSshSetup = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.CANCEL_SSH_SETUP_CHANNEL,
-  payload: Schema.Union([
-    DesktopSshEnvironmentTargetSchema,
-    Schema.Struct({
-      target: DesktopSshEnvironmentTargetSchema,
-      operationId: Schema.NonEmptyString,
-    }),
-  ]),
-  result: Schema.Void,
-  handler: (input) =>
-    Effect.flatMap(DesktopSshEnvironment.DesktopSshEnvironment, (service) =>
-      "target" in input
-        ? service.cancelSetup(input.target, input.operationId)
-        : service.cancelSetup(input),
-    ),
-});
-export const forgetSshCredentials = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.FORGET_SSH_CREDENTIALS_CHANNEL,
-  payload: DesktopSshEnvironmentTargetSchema,
-  result: Schema.Void,
-  handler: (target) =>
-    Effect.flatMap(
-      DesktopSshEnvironment.DesktopSshEnvironment,
-      (service) => service.forgetCredentials?.(target) ?? Effect.void,
-    ),
 });
 
 export const ensureSshEnvironment = DesktopIpc.makeIpcMethod({
@@ -315,14 +230,4 @@ export const resolveSshPasswordPrompt = DesktopIpc.makeIpcMethod({
     const prompts = yield* DesktopSshPasswordPrompts.DesktopSshPasswordPrompts;
     yield* prompts.resolve({ requestId, password });
   }),
-});
-
-export const resolveSshSetupReview = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.RESOLVE_SSH_SETUP_REVIEW_CHANNEL,
-  payload: Schema.Struct({ requestId: Schema.String, approval: Schema.NullOr(SshSetupApproval) }),
-  result: Schema.Void,
-  handler: ({ requestId, approval }) =>
-    Effect.flatMap(DesktopSshPasswordPrompts.DesktopSshPasswordPrompts, (prompts) =>
-      prompts.resolve({ requestId, password: approval === null ? null : JSON.stringify(approval) }),
-    ),
 });

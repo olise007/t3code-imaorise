@@ -5,6 +5,9 @@
  * platform key, so a rename here is a release-breaking change.
  */
 
+// Pinned independently of unpublished personal desktop versions.
+export const OFFICIAL_SSH_SERVER_VERSION = "0.1.0";
+
 const CLI_RELEASE_REPOSITORY = "pingdotgg/t3code";
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 /** Overrides the download origin for mirrors and air-gapped installs. */

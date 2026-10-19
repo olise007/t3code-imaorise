@@ -12,7 +12,6 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
 import { mergeLegacyLocalStorage } from "./legacyLocalStorageMerge.ts";
-import { sshHostRequest } from "./ssh/sshHostRequest.ts";
 
 const SNAP_SHOT_EVENT_TYPES = new Set([
   "requested",
@@ -142,33 +141,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.SET_CONNECTION_CATALOG_CHANNEL, catalog),
   clearConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.CLEAR_CONNECTION_CATALOG_CHANNEL),
   discoverSshHosts: () => ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_HOSTS_CHANNEL),
-  resolveSshHost: (alias, executionSource) =>
-    ipcRenderer.invoke(
-      IpcChannels.RESOLVE_SSH_HOST_CHANNEL,
-      sshHostRequest(alias, executionSource),
-    ),
-  discoverSshConnections: (loadDistro) =>
-    ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_CONNECTIONS_CHANNEL, loadDistro),
-  sshConnectionCapabilities: () => ({ manualProfiles: true, authenticationPreflight: true }),
-  onSshConnectionProgress: (listener) => {
-    const handler = (_event: Electron.IpcRendererEvent, progress: Parameters<typeof listener>[0]) =>
-      listener(progress);
-    ipcRenderer.on(IpcChannels.SSH_CONNECTION_PROGRESS_CHANNEL, handler);
-    return () => ipcRenderer.removeListener(IpcChannels.SSH_CONNECTION_PROGRESS_CHANNEL, handler);
-  },
-  sshServerStatus: (target) => ipcRenderer.invoke(IpcChannels.SSH_SERVER_STATUS_CHANNEL, target),
-  stopSshEnvironment: (target, options) =>
-    ipcRenderer.invoke(
-      IpcChannels.STOP_SSH_ENVIRONMENT_CHANNEL,
-      options === undefined ? target : { target, options },
-    ),
-  cancelSshSetup: (target, operationId) =>
-    ipcRenderer.invoke(
-      IpcChannels.CANCEL_SSH_SETUP_CHANNEL,
-      operationId === undefined ? target : { target, operationId },
-    ),
-  forgetSshCredentials: (target) =>
-    ipcRenderer.invoke(IpcChannels.FORGET_SSH_CREDENTIALS_CHANNEL, target),
+  resolveSshHost: (alias) => ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_HOST_CHANNEL, alias),
   ensureSshEnvironment: async (target, options) =>
     unwrapEnsureSshEnvironmentResult(
       await ipcRenderer.invoke(IpcChannels.ENSURE_SSH_ENVIRONMENT_CHANNEL, {
@@ -202,8 +175,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   resolveSshPasswordPrompt: (requestId, password) =>
     ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_PASSWORD_PROMPT_CHANNEL, { requestId, password }),
-  resolveSshSetupReview: (requestId, approval) =>
-    ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_SETUP_REVIEW_CHANNEL, { requestId, approval }),
   getServerExposureState: () => ipcRenderer.invoke(IpcChannels.GET_SERVER_EXPOSURE_STATE_CHANNEL),
   setServerExposureMode: (mode) =>
     ipcRenderer.invoke(IpcChannels.SET_SERVER_EXPOSURE_MODE_CHANNEL, mode),

@@ -1,5 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off - Windows askpass must be a native executable to preserve multiline OpenSSH arguments.
-import * as NodeChildProcess from "node:child_process";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -9,15 +7,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
-import * as Scope from "effect/Scope";
 
 import { SshPasswordPromptError } from "./errors.ts";
-import type { SshSetupApproval, SshSetupReview } from "@t3tools/contracts";
 
 export interface SshPasswordRequest {
-  readonly challenge?: "host-key" | "password" | "key-passphrase";
-  readonly purpose?: "ssh" | "elevation" | "setup-review";
-  readonly setupReview?: SshSetupReview;
   readonly destination: string;
   readonly username: string | null;
   readonly prompt: string;
@@ -36,17 +29,12 @@ export interface SshAskpassHelperDescriptor {
 }
 
 export interface SshAuthOptions {
-  readonly readOnlyHostTrust?: boolean;
-  readonly trustedHostPrompt?: string;
   readonly authSecret?: string | null;
   readonly batchMode?: "yes" | "no";
   readonly interactiveAuth?: boolean;
 }
 
 export interface SshPasswordPromptShape {
-  readonly reviewSetup?: (
-    review: SshSetupReview,
-  ) => Effect.Effect<SshSetupApproval, SshPasswordPromptError>;
   readonly isAvailable: boolean;
   readonly request: (
     request: SshPasswordRequest,
@@ -66,7 +54,6 @@ export class SshPasswordPrompt extends Context.Service<SshPasswordPrompt, SshPas
 }
 
 export interface SshChildEnvironmentOptions {
-  readonly trustedHostPrompt?: string;
   readonly interactiveAuth?: boolean;
   readonly baseEnv?: NodeJS.ProcessEnv;
   readonly askpassDirectory?: string;
@@ -86,34 +73,30 @@ function joinSshAskpassPath(
 
 const ASKPASS_POSIX_SCRIPT = `#!/bin/sh
 # Invoked by ssh via SSH_ASKPASS when T3 Code re-runs ssh with a cached password
-# from the renderer's in-app prompt. Missing credentials request a typed
-# challenge during authentication preflight; they are not a launcher failure.
-if [ -n "\${T3_SSH_TRUST_PROMPT:-}" ] && [ "$*" = "$T3_SSH_TRUST_PROMPT" ]; then printf 'yes\\n'; exit 0; fi
-case "$*" in *'yes/no'*|*'SHA256:'*) printf 'T3_SSH_PROMPT:%s\\n' "$(printf '%s' "$*" | base64 | tr -d '\\n')" >&2; exit 1 ;; esac
+# from the renderer's in-app prompt. We never expose a native dialog here - if
+# T3_SSH_AUTH_SECRET is missing, that's a caller bug and we fail loudly.
 if [ "\${T3_SSH_AUTH_SECRET+x}" = "x" ]; then
   printf "%s\\n" "$T3_SSH_AUTH_SECRET"
   exit 0
 fi
-printf 'T3_SSH_AUTH_PROMPT:%s\\n' "$(printf '%s' "$*" | base64 | tr -d '\\n')" >&2
+printf 'T3 Code ssh-askpass invoked without T3_SSH_AUTH_SECRET.\\n' >&2
 exit 1
 `;
 
-const ASKPASS_WINDOWS_SOURCE = `using System;
-using System.Text;
-public static class T3SshAskpass {
-  public static int Main(string[] args) {
-    Console.OutputEncoding = new UTF8Encoding(false);
-    string prompt = String.Join(" ", args);
-    string trusted = Environment.GetEnvironmentVariable("T3_SSH_TRUST_PROMPT");
-    if (!String.IsNullOrEmpty(trusted) && String.Equals(prompt, trusted, StringComparison.Ordinal)) { Console.WriteLine("yes"); return 0; }
-    bool confirm = Environment.GetEnvironmentVariable("SSH_ASKPASS_PROMPT") == "confirm" || prompt.Contains("yes/no") || prompt.Contains("SHA256:");
-    if (confirm) { Console.Error.WriteLine("T3_SSH_PROMPT:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(prompt))); return 1; }
-    string secret = Environment.GetEnvironmentVariable("T3_SSH_AUTH_SECRET");
-    if (secret != null) { Console.WriteLine(secret); return 0; }
-    Console.Error.WriteLine("T3_SSH_AUTH_PROMPT:" + Convert.ToBase64String(Encoding.UTF8.GetBytes(prompt)));
-    return 1;
-  }
-}
+const ASKPASS_WINDOWS_LAUNCHER_SCRIPT = `@echo off\r
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ssh-askpass.ps1" %*\r
+`;
+
+const ASKPASS_WINDOWS_SCRIPT = `# Invoked by ssh via SSH_ASKPASS (through ssh-askpass.cmd) when T3 Code re-runs\r
+# ssh with a cached password from the renderer's in-app prompt. We never expose\r
+# a native dialog here - if T3_SSH_AUTH_SECRET is missing, that's a caller bug\r
+# and we fail loudly.\r
+if ($null -ne $env:T3_SSH_AUTH_SECRET) {\r
+  [Console]::Out.WriteLine($env:T3_SSH_AUTH_SECRET)\r
+  exit 0\r
+}\r
+[Console]::Error.WriteLine("T3 Code ssh-askpass invoked without T3_SSH_AUTH_SECRET.")\r
+exit 1\r
 `;
 
 const getDefaultSshAskpassDirectory = Effect.fn("ssh/auth.getDefaultSshAskpassDirectory")(
@@ -135,12 +118,17 @@ export const buildSshAskpassHelperDescriptor = Effect.fn(
   const directory = input.directory;
 
   if (platform === "win32") {
+    const powershellPath = joinSshAskpassPath(directory, "ssh-askpass.ps1", platform);
     return {
-      launcherPath: joinSshAskpassPath(directory, "ssh-askpass.exe", platform),
+      launcherPath: joinSshAskpassPath(directory, "ssh-askpass.cmd", platform),
       files: [
         {
-          path: joinSshAskpassPath(directory, "ssh-askpass.cs", platform),
-          contents: ASKPASS_WINDOWS_SOURCE,
+          path: joinSshAskpassPath(directory, "ssh-askpass.cmd", platform),
+          contents: ASKPASS_WINDOWS_LAUNCHER_SCRIPT,
+        },
+        {
+          path: powershellPath,
+          contents: ASKPASS_WINDOWS_SCRIPT,
         },
       ],
     };
@@ -179,45 +167,6 @@ const ensureSshAskpassHelpers = Effect.fn("ssh/auth.ensureSshAskpassHelpers")(fu
     }
   }
 
-  if (platform === "win32" && !(yield* fs.exists(descriptor.launcherPath))) {
-    // Windows PowerShell compiles a small .NET Framework console executable.
-    // No prompt or credential is passed through cmd.exe or the compiler.
-    yield* Effect.tryPromise({
-      try: (signal) =>
-        new Promise<void>((resolve, reject) => {
-          NodeChildProcess.execFile(
-            "powershell.exe",
-            [
-              "-NoLogo",
-              "-NoProfile",
-              "-NonInteractive",
-              "-Command",
-              "$ErrorActionPreference='Stop'; Add-Type -Path $env:T3_SSH_HELPER_SOURCE -OutputAssembly $env:T3_SSH_HELPER_OUTPUT -OutputType ConsoleApplication",
-            ],
-            {
-              signal,
-              timeout: 20_000,
-              windowsHide: true,
-              env: {
-                ...process.env,
-                T3_SSH_HELPER_SOURCE: descriptor.files[0]!.path,
-                T3_SSH_HELPER_OUTPUT: descriptor.launcherPath,
-              },
-            },
-            (error) => (error ? reject(error) : resolve()),
-          );
-        }),
-      catch: (cause) =>
-        PlatformError.systemError({
-          _tag: "Unknown",
-          module: "SshAskpass",
-          method: "compile",
-          description:
-            "Could not prepare the Windows authentication helper. Windows PowerShell and .NET Framework are required.",
-          cause,
-        }),
-    });
-  }
   return descriptor.launcherPath;
 });
 
@@ -242,48 +191,15 @@ export const buildSshChildEnvironment = Effect.fn("ssh/auth.buildSshChildEnviron
         Effect.map(Option.getOrUndefined),
       );
   const directory = input.askpassDirectory ?? (yield* getDefaultSshAskpassDirectory());
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const sshAskpass = yield* ensureSshAskpassHelpers({ directory }).pipe(
-    Effect.onExit((exit) =>
-      exit._tag === "Failure" && input.askpassDirectory === undefined
-        ? fs.remove(path.dirname(directory), { recursive: true, force: true }).pipe(Effect.ignore)
-        : Effect.void,
-    ),
-  );
+  const sshAskpass = yield* ensureSshAskpassHelpers({ directory });
 
   return {
     ...baseEnv,
     SSH_ASKPASS: sshAskpass,
     SSH_ASKPASS_REQUIRE: "force",
-    ...(input.trustedHostPrompt === undefined
-      ? {}
-      : { T3_SSH_TRUST_PROMPT: input.trustedHostPrompt }),
     ...(input.authSecret === undefined ? {} : { T3_SSH_AUTH_SECRET: input.authSecret ?? "" }),
     ...(platform === "win32" || baseEnv.DISPLAY || hostDisplay ? {} : { DISPLAY: "t3code" }),
   };
-});
-
-/** Remove only the temporary helper created by this operation after its SSH process exits. */
-export const retainSshAuthenticationHelper = Effect.fn("ssh/auth.retainHelper")(function* (
-  environment: NodeJS.ProcessEnv,
-  scope: Scope.Scope,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const helper = environment.SSH_ASKPASS;
-  if (!helper) return;
-  const directory = path.dirname(helper);
-  const parent = path.dirname(directory);
-  if (
-    path.basename(directory) !== SSH_ASKPASS_DIR_NAME ||
-    !path.basename(parent).startsWith("t3code-ssh-runtime-")
-  )
-    return;
-  yield* Scope.addFinalizer(
-    scope,
-    fs.remove(parent, { recursive: true, force: true }).pipe(Effect.ignore),
-  );
 });
 
 export function isSshAuthFailure(error: unknown): boolean {

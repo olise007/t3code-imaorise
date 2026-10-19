@@ -307,7 +307,7 @@ export const make = Effect.fn("desktop.sshPasswordPrompts.make")(function* (
       });
     }
 
-    const requestId = yield* crypto.randomUUIDv4.pipe(
+    const requestId = yield* crypto.randomUUIDv4().pipe(
       Effect.mapError(
         (cause) =>
           new DesktopSshPromptRequestIdGenerationError({
@@ -321,9 +321,6 @@ export const make = Effect.fn("desktop.sshPasswordPrompts.make")(function* (
       DateTime.add(now, { milliseconds: passwordPromptTimeoutMs }),
     );
     const promptRequest: DesktopSshPasswordPromptRequest = {
-      ...(input.challenge === undefined ? {} : { challenge: input.challenge }),
-      ...(input.purpose === undefined ? {} : { purpose: input.purpose }),
-      ...(input.setupReview === undefined ? {} : { setupReview: input.setupReview }),
       requestId,
       destination: input.destination,
       username: input.username,

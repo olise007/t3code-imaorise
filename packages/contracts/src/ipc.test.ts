@@ -1,7 +1,11 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { DesktopEnvironmentBootstrapSchema } from "./ipc.ts";
+import {
+  DesktopEnvironmentBootstrapSchema,
+  DesktopSshEnvironmentTargetSchema,
+  unsupportedDesktopSshTargetReason,
+} from "./ipc.ts";
 
 describe("DesktopEnvironmentBootstrapSchema", () => {
   const decode = Schema.decodeUnknownSync(DesktopEnvironmentBootstrapSchema);
@@ -34,5 +38,21 @@ describe("DesktopEnvironmentBootstrapSchema", () => {
         wsBaseUrl: null,
       }).runningDistro,
     ).toBeNull();
+  });
+});
+
+describe("saved upstream SSH compatibility", () => {
+  const target = { alias: "work", hostname: "work.example", username: "dev", port: 22 };
+  it("accepts absent and explicitly local sources", () => {
+    expect(unsupportedDesktopSshTargetReason(target)).toBeNull();
+    expect(
+      unsupportedDesktopSshTargetReason({ ...target, executionSource: { type: "local" } }),
+    ).toBeNull();
+  });
+  it("preserves the owning distro through saved-profile decoding", () => {
+    const saved = { ...target, executionSource: { type: "wsl" as const, distro: "Ubuntu" } };
+    const decoded = Schema.decodeUnknownSync(DesktopSshEnvironmentTargetSchema)(saved);
+    expect(decoded).toEqual(saved);
+    expect(unsupportedDesktopSshTargetReason(decoded)).toContain("replacement");
   });
 });

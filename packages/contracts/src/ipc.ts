@@ -462,6 +462,16 @@ export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
 });
 export type DesktopSshEnvironmentTarget = typeof DesktopSshEnvironmentTargetSchema.Type;
 
+/** Retain old profiles without silently resolving their keys through another SSH source. */
+export function unsupportedDesktopSshTargetReason(
+  target: DesktopSshEnvironmentTarget,
+): string | null {
+  if (target.manual || target.executionSource?.type === "wsl") {
+    return "This saved SSH profile uses the retired manual-server or WSL-source setup. Add a replacement using local SSH configuration, or connect to a separately running server using a remote link. The saved profile has been retained.";
+  }
+  return null;
+}
+
 export type DesktopSshHostSource = "ssh-config" | "known-hosts";
 export const DesktopSshHostSourceSchema = Schema.Literals(["ssh-config", "known-hosts"]);
 
@@ -539,6 +549,21 @@ export const DesktopSshEnvironmentEnsureOptionsSchema = Schema.Struct({
   issuePairingToken: Schema.optionalKey(Schema.Boolean),
   resumeStoppedServer: Schema.optionalKey(Schema.Boolean),
 });
+
+/** Old preflight and installation requests must never become an upstream server launch. */
+export function unsupportedDesktopSshEnsureOptionsReason(
+  options: typeof DesktopSshEnvironmentEnsureOptionsSchema.Type | undefined,
+): string | null {
+  if (
+    options &&
+    Object.entries(options).some(
+      ([key, value]) => key !== "issuePairingToken" && value !== undefined,
+    )
+  ) {
+    return "This SSH setup request uses retired authentication or installation options. Update the client and add the environment using local SSH configuration or a remote link.";
+  }
+  return null;
+}
 
 export const DesktopSshEnvironmentEnsureInputSchema = Schema.Struct({
   target: DesktopSshEnvironmentTargetSchema,

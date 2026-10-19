@@ -1,3 +1,5 @@
+import { unsupportedDesktopSshTargetReason } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import {
   DndContext,
   type DragEndEvent,
@@ -26,7 +28,6 @@ import {
 } from "@t3tools/client-runtime/connection";
 import { GripVerticalIcon, PlusIcon, XIcon } from "lucide-react";
 import { useState } from "react";
-import * as Option from "effect/Option";
 
 import { requestConfirmDialog } from "~/confirmDialog";
 import { environmentCatalog } from "~/connection/catalog";
@@ -37,26 +38,16 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-/**
- * The ways this client reaches one saved machine, preferred first. Drag to
- * reorder; the first route that answers is used and the connection moves back
- * up when a better one is reachable again. Shown under the machine's row.
- */
 export function EnvironmentRoutesList({
   environment,
   onAddRoute,
-  onEditSsh,
 }: {
   readonly environment: EnvironmentPresentation;
   readonly onAddRoute: () => void;
-  readonly onEditSsh?: ((route: ConnectionRoute) => void) | undefined;
 }) {
   const saved = connectionRoutes(environment.entry);
   const savedIds = saved.map((route) => connectionRouteId(route.target));
-  // A dropped order shows until the catalog matches it, so the row does not
-  // jump back while the reorder is being saved.
   const [pending, setPending] = useState<ReadonlyArray<string> | null>(null);
-  const [credentialError, setCredentialError] = useState<string | null>(null);
   const order: Array<string> =
     pending !== null &&
     pending.length === savedIds.length &&
@@ -78,8 +69,6 @@ export function EnvironmentRoutesList({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  // Removing a paired route forgets its credential, so it asks first, like
-  // on mobile. No mounted confirm host means no removal.
   const confirmRemove = async (route: ConnectionRoute) => {
     const address = connectionRouteAddress(route);
     const confirmed = await requestConfirmDialog(
@@ -87,20 +76,6 @@ export function EnvironmentRoutesList({
       { variant: "destructive" },
     );
     if (confirmed !== true) return;
-    if (
-      Option.isSome(route.profile) &&
-      route.profile.value._tag === "SshConnectionProfile" &&
-      route.profile.value.target.manual
-    ) {
-      try {
-        await window.desktopBridge?.forgetSshCredentials?.(route.profile.value.target);
-      } catch {
-        setCredentialError(
-          "Could not forget the saved SSH credential. The profile was retained; try again.",
-        );
-        return;
-      }
-    }
     await removeRoute({
       environmentId: environment.environmentId,
       routeId: connectionRouteId(route.target),
@@ -122,11 +97,6 @@ export function EnvironmentRoutesList({
 
   return (
     <div className="mt-2 border-t border-border/50 py-2">
-      {credentialError ? (
-        <p role="alert" className="text-xs text-destructive">
-          {credentialError}
-        </p>
-      ) : null}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -141,19 +111,8 @@ export function EnvironmentRoutesList({
                 route={route}
                 position={index + 1}
                 inUse={connectionRouteId(route.target) === activeRouteId}
-                // The last route goes with the machine; that is "Remove from
-                // this device", not a route action. A learned route would be
-                // learned again, so it is only reordered.
                 removable={routes.length > 1 && !isLearned(route)}
                 onRemove={() => void confirmRemove(route)}
-                onEdit={
-                  onEditSsh &&
-                  Option.isSome(route.profile) &&
-                  route.profile.value._tag === "SshConnectionProfile" &&
-                  route.profile.value.target.manual
-                    ? () => onEditSsh(route)
-                    : undefined
-                }
               />
             ))}
           </ol>
@@ -175,18 +134,20 @@ function SortableRouteRow({
   inUse,
   removable,
   onRemove,
-  onEdit,
 }: {
   readonly route: ConnectionRoute;
   readonly position: number;
   readonly inUse: boolean;
   readonly removable: boolean;
   readonly onRemove: () => void;
-  readonly onEdit?: (() => void) | undefined;
 }) {
   const id = connectionRouteId(route.target);
   const label = connectionRouteLabel(route);
   const address = connectionRouteAddress(route);
+  const retiredReason =
+    Option.isSome(route.profile) && route.profile.value._tag === "SshConnectionProfile"
+      ? unsupportedDesktopSshTargetReason(route.profile.value.target)
+      : null;
   const {
     attributes,
     listeners,
@@ -221,6 +182,11 @@ function SortableRouteRow({
             {isLearned(route) ? " · found automatically" : ""}
           </p>
         ) : null}
+        {retiredReason ? (
+          <p role="note" className="text-2xs text-muted-foreground">
+            {retiredReason}
+          </p>
+        ) : null}
       </div>
       <button
         type="button"
@@ -232,11 +198,6 @@ function SortableRouteRow({
       >
         <GripVerticalIcon className="size-3.5" />
       </button>
-      {onEdit ? (
-        <Button size="xs" variant="ghost-muted" onClick={onEdit}>
-          Edit server
-        </Button>
-      ) : null}
       {removable ? (
         <Tooltip>
           <TooltipTrigger

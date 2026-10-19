@@ -13,73 +13,69 @@ import { SshConnectionTarget } from "./model.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 
-it.effect.each(["preparation", "synchronization"] as const)(
-  "bounds SSH %s without conflating its deadline",
-  (stage) =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const target = new SshConnectionTarget({
-        environmentId: EnvironmentId.make("fixture"),
-        label: "Fixture",
-        connectionId: "ssh-fixture",
-      });
-      const prepared = {
-        environmentId: target.environmentId,
-        label: target.label,
-        target,
-        httpBaseUrl: "http://127.0.0.1:4773",
-        socketUrl: "ws://127.0.0.1:4773/ws",
-        httpAuthorization: null,
-      };
-      const stalled = Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never));
-      const resolver = Resolver.ConnectionResolver.of({
-        prepare: () => (stage === "preparation" ? stalled : Effect.succeed(prepared)),
-        prepareForUpdate: () => Effect.die("unused"),
-      });
-      const sessions = RpcSession.RpcSessionFactory.of({
-        connect: () =>
-          Effect.succeed({
-            client: {} as WsRpcProtocolClient,
-            ready: stalled,
-            closed: Effect.never,
-            initialConfig: Effect.die("unused"),
-            subscribeServerConfig: () => Stream.empty,
-            probe: Effect.void,
-          }),
-      });
-      const driver = yield* Driver.make.pipe(
-        Effect.provideService(Resolver.ConnectionResolver, resolver),
-        Effect.provideService(RpcSession.RpcSessionFactory, sessions),
-        Effect.provideService(
-          HttpClient.HttpClient,
-          HttpClient.make((request) =>
-            Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
-          ),
+it.effect.each(["synchronization"] as const)("bounds SSH %s without conflating its deadline", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const target = new SshConnectionTarget({
+      environmentId: EnvironmentId.make("fixture"),
+      label: "Fixture",
+      connectionId: "ssh-fixture",
+    });
+    const prepared = {
+      environmentId: target.environmentId,
+      label: target.label,
+      target,
+      httpBaseUrl: "http://127.0.0.1:4773",
+      socketUrl: "ws://127.0.0.1:4773/ws",
+      httpAuthorization: null,
+    };
+    const stalled = Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never));
+    const resolver = Resolver.ConnectionResolver.of({
+      prepare: () => Effect.succeed(prepared),
+      prepareForUpdate: () => Effect.die("unused"),
+    });
+    const sessions = RpcSession.RpcSessionFactory.of({
+      connect: () =>
+        Effect.succeed({
+          client: {} as WsRpcProtocolClient,
+          ready: stalled,
+          closed: Effect.never,
+          initialConfig: Effect.die("unused"),
+          subscribeServerConfig: () => Stream.empty,
+          probe: Effect.void,
+        }),
+    });
+    const driver = yield* Driver.make.pipe(
+      Effect.provideService(Resolver.ConnectionResolver, resolver),
+      Effect.provideService(RpcSession.RpcSessionFactory, sessions),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 }))),
         ),
+      ),
+    );
+    let completed = false;
+    const attempt = yield* driver
+      .connect({ target, profile: Option.none(), enabled: true }, () => Effect.void)
+      .pipe(
+        Effect.result,
+        Effect.ensuring(
+          Effect.sync(() => {
+            completed = true;
+          }),
+        ),
+        Effect.forkChild,
       );
-      let completed = false;
-      const attempt = yield* driver
-        .connect({ target, profile: Option.none(), enabled: true }, () => Effect.void)
-        .pipe(
-          Effect.result,
-          Effect.ensuring(
-            Effect.sync(() => {
-              completed = true;
-            }),
-          ),
-          Effect.forkChild,
-        );
-      yield* Deferred.await(entered);
-      yield* TestClock.adjust(stage === "preparation" ? "59 seconds" : "14 seconds");
-      expect(completed).toBe(false);
-      yield* TestClock.adjust("2 seconds");
-      const result = yield* Fiber.join(attempt);
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure.reason).toBe("timeout");
-        expect(result.failure.message).toContain(
-          stage === "preparation" ? "SSH preparation" : "synchronization",
-        );
-      }
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    yield* Deferred.await(entered);
+    yield* TestClock.adjust("14 seconds");
+    expect(completed).toBe(false);
+    yield* TestClock.adjust("2 seconds");
+    const result = yield* Fiber.join(attempt);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(result.failure.reason).toBe("timeout");
+      expect(result.failure.message).toContain("synchronization");
+    }
+  }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
 );

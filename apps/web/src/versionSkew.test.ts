@@ -244,3 +244,8 @@ describe("versionSkew", () => {
     expect(serverUpdateGuidance("desktop-managed")).toBe("Update the desktop app");
   });
 });
+
+it("does not offer a personal beta update to the pinned official server", () => {
+  expect(resolveVersionMismatch("0.1.0", "2.0.1-beta.188")).toBeNull();
+  expect(resolveVersionMismatch("2.0.0", "2.0.1-beta.188")).not.toBeNull();
+});

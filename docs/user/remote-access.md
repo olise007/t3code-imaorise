@@ -178,84 +178,35 @@ scheme uses HTTP, so include `https://` when your server uses HTTPS.
 ## Desktop-managed SSH
 
 In the desktop app, open **Settings → Connections → Add environment**, choose
-**SSH**, and enter a host or SSH alias such as `user@example.com`. T3 Code starts
-or reuses a server there and opens the port forward for you. Projects, provider
-credentials, and agent work stay on the remote machine.
+**SSH**, and enter a host or SSH alias such as `user@example.com`. T3 Code uses
+the local OpenSSH configuration, starts or reuses a remote server, and opens a
+port forward. Provider credentials and agent work stay on the remote machine.
 
-On Windows, choose **Windows** or a **WSL distro** as the SSH configuration
-source. T3 uses that source's SSH aliases, keys, agent, and jump-host settings.
-Running distros are discovered automatically; **Load hosts** starts a stopped
-distro when you need it. Hosts with the same alias in different sources stay
-separate.
+The remote host must be Linux or an Apple Silicon Mac with `curl` or `wget`,
+`tar`, and `sha256sum` or `shasum`. The first launch downloads and verifies the
+official T3 server under the remote login user's `~/.t3/runtime`. It needs no
+separate Node, npm, compiler, or desktop installation. Personal desktop builds
+use a pinned official server release independently of their beta version.
 
-Choose **Manual server** to save connection details without adding an SSH config
-entry. Enter its address, username, port, and password or source-owned private-key
-path. Manual servers use T3's own host trust records and do not inherit SSH aliases
-or identities. Confirm an unfamiliar fingerprint only after verifying it; a changed
-host key requires investigation rather than automatic replacement. Saved manual
-servers can be tested, edited, and removed from Connections.
-
-Passwords and key passphrases stay in memory unless you select **Remember securely**.
-T3 saves them only after authentication succeeds and protected storage is available.
-Otherwise it explains that you will be prompted again. Private keys stay in their
-Windows or WSL source.
-
-Setup progress remains available in Connections after closing the setup dialog.
-**View progress** shows stages and sanitized live details; **Cancel setup** stops
-the active attempt. Recent attempts are kept for the current app session only.
-
-Imaorise Windows desktop builds prepare Linux x64 and native Windows x64 hosts
-by uploading their bundled server runtime over SSH. Setup inspects the remote
-platform and shows missing control-server requirements, commands, sources,
-and elevation needs before asking you to approve installation. Debian/Ubuntu and
-Fedora/RHEL hosts can install missing system packages through their package manager.
-Windows uses verified installers; missing system components require an elevated
-SSH session. Other unsupported requirements receive manual instructions.
-
-Reconnect reuses the prepared runtime. If it is missing or incompatible, use
-**Repair connection** in Connections to explicitly prepare it again.
-
-Runtime uploads require an OpenSSH `scp` client with SFTP support in the selected
-source and an enabled SFTP subsystem on the remote SSH server. Runtimes live under
-the connected user's home directory in `.t3-imaorise/runtime`. Setup checks the
-filesystem containing that destination for enough space before uploading; Linux
-also checks available file entries (inodes). If storage is exhausted, free space
-on that filesystem and retry setup.
-
-The control server needs no separate Node or desktop installation. A provider
-that requires Node can install a verified private copy with your approval. Existing
-and custom provider installations are preserved. After connecting, choose **Set up agents**
-in Connections to install providers and sign in. Agent setup is separate from connecting;
-local credentials are never copied.
-Providers without a verified automatic recipe show their manual setup guidance.
-Provider settings identify the destination platform and installation owner. Existing
-Codex installations can use native browser or device-code sign-in without becoming
-T3-managed installations. Review versions in that environment's provider settings;
-an externally owned installation keeps its own supported update method.
-
-Removing a connection clears its setup history from this client and leaves the remote
-server running. Closing an integrated terminal closes that terminal, not the connection.
-
-Cancel setup to stop owned installation work. Completed packages remain installed;
-retry explicitly after resolving a failure. Reconnecting never repeats approved
-system commands or provider installation. T3 does not upgrade the OS, change the
-firewall or SSH server, or reboot the machine.
-
-For manually installed providers, make their executables available to the remote
-SSH session or configure their executable paths in provider settings. On Linux:
+Install and authenticate provider CLIs on the remote machine. Make them available
+to a non-interactive login shell or configure their executable paths in provider
+settings. After connecting, **Set up agents** opens provider settings for that
+environment; available actions depend on the server's capabilities.
 
 ```bash
 ssh user@example.com 'sh -lc "command -v claude codex"'
 ```
 
-Disconnecting, removing the saved connection, or closing T3 leaves remote agents
-running. Reconnect through the same SSH source to continue. To stop a verified
-T3-managed server and its agents, use **Stop remote server** in its connection
-menu. Switch the connection on again to explicitly restart it; background reconnects
-respect the stop. A compatible running version is reused after desktop updates,
-leaving its agents running. To activate the bundled version instead, explicitly
-stop and restart the remote server when its agents can be stopped. Incompatible
-versions require this explicit stop before setup can continue.
+Native Windows servers are not prepared over SSH. Run T3 separately on Windows
+and add its remote address and pairing code instead. Existing profiles created
+with the retired manual-server or WSL-source setup remain saved, but require a
+replacement using local SSH configuration or a remote link. Remote Imaorise data
+is not migrated into the official server's separate data directory.
+
+Removing an SSH connection stops a server that T3 Code launched; an independently
+running server is left alone. For unattended remote work that must outlive the
+managed connection, run a separate server and connect through a remote link or
+T3 Connect.
 
 For Antigravity's Google callback on a remote host, see
 [remote sign-in](./providers-antigravity.md#sign-in-from-a-remote-device).

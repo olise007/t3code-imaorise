@@ -31,12 +31,11 @@ import {
   type DesktopSshEnvironmentTarget,
   type EnvironmentId,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
+  unsupportedDesktopSshTargetReason,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -63,8 +62,6 @@ import {
 } from "./desktopLocal";
 import * as ConnectionStorage from "./storage";
 import { clientPresentationMetadata } from "./clientMetadata";
-import { sshServerLifecycle } from "./sshServerLifecycle";
-import { sshSetupProgress } from "./sshSetupProgress";
 
 let nextObservedRpcRequestId = 0;
 
@@ -181,13 +178,6 @@ function sshPreparationError(cause: unknown) {
       detail: message,
     });
   }
-  if (/authentication failed|host.key|passphrase|password/i.test(message))
-    return new ConnectionBlockedError({
-      reason: "authentication",
-      detail: `Authenticate this SSH profile explicitly before reconnecting. ${message}`,
-    });
-  if (/Repair connection|explicitly stopped|incompatible with runtime/i.test(message))
-    return new ConnectionBlockedError({ reason: "configuration", detail: message });
   return new ConnectionTransientError({
     reason: "remote-unavailable",
     detail: `Could not prepare the SSH environment: ${message}`,
@@ -201,34 +191,19 @@ export const provisionDesktopSshEnvironment = Effect.fn(
   target: DesktopSshEnvironmentTarget,
   expectedEnvironmentId?: EnvironmentId,
 ) {
-  if (target.manual && !bridge.sshConnectionCapabilities?.().manualProfiles)
+  const unsupportedReason = unsupportedDesktopSshTargetReason(target);
+  if (unsupportedReason !== null)
     return yield* new ConnectionBlockedError({
       reason: "configuration",
-      detail:
-        "Update the desktop client to use this manually configured SSH profile. Its source and authentication settings were retained.",
+      detail: unsupportedReason,
     });
   const bootstrap = yield* Effect.tryPromise({
     try: () =>
       bridge.ensureSshEnvironment(target, {
-        ...(sshSetupProgress.runningOperation(target)
-          ? { operationId: sshSetupProgress.runningOperation(target)! }
-          : {}),
-        ...(expectedEnvironmentId ? { expectedEnvironmentId } : {}),
         issuePairingToken: true,
-        supportsSetupReview: bridge.resolveSshSetupReview !== undefined,
       }),
     catch: sshPreparationError,
   });
-  if (bootstrap.serverState === "stopped") {
-    sshServerLifecycle.observe(target, {
-      state: "stopped",
-      checkedAt: DateTime.formatIso(yield* DateTime.now),
-    });
-    return yield* new ConnectionBlockedError({
-      reason: "configuration",
-      detail: "Remote server was explicitly stopped. Choose Start remote server or Cancel.",
-    });
-  }
   const pairingToken = bootstrap.pairingToken;
   if (pairingToken === null) {
     return yield* new ConnectionBlockedError({
@@ -258,9 +233,69 @@ export const provisionDesktopSshEnvironment = Effect.fn(
   };
 });
 
+/**
+ * Connects a saved SSH environment. A token from an earlier pairing is kept
+ * while the host still accepts it with every standard scope, because every
+ * pairing adds a session there.
+ */
+export const prepareDesktopSshEnvironment = Effect.fn("web.connectionPlatform.ssh.prepareDesktop")(
+  function* (
+    bridge: DesktopBridge,
+    input: {
+      readonly target: DesktopSshEnvironmentTarget;
+      readonly expectedEnvironmentId: EnvironmentId;
+      readonly bearerToken?: string;
+    },
+  ) {
+    const unsupportedReason = unsupportedDesktopSshTargetReason(input.target);
+    if (unsupportedReason !== null)
+      return yield* new ConnectionBlockedError({
+        reason: "configuration",
+        detail: unsupportedReason,
+      });
+    const bearerToken = input.bearerToken;
+    if (bearerToken !== undefined) {
+      const bootstrap = yield* Effect.tryPromise({
+        try: () => bridge.ensureSshEnvironment(input.target, { issuePairingToken: false }),
+        catch: sshPreparationError,
+      });
+      // Stop without sending the saved token, or pairing, when the forward
+      // reaches a different environment.
+      const descriptor = yield* Effect.tryPromise({
+        try: () => bridge.fetchSshEnvironmentDescriptor(bootstrap.httpBaseUrl),
+        catch: sshPreparationError,
+      });
+      if (descriptor.environmentId !== input.expectedEnvironmentId) {
+        return yield* new ConnectionBlockedError({
+          reason: "configuration",
+          detail: `That host reaches ${descriptor.label}, a different machine. Add it as its own environment instead.`,
+        });
+      }
+      const session = yield* Effect.tryPromise({
+        try: () => bridge.fetchSshSessionState(bootstrap.httpBaseUrl, bearerToken),
+        catch: sshPreparationError,
+      });
+      // Servers never widen a stored grant, so a token from before the standard
+      // scopes grew is replaced by pairing again.
+      const granted = session.permissions ?? session.scopes ?? [];
+      if (
+        session.authenticated &&
+        AuthStandardClientScopes.every((scope) => granted.includes(scope))
+      ) {
+        return { bootstrap, bearerToken };
+      }
+    }
+    const provisioned = yield* provisionDesktopSshEnvironment(
+      bridge,
+      input.target,
+      input.expectedEnvironmentId,
+    );
+    return { bootstrap: provisioned.bootstrap, bearerToken: provisioned.bearerToken };
+  },
+);
+
 const layerCapabilities = Layer.effectContext(
-  Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+  Effect.sync(() => {
     const presentation = ClientCapabilities.ClientPresentation.of({
       metadata: clientMetadata(),
     });
@@ -328,61 +363,7 @@ const layerCapabilities = Layer.effectContext(
             detail: "SSH environments are only available in the desktop app.",
           });
         }
-        if (input.target.manual && !bridge.sshConnectionCapabilities?.().manualProfiles)
-          return yield* new ConnectionBlockedError({
-            reason: "configuration",
-            detail:
-              "Update the desktop client to reconnect this manual SSH profile. Its saved source and authentication settings are unchanged.",
-          });
-        if (sshServerLifecycle.read(input.target).stopIntent)
-          return yield* new ConnectionBlockedError({
-            reason: "configuration",
-            detail:
-              "Remote server was explicitly stopped. Choose Start remote server to resume it.",
-          });
-        const operationId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
-        const bootstrap = yield* Effect.tryPromise({
-          try: () =>
-            bridge.ensureSshEnvironment(input.target, {
-              purpose: "reconnect",
-              expectedEnvironmentId: input.expectedEnvironmentId,
-              operationId,
-              issuePairingToken: true,
-            }),
-          catch: sshPreparationError,
-        }).pipe(
-          Effect.ensuring(
-            Effect.promise(
-              () => bridge.cancelSshSetup?.(input.target, operationId) ?? Promise.resolve(),
-            ).pipe(Effect.ignore),
-          ),
-        );
-        if (bootstrap.serverState === "stopped") {
-          sshServerLifecycle.observe(input.target, {
-            state: "stopped",
-            checkedAt: DateTime.formatIso(yield* DateTime.now),
-          });
-          return yield* new ConnectionBlockedError({
-            reason: "configuration",
-            detail:
-              "Remote server was explicitly stopped. Choose Start remote server to resume it.",
-          });
-        }
-        if (bootstrap.pairingToken === null) {
-          return yield* new ConnectionBlockedError({
-            reason: "authentication",
-            detail: "The SSH environment did not issue a pairing credential.",
-          });
-        }
-        const access = yield* Effect.tryPromise({
-          try: () =>
-            bridge.bootstrapSshBearerSession(bootstrap.httpBaseUrl, bootstrap.pairingToken!),
-          catch: sshPreparationError,
-        });
-        return {
-          bootstrap,
-          bearerToken: access.access_token,
-        };
+        return yield* prepareDesktopSshEnvironment(bridge, input);
       }),
       disconnect: Effect.fn("web.connectionPlatform.ssh.disconnect")(function* (target) {
         const bridge = window.desktopBridge;
