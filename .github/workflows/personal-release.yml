@@ -164,7 +164,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $sshSmoke = Join-Path $env:RUNNER_TEMP 'packaged-ssh-smoke'
           Expand-Archive -LiteralPath (Get-ChildItem release-cli/*.zip).FullName -DestinationPath $sshSmoke
-          node scripts/imaorise/ssh-packaged-smoke.ts (Get-ChildItem $sshSmoke -Recurse -Filter t3.exe).FullName $env:RELEASE_VERSION
+          node scripts/imaorise/ssh-packaged-smoke.ts (Get-ChildItem $sshSmoke -Recurse -Filter t3.exe).FullName $env:RELEASE_VERSION --standalone
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:T3CODE_DESKTOP_SSH_WINDOWS_RUNTIME = (Get-ChildItem release-cli/*.zip).FullName
           $runtime = (Get-ChildItem "$env:RUNNER_TEMP/wsl-runtime/*.tar.gz").FullName
