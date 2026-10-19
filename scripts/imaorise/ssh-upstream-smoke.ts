@@ -10,6 +10,7 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NetService from "@t3tools/shared/Net";
 import * as Effect from "effect/Effect";
 import * as Socket from "effect/socket/Socket";
+import * as HttpClient from "effect/http/HttpClient";
 import { OFFICIAL_SSH_SERVER_VERSION } from "../../packages/shared/src/cliRelease.ts";
 import { EnvironmentId } from "../../packages/contracts/src/index.ts";
 import * as SshAuth from "../../packages/ssh/src/auth.ts";
@@ -151,13 +152,11 @@ try {
           );
         }
         yield* manager.disconnectEnvironment(target);
-        const answered = yield* Effect.promise(() =>
-          fetch(`http://127.0.0.1:${remotePort}/.well-known/t3/environment`, {
-            signal: AbortSignal.timeout(2000),
-          }).then(
-            () => true,
-            () => false,
-          ),
+        const answered = yield* HttpClient.get(
+          `http://127.0.0.1:${remotePort}/.well-known/t3/environment`,
+        ).pipe(
+          Effect.timeout("2 seconds"),
+          Effect.match({ onSuccess: () => true, onFailure: () => false }),
         );
         if (answered)
           throw new Error("Removing the owned upstream connection left its server running");
