@@ -113,7 +113,7 @@ jobs:
       - name: Official upstream SSH compatibility
         timeout-minutes: 10
         run: |
-          docker run --rm --memory=3g --cpus=2 -e GITHUB_ACTIONS=true -e T3_UPSTREAM_SSH_FIXTURE=container -v "$PWD:/workspace" -w /workspace node:26-bookworm bash -lc 'apt-get update -qq && apt-get install -y --no-install-recommends openssh-server curl libatomic1 && timeout 420 node scripts/imaorise/ssh-upstream-smoke.ts'
+          docker run --rm --init --memory=3g --cpus=2 -e GITHUB_ACTIONS=true -e T3_UPSTREAM_SSH_FIXTURE=container -v "$PWD:/workspace" -w /workspace node:26-bookworm bash -lc 'apt-get update -qq && apt-get install -y --no-install-recommends openssh-server curl libatomic1 && timeout 420 node scripts/imaorise/ssh-upstream-smoke.ts'
       - uses: actions/upload-artifact@v4
         with:
           name: personal-wsl-runtime

@@ -10,7 +10,7 @@ jobs:
     timeout-minutes: 40
     container:
       image: node:26-bookworm
-      options: --memory=6g --memory-swap=6g --cpus=2
+      options: --init --memory=6g --memory-swap=6g --cpus=2
     env:
       NODE_OPTIONS: --max-old-space-size=3072
       GOMEMLIMIT: 5GiB

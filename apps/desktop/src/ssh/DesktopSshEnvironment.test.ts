@@ -171,8 +171,8 @@ it.effect(
       });
       assert.equal(remoteCalls, 0);
     }).pipe(
-      Effect.provide(NodeServices.layer),
-      Effect.provide(NodeHttpClient.layerUndici),
-      Effect.provide(NetService.layer),
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, NetService.layer),
+      ),
     ),
 );
