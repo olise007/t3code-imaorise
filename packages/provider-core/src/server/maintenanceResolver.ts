@@ -537,7 +537,9 @@ export const resolveHomebrewProviderMaintenance = Effect.fn("resolveHomebrewProv
     const kegBrewPath = path.join(homebrew.prefix, "bin", "brew");
     const brewPath = (yield* fileSystem.exists(kegBrewPath).pipe(Effect.orElseSucceed(() => false)))
       ? kegBrewPath
-      : yield* resolveCommandPath("brew", { env: context.env });
+      : yield* resolveCommandPath("brew", { env: context.env }).pipe(
+          Effect.catchTags({ CommandResolutionError: () => Effect.succeed(null) }),
+        );
     if (!brewPath) {
       return null;
     }
@@ -667,7 +669,9 @@ export const resolveProviderMaintenanceCapabilitiesEffect = Effect.fn(
   }
 
   const env = options?.env ?? (yield* readCommandLookupEnv);
-  const resolvedCommandPath = yield* resolveCommandPath(binaryPath, { env });
+  const resolvedCommandPath = yield* resolveCommandPath(binaryPath, { env }).pipe(
+    Effect.catchTags({ CommandResolutionError: () => Effect.succeed(null) }),
+  );
   if (!resolvedCommandPath) {
     return yield* resolver.resolve(null);
   }

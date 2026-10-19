@@ -975,11 +975,8 @@ describe("providerMaintenanceRunner", () => {
       assert.strictEqual(captured.length, 1);
       const call = captured[0];
       assert.ok(call, "expected the spawner to be invoked once");
-      assert.strictEqual(
-        call.command,
-        '^"C:\\fake\\npm\\npm.cmd^" ^"install^" ^"-g^" ^"@openai/codex@latest^"',
-      );
-      assert.deepEqual(call.args, []);
+      assert.strictEqual(call.command, '^"C:\\fake\\npm\\npm.cmd^"');
+      assert.deepEqual(call.args, ['^"install^"', '^"-g^"', '^"@openai/codex@latest^"']);
       assert.strictEqual(call.shell, true);
       assert.strictEqual(result.providers[0]?.updateState?.status, "succeeded");
     }).pipe(
