@@ -1064,15 +1064,6 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId }) => environmentId,
       },
     }),
-    installSelectedProviders: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:provider:install-selected",
-      tag: WS_METHODS.providerInstallSelected,
-      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
-    }),
-    cancelSelectedProviderInstall: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:provider:install-selected-cancel",
-      tag: WS_METHODS.providerInstallSelectedCancel,
-    }),
     cancelProviderInstall: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:provider:install-cancel",
       tag: WS_METHODS.providerInstallCancel,
@@ -1204,10 +1195,6 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverUpdateProvider,
       scheduler: configScheduler,
       concurrency: configConcurrency,
-    }),
-    providerVersions: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:provider-versions",
-      tag: WS_METHODS.serverProviderVersions,
     }),
     updateServer,
     upsertKeybinding: createEnvironmentRpcCommand(runtime, {

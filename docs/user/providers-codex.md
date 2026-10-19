@@ -19,12 +19,6 @@ reconnect later.
 If remote sign-in cannot return automatically, paste the full URL from the final
 localhost page into the sign-in panel, even if that page could not load.
 
-If plan sharing is unavailable, open **Other sign-in methods** and choose native
-Codex browser login, device-code login, or existing CLI credentials. Browser and
-device sign-in run in the selected environment; Codex owns their credentials and
-refresh. A new method becomes active only after sign-in succeeds. Cancelling or
-failing sign-in leaves the previous account selection intact.
-
 ## Use an existing Codex login
 
 T3 Code can use your installed Codex and its existing login. Run `codex login`

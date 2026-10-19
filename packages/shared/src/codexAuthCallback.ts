@@ -1,10 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off - Native loopback helper uses a bounded Node listener with AbortController cleanup.
 import * as Schema from "effect/Schema";
 import * as NodeHttp from "node:http";
-import {
-  codexSignInAuthorizationRequest,
-  codexCallbackUrl,
-} from "@t3tools/shared/codexAuthHandoff";
+import { codexAuthorizationRequest, codexCallbackUrl } from "@t3tools/shared/codexAuthHandoff";
 
 export class CodexAuthCallbackError extends Schema.TaggedError<CodexAuthCallbackError>()(
   "CodexAuthCallbackError",
@@ -18,7 +15,7 @@ export class CodexAuthCallbackError extends Schema.TaggedError<CodexAuthCallback
 const listeners = new Map<string, AbortController>();
 
 export function cancelCodexAuthCallback(authorizationUrl: string) {
-  const { state } = codexSignInAuthorizationRequest(authorizationUrl);
+  const { state } = codexAuthorizationRequest(authorizationUrl);
   listeners.get(state)?.abort();
 }
 
@@ -29,7 +26,7 @@ export async function receiveCodexAuthCallback(
   destination?: (callbackUrl: string) => string,
   signal?: AbortSignal,
 ) {
-  const request = codexSignInAuthorizationRequest(authorizationUrl);
+  const request = codexAuthorizationRequest(authorizationUrl);
   if (listeners.has(request.state))
     throw new Error("This sign-in is already open on this computer.");
   const abort = new AbortController();
@@ -46,7 +43,6 @@ export async function receiveCodexAuthCallback(
         new URL(incoming.url ?? "/", request.redirectUri).toString(),
         request.redirectUri,
         request.state,
-        request.nativeClientId,
       ).toString();
       const returnUrl = destination?.(url);
       response.setHeader("cache-control", "no-store");

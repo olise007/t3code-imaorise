@@ -8,8 +8,6 @@ import * as ServerConfig from "../config.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import { makeCodexChatGptAuth } from "./CodexChatGptAuth.ts";
 import { materializeCodexShadowHome } from "./Drivers/CodexHomeLayout.ts";
-import { makeCodexNativeAuth, nativeCodexMethods } from "./CodexNativeAuth.ts";
-import * as Option from "effect/Option";
 
 export interface CodexEffectiveRuntime {
   readonly config: CodexSettings;
@@ -17,7 +15,6 @@ export interface CodexEffectiveRuntime {
   readonly revision: string;
 }
 const decodeSettings = Schema.decodeSync(CodexSettings);
-// Managed sign-in stores tokens in T3's credential store and never writes native auth.json.
 const managedCodexLaunchArgs = [
   'model_provider="openai_token_sharing"',
   'model_providers.openai_token_sharing.name="OpenAI Token Sharing"',
@@ -44,64 +41,30 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const homeLayout = yield* resolveManagedCodexHomeLayout(
-    config.stateDir,
-    options.instanceId,
-    options.config,
-  );
-  const homePath = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
-  const acquire = installation.acquire().pipe(
-    Effect.mapError(
-      () =>
-        new ProviderSetupError({
-          instanceId: options.instanceId,
-          operation: "install",
-          detail: "Set up managed Codex before starting a session.",
-        }),
-    ),
-  );
-  const native = yield* makeCodexNativeAuth({
-    instanceId: options.instanceId,
-    stateDir: config.stateDir,
-    homeLayout,
-    environment: options.environment,
-    executable: acquire,
-  });
   const auth = yield* makeCodexChatGptAuth({
     instanceId: options.instanceId,
     defaultReturnUrl: new URL(
       "/welcome",
       config.devUrl ?? `http://localhost:${config.port}`,
     ).toString(),
-    native: {
-      methods: nativeCodexMethods,
-      authenticate: native.authenticate,
-      logout: native.logout,
-    },
   });
+  const homeLayout = yield* resolveManagedCodexHomeLayout(
+    config.stateDir,
+    options.instanceId,
+    options.config,
+  );
+  const homePath = homeLayout.effectiveHomePath ?? homeLayout.sharedHomePath;
   const resolve = Effect.gen(function* () {
-    const executable = yield* acquire;
-    const selected = yield* native.read;
-    if (Option.isSome(selected)) {
-      const { mode, homePath } = selected.value;
-      if (mode === "disconnected")
-        return yield* new ProviderSetupError({
-          instanceId: options.instanceId,
-          operation: "auth",
-          detail: "Sign in with Codex before starting a session.",
-        });
-      return {
-        config: decodeSettings({
-          enabled: options.enabled,
-          setupMode: "managed",
-          binaryPath: executable.executablePath,
-          homePath,
-          launchArgs: native.nativeArgs(mode),
-        }),
-        environment: native.nativeEnvironment(homePath),
-        revision: `${mode}:${homePath}`,
-      } satisfies CodexEffectiveRuntime;
-    }
+    const executable = yield* installation.acquire().pipe(
+      Effect.mapError(
+        () =>
+          new ProviderSetupError({
+            instanceId: options.instanceId,
+            operation: "install",
+            detail: "Set up managed Codex before starting a session.",
+          }),
+      ),
+    );
     const credentials = yield* auth.access;
     yield* materializeCodexShadowHome(homeLayout).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
@@ -146,5 +109,5 @@ export const makeCodexManagedRuntime = Effect.fn("makeCodexManagedRuntime")(func
       revision: credentials.accessToken,
     } satisfies CodexEffectiveRuntime;
   });
-  return { auth, native, resolve, installation, homePath, homeLayout };
+  return { auth, resolve, installation, homePath, homeLayout };
 });

@@ -1,6 +1,6 @@
 import { ProviderSetupError, type CodexAuthCallbackInput } from "@t3tools/contracts";
 import { receiveCodexAuthCallback } from "@t3tools/shared/codexAuthCallback";
-import { codexSignInAuthorizationRequest } from "@t3tools/shared/codexAuthHandoff";
+import { codexAuthorizationRequest } from "@t3tools/shared/codexAuthHandoff";
 import { providerAuthReturnUrl } from "@t3tools/shared/providerAuthReturnUrl";
 import { isLoopbackHost } from "@t3tools/shared/preview";
 import * as Deferred from "effect/Deferred";
@@ -8,7 +8,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 
-/** A connected local environment receives the callback; only the remote environment owns tokens. */
 export function subscribeCodexAuthCallback(input: CodexAuthCallbackInput) {
   const failure = (error: unknown) =>
     new ProviderSetupError({
@@ -21,7 +20,7 @@ export function subscribeCodexAuthCallback(input: CodexAuthCallbackInput) {
     Effect.gen(function* () {
       const destination = yield* Effect.try({
         try: () => {
-          codexSignInAuthorizationRequest(input.authorizationUrl);
+          codexAuthorizationRequest(input.authorizationUrl);
           const destination = providerAuthReturnUrl(input.returnUrl);
           if (!destination || !isLoopbackHost(new URL(destination).hostname))
             throw new Error("The local sign-in receiver needs a local T3 Code return address.");

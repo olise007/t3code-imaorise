@@ -16,9 +16,8 @@ vi.mock("../../state/query", () => ({
       data: {
         phase: "idle",
         methods: [
-          { id: "codex-browser", name: "Codex browser login" },
-          { id: "codex-device", name: "Device-code login" },
-          { id: "codex-existing", name: "Existing CLI credentials" },
+          { id: "chatgpt", name: "Connect with ChatGPT" },
+          { id: "chatgpt-change-account", name: "Connect another ChatGPT account" },
         ],
       },
     };
@@ -69,7 +68,7 @@ vi.mock("../ui/select", () => ({
   ),
 }));
 it.each(["Windows server", "Linux server"])(
-  "offers native login on an existing Codex CLI in %s",
+  "routes supported ChatGPT sign-in to %s",
   async (environmentLabel) => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     fixture.start.mockResolvedValue({ _tag: "Success", value: {} });
@@ -106,10 +105,10 @@ it.each(["Windows server", "Linux server"])(
       expect(container.textContent).toContain(environmentLabel);
       expect(
         Array.from(container.querySelectorAll("option")).map((option) => option.textContent),
-      ).toContain("Device-code login");
+      ).toContain("Connect another ChatGPT account");
       await act(async () => {
         const select = container.querySelector("select")!;
-        select.value = "codex-device";
+        select.value = "chatgpt-change-account";
         select.dispatchEvent(new Event("change", { bubbles: true }));
       });
       await act(async () => {
@@ -119,7 +118,7 @@ it.each(["Windows server", "Linux server"])(
       });
       expect(fixture.start).toHaveBeenLastCalledWith({
         environmentId,
-        input: { instanceId, methodId: "codex-device" },
+        input: { instanceId, methodId: "chatgpt-change-account" },
       });
       await act(async () =>
         root.render(

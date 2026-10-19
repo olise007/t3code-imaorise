@@ -1,5 +1,3 @@
-import { useNavigate } from "@tanstack/react-router";
-
 import {
   createEnvironmentPairingCredential,
   revokeEnvironmentPairingLink,
@@ -1532,7 +1530,6 @@ function SavedBackendListRow({
   onRemove,
   onAddRoute,
 }: SavedBackendListRowProps) {
-  const navigate = useNavigate();
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const environmentId = environment.environmentId;
@@ -1716,17 +1713,6 @@ function SavedBackendListRow({
       }
       below={
         <>
-          {isConnected ? (
-            <Button
-              size="xs"
-              variant="ghost-muted"
-              onClick={() =>
-                void navigate({ to: "/settings/providers", search: { environmentId } })
-              }
-            >
-              Set up agents
-            </Button>
-          ) : null}
           {serverUpdateState.status !== "idle" ? (
             <div className="mt-1 max-w-md">
               <ServerUpdateProgress state={serverUpdateState} />

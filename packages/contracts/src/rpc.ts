@@ -40,9 +40,6 @@ import {
   ProviderInstallState,
   ProviderSetupError,
   ProviderSetupInput,
-  ProviderInstallSelectedInput,
-  ProviderInstallSelectedCancelInput,
-  ProviderInstallSelectedResult,
 } from "./providerSetup.ts";
 
 import {
@@ -301,8 +298,6 @@ import {
   ServerConfig,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
-  ProviderVersionCatalogInput,
-  ProviderVersionCatalog,
   ServerLifecycleStreamEvent,
   ServerRemoveKeybindingInput,
   ServerRemoveKeybindingResult,
@@ -425,8 +420,6 @@ export const WS_METHODS = {
   providerAuthLogout: "provider.auth.logout",
   providerAuthSubscribe: "provider.auth.subscribe",
   providerInstallStart: "provider.install.start",
-  providerInstallSelected: "provider.install.selected",
-  providerInstallSelectedCancel: "provider.install.selectedCancel",
   providerInstallCancel: "provider.install.cancel",
   providerInstallSubscribe: "provider.install.subscribe",
   providerInstallRemove: "provider.install.remove",
@@ -488,7 +481,6 @@ export const WS_METHODS = {
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
-  serverProviderVersions: "server.providerVersions",
   serverManageDesktopRuntime: "server.manageDesktopRuntime",
   serverUpdateServer: "server.updateServer",
   serverUpdateServerWithProgress: "server.updateServerWithProgress",
@@ -650,11 +642,6 @@ const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
   success: ServerProviderUpdatedPayload,
   error: Schema.Union([ServerProviderUpdateError, EnvironmentAuthorizationError]),
 });
-const WsServerProviderVersionsRpc = Rpc.make(WS_METHODS.serverProviderVersions, {
-  payload: ProviderVersionCatalogInput,
-  success: ProviderVersionCatalog,
-  error: Schema.Union([ServerProviderUpdateError, EnvironmentAuthorizationError]),
-});
 
 const ProviderSetupRpcError = Schema.Union([ProviderSetupError, EnvironmentAuthorizationError]);
 
@@ -727,16 +714,6 @@ const WsProviderAuthSubscribeRpc = Rpc.make(WS_METHODS.providerAuthSubscribe, {
 const WsProviderInstallStartRpc = Rpc.make(WS_METHODS.providerInstallStart, {
   payload: ProviderSetupInput,
   success: ProviderInstallState,
-  error: ProviderSetupRpcError,
-});
-const WsProviderInstallSelectedRpc = Rpc.make(WS_METHODS.providerInstallSelected, {
-  payload: ProviderInstallSelectedInput,
-  success: ProviderInstallSelectedResult,
-  error: ProviderSetupRpcError,
-});
-const WsProviderInstallSelectedCancelRpc = Rpc.make(WS_METHODS.providerInstallSelectedCancel, {
-  payload: ProviderInstallSelectedCancelInput,
-  success: Schema.Void,
   error: ProviderSetupRpcError,
 });
 
@@ -1921,7 +1898,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
-  WsServerProviderVersionsRpc,
   WsProviderConsumeResetCreditRpc,
   WsProviderAuthStartRpc,
   WsProviderAuthCompleteRpc,
@@ -1934,8 +1910,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderAuthLogoutRpc,
   WsProviderAuthSubscribeRpc,
   WsProviderInstallStartRpc,
-  WsProviderInstallSelectedRpc,
-  WsProviderInstallSelectedCancelRpc,
   WsProviderInstallCancelRpc,
   WsProviderInstallSubscribeRpc,
   WsProviderInstallRemoveRpc,

@@ -386,6 +386,57 @@ const makeHarnessFor = Effect.fnUntraced(function* (
   };
 });
 const makeHarness = makeHarnessFor(instanceId);
+
+it.effect.each(
+  (["native", "existing", "disconnected"] as const).flatMap((mode) =>
+    [false, true].map((declined) => ({ mode, declined })),
+  ),
+)("preserves retired selection until a successful sign-in: %j", ({ mode, declined }) =>
+  provision(
+    Effect.gen(function* () {
+      const h = yield* makeHarness;
+      yield* h.signIn;
+      const previous = Option.getOrThrow(yield* h.auth.read);
+      const legacy = { mode, homePath: "/fixture/legacy codex home" };
+      for (const [key, value] of h.bytes) {
+        const record = JSON.parse(new TextDecoder().decode(value));
+        if (Array.isArray(record.sessions))
+          h.bytes.set(
+            key,
+            new TextEncoder().encode(JSON.stringify({ ...record, nativeAuthSelection: legacy })),
+          );
+      }
+      const restored = yield* h.recreateAuth;
+      assert.isTrue(Option.isNone(yield* restored.read));
+      const state = yield* restored.controller.subscribe("owner").pipe(
+        Stream.filter((state) => state.methods !== undefined),
+        Stream.runHead,
+        Effect.map(Option.getOrThrow),
+      );
+      assert.isFalse(state.methods?.some((method) => method.id.startsWith("codex-")) ?? false);
+      assert.isTrue(h.storedRecords().some((record) => record.clientId === previous.clientId));
+      yield* restored.controller.logout(Effect.void);
+      assert.isTrue(Option.isNone(yield* restored.read));
+      assert.isTrue(h.storedRecords().some((record) => record.clientId === previous.clientId));
+      // Only a completed user-requested upstream sign-in supersedes the old selection.
+      if (declined) h.declineSharing();
+      yield* h.changeAccount;
+      yield* h.phase(declined ? "failed" : "succeeded");
+      assert.strictEqual(Option.isSome(yield* restored.read), !declined);
+      const saved = Array.from(h.bytes.values()).map((value) =>
+        JSON.parse(new TextDecoder().decode(value)),
+      );
+      const selection = saved.find((record) => Array.isArray(record.sessions))?.nativeAuthSelection;
+      if (declined) {
+        assert.deepEqual(selection, legacy);
+        assert.deepEqual(
+          h.storedRecords().find((record) => record.clientId === previous.clientId),
+          previous,
+        );
+      } else assert.isUndefined(selection);
+    }),
+  ),
+);
 const provision = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.scoped,

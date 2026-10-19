@@ -1029,21 +1029,6 @@ export function EnvironmentProviderSettings({
                 })
               }
             />
-          ) : mode === "editor" && row.driver === "codex" ? (
-            liveProvider?.setup?.canAuthenticate ? (
-              <ProviderAuthenticationSection
-                environmentId={environmentId}
-                environmentLabel={environmentLabel}
-                instanceId={row.instanceId}
-                provider={liveProvider}
-                readOnly={readOnly}
-              />
-            ) : (
-              <SettingsRow
-                title="Codex sign-in unavailable"
-                description="Reconnect or update this environment to manage native Codex sign-in. Existing CLI credentials remain available."
-              />
-            )
           ) : mode === "editor" &&
             !readOnly &&
             liveProvider &&

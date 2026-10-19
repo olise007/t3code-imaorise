@@ -55,10 +55,11 @@ const Record = Schema.Struct({
   issuer: Schema.optionalKey(Schema.String),
 });
 export type CodexChatGptCredentials = typeof Record.Type;
+// Retain retired selection metadata without enabling its authentication flows.
 const Sessions = Schema.Struct({
+  nativeAuthSelection: Schema.optionalKey(CodexNativeSelection),
   activeClientId: Schema.NullOr(Schema.String),
   sessions: Schema.Array(Record),
-  nativeAuthSelection: Schema.optionalKey(CodexNativeSelection),
 });
 const sessionLocks = new WeakMap<
   typeof ServerSecretStore.ServerSecretStore.Service,
@@ -108,14 +109,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   readonly defaultReturnUrl?: string;
   readonly reconnectProfile?: ChatGptReconnectProfile | null;
   readonly telemetryFlow?: "direct" | "primary_handoff";
-  readonly native?: {
-    readonly methods: readonly import("@t3tools/contracts").ProviderAuthMethod[];
-    readonly authenticate: (
-      method: string,
-      context: ProviderAuthFlowContext,
-    ) => Effect.Effect<void, ProviderSetupError, import("effect/Scope").Scope>;
-    readonly logout: Effect.Effect<boolean, ProviderSetupError>;
-  };
 }) {
   const analytics = yield* Effect.serviceOption(AnalyticsService.AnalyticsService);
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
@@ -240,8 +233,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       Effect.flatMap((json) => store.set(new TextEncoder().encode(json))),
       Effect.mapError(() => failure("save", "Could not save the ChatGPT connection.")),
     );
-  // Registration profiles outlive tokens, but belong only to this environment/instance.
-  // Accept the original single-registration record until it is next saved.
   const readRegistrations = registrationStore.get.pipe(
     Effect.mapError(() =>
       failure("registration", "Could not read the ChatGPT sign-in registration. Try again."),
@@ -280,7 +271,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
     const instanceIds = new Set<string>([options.instanceId]);
     if (Option.isSome(settings)) {
       const current = yield* settings.value.getSettings;
-      // Include the legacy default instance as well as explicitly configured ones.
       instanceIds.add("codex");
       for (const [id, instance] of Object.entries(current.providerInstances)) {
         if (instance.driver === "codex") instanceIds.add(id);
@@ -343,13 +333,12 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       ),
     );
   });
-  // The active pointer and all profile token sets change in one protected atomic write.
   const save = Effect.fnUntraced(function* (record: CodexChatGptCredentials, activate = true) {
     const saved = yield* readSessions;
+    const { nativeAuthSelection, ...shared } = saved;
     yield* writeSessions({
-      ...(!activate && saved.nativeAuthSelection
-        ? { nativeAuthSelection: saved.nativeAuthSelection }
-        : {}),
+      ...shared,
+      ...(!activate && nativeAuthSelection ? { nativeAuthSelection } : {}),
       activeClientId: activate ? record.clientId : saved.activeClientId,
       sessions: [
         ...saved.sessions.filter((session) => session.clientId !== record.clientId),
@@ -359,13 +348,9 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
   });
   const clearTokens = Effect.gen(function* () {
     const saved = yield* readSessions;
+    if (saved.nativeAuthSelection) return;
     const sessions = saved.sessions.filter((session) => session.clientId !== saved.activeClientId);
-    if (sessions.length || saved.nativeAuthSelection)
-      yield* writeSessions({
-        activeClientId: null,
-        sessions,
-        ...(saved.nativeAuthSelection ? { nativeAuthSelection: saved.nativeAuthSelection } : {}),
-      });
+    if (sessions.length) yield* writeSessions({ ...saved, activeClientId: null, sessions });
     else
       yield* store.remove.pipe(
         Effect.mapError(() =>
@@ -374,7 +359,6 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       );
   });
   const remove = Effect.gen(function* () {
-    // Promote legacy identity into the retained profile before deleting credentials.
     const credentials = yield* read;
     if (Option.isSome(credentials)) {
       const { clientId, subject, email } = credentials.value;
@@ -690,6 +674,8 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
             sharingEnabled: scopes.includes(REQUIRED_SCOPE),
             ...identity,
           });
+          // A declined replacement must not overwrite a retired profile's saved tokens.
+          if (!scopes.includes(REQUIRED_SCOPE) && (yield* readSessions).nativeAuthSelection) return;
           yield* save(
             {
               clientId,
@@ -795,7 +781,7 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
             earliestRefreshAt: earliest(tokens.earliest_refresh_at),
             scopes: tokens.scope.split(/\s+/).filter(Boolean),
           };
-          yield* save(record, false);
+          yield* save(record);
           if (!record.scopes.includes(REQUIRED_SCOPE))
             return yield* failure(
               "sharing",
@@ -872,15 +858,13 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
           description: "Register a connection for another ChatGPT account.",
           type: "agent" as const,
         },
-        // The wire contract allows 32 methods; advertise the 30 most recent profiles.
-        ...profiles.slice(0, options.native ? 27 : 30).map((profile) => ({
+        ...profiles.slice(0, 30).map((profile) => ({
           id: profileMethodId(profile.clientId),
           name: `${profile.email ?? "ChatGPT account"} · ${profile.connectionLabel}`,
           ...(profile.email ? { accountEmail: profile.email } : {}),
           description: "Reuse this account's original sign-in registration.",
           type: "agent" as const,
         })),
-        ...(options.native?.methods ?? []),
       ];
     }),
     authenticate: (method, context) =>
@@ -901,18 +885,11 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
                     : "default",
             callbackMode: context.callbackMode ?? "server",
           },
-          options.native?.methods.some((item) => item.id === method)
-            ? options.native.authenticate(method, context)
-            : authenticate(method, context),
+          authenticate(method, context),
           context.expiresAt,
         ),
       ),
-    logout: lock.withPermit(
-      Effect.gen(function* () {
-        if (options.native && (yield* options.native.logout)) return;
-        return yield* withSessionLock(logout);
-      }),
-    ),
+    logout: lock.withPermit(withSessionLock(logout)),
   });
   const reconnectProfile = Effect.fnUntraced(function* (methodId: string) {
     if (methodId === "chatgpt-change-account") return null;

@@ -148,6 +148,11 @@ try {
               const config = yield* session.initialConfig;
               if (config.environment.serverVersion !== OFFICIAL_SSH_SERVER_VERSION)
                 throw new Error("Application config mismatch");
+              // Exercise provider settings against the actual official server, without
+              // installing a CLI or starting a sign-in flow in this fixture.
+              const refreshed = yield* session.client["server.refreshProviders"]({});
+              if (!Array.isArray(refreshed.providers))
+                throw new Error("Official provider status refresh failed");
             }),
           );
         }

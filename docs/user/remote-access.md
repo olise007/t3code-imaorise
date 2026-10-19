@@ -190,8 +190,8 @@ use a pinned official server release independently of their beta version.
 
 Install and authenticate provider CLIs on the remote machine. Make them available
 to a non-interactive login shell or configure their executable paths in provider
-settings. After connecting, **Set up agents** opens provider settings for that
-environment; available actions depend on the server's capabilities.
+settings. After connecting, select that environment in **Settings → Providers**
+to manage the provider actions supported by its server.
 
 ```bash
 ssh user@example.com 'sh -lc "command -v claude codex"'

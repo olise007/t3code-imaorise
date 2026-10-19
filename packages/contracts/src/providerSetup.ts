@@ -13,18 +13,6 @@ export const ProviderSetupInput = Schema.Struct({
   instanceId: ProviderInstanceId,
 });
 export type ProviderSetupInput = typeof ProviderSetupInput.Type;
-export const ProviderInstallSelectedInput = Schema.Struct({
-  operationId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
-  recipeRevision: Schema.Literal(1),
-  drivers: Schema.Array(ProviderDriverKind).check(Schema.isMaxLength(32)),
-});
-export const ProviderInstallSelectedCancelInput = Schema.Struct({
-  operationId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
-});
-export const ProviderInstallSelectedResult = Schema.Array(
-  Schema.Struct({ driver: ProviderDriverKind, message: Schema.String }),
-);
-
 export const CodexAuthCallbackInput = Schema.Struct({
   authorizationUrl: Schema.String.check(Schema.isMaxLength(16_384)),
   returnUrl: Schema.String.check(Schema.isMaxLength(4_096)),

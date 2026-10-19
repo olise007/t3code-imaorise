@@ -14,7 +14,6 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";
-import { ProviderVersions } from "./ProviderVersions";
 import {
   AndroidSettingsEnvironmentFilter,
   SettingsEnvironmentFilterHeader,
@@ -41,13 +40,6 @@ export function SettingsProviderAccountsRouteScreen() {
           ) : (
             selectedTargets.map((environment) => (
               <SettingsSection key={environment.environmentId} title={environment.label}>
-                {environment.serverConfig.providers.map((provider) => (
-                  <ProviderVersions
-                    key={`versions:${provider.instanceId}`}
-                    environmentId={environment.environmentId}
-                    provider={provider}
-                  />
-                ))}
                 {environment.serverConfig.providers
                   .filter(
                     (provider) =>

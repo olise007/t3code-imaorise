@@ -58,7 +58,6 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import { protectProviderInstallation } from "./ProviderInstallationActivity.ts";
 import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -250,11 +249,7 @@ const buildEntry = <R>(input: {
         enabled: resolveEntryEnabled(entry, typedConfig),
         config: typedConfig,
       })
-      .pipe(
-        Effect.flatMap(protectProviderInstallation),
-        Effect.provideService(Scope.Scope, childScope),
-        Effect.result,
-      );
+      .pipe(Effect.provideService(Scope.Scope, childScope), Effect.result);
     if (createResult._tag === "Failure") {
       yield* Effect.logError("Failed to create provider instance", {
         instanceId: rawInstanceId,

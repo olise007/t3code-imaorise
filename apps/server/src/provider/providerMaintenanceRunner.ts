@@ -23,7 +23,6 @@ import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeUtil from "node:util";
-import { createSetupDetails, sanitizeSetupOutput } from "@t3tools/shared/setupDetails";
 
 import * as ModelManifest from "./ModelManifest.ts";
 import { resolveProviderCompatibility } from "./providerCompatibility.ts";
@@ -32,6 +31,7 @@ import { makeProviderMaintenanceCommandCoordinator } from "./providerMaintenance
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makeTargetedProviderUpdateAction,
+  resolveLatestProviderUpdateAction,
   resolveLatestProviderVersion,
   type ProviderMaintenanceCommandAction,
 } from "@t3tools/provider-core/server/maintenanceResolver";
@@ -66,10 +66,6 @@ export interface ProviderMaintenanceRunnerShape {
           readonly provider: ProviderDriverKind;
           readonly instanceId?: ProviderInstanceId | undefined;
           readonly targetVersion?: string | undefined;
-          readonly expectedIntegrity?: string | undefined;
-          /** Server-verified local archive; never accepted directly from an RPC payload. */
-          readonly verifiedPackageArchive?: string | undefined;
-          readonly allowUnknownCompatibility?: boolean | undefined;
         },
   ) => Effect.Effect<ServerProviderUpdatedPayload, ServerProviderUpdateError>;
 }
@@ -101,14 +97,10 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
   }) {
     const collectCommandResult = Effect.fn("ProviderMaintenanceRunner.collectCommandResult")(
       function* () {
-        // Resolve the executable for the host platform before spawning. On
-        // Windows the update tools are batch shims (e.g. `npm` -> `npm.cmd`),
-        // which a bare ChildProcess.spawn cannot launch (spawn npm ENOENT);
-        // resolveSpawnCommand finds the real `.cmd` and routes it through the
-        // shell. On Linux/macOS (incl. the WSL backend) this is a no-op.
-        const resolved = yield* resolveSpawnCommand(input.command, input.args, {
-          ...(input.env ? { env: input.env, extendEnv: true } : {}),
-        });
+        // On Windows the update tools are batch shims (e.g. `npm` -> `npm.cmd`), which a bare
+        // ChildProcess.spawn cannot launch (spawn npm ENOENT); resolveSpawnCommand finds the
+        // real `.cmd` and routes it through the shell.
+        const resolved = yield* resolveSpawnCommand(input.command, input.args);
         const child = yield* input.spawner
           .spawn(
             ChildProcess.make(resolved.command, resolved.args, {
@@ -127,7 +119,6 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
           );
         yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));
 
-        // Holds the newest output line not yet reported; the sampler takes it.
         const pendingProgress = yield* Ref.make<string | null>(null);
         const onProgress = input.onProgress;
         if (onProgress) {
@@ -142,14 +133,14 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
             return stream;
           }
           const decoder = new TextDecoder();
-          let latest: string | null = null;
-          const safeDetails = createSetupDetails((line) => {
-            latest = toProgressLine(line);
-          });
+          let partialLine = "";
           return stream.pipe(
             Stream.tap((chunk) => {
-              safeDetails.push(decoder.decode(chunk, { stream: true }));
-              const line = toProgressLine(safeDetails.preview() ?? "") ?? latest;
+              const split = splitOutputLines(partialLine, decoder.decode(chunk, { stream: true }));
+              partialLine = split.partialLine;
+              const line =
+                toProgressLine(split.partialLine) ??
+                split.lines.map(toProgressLine).findLast((value) => value !== null);
               return line ? Ref.set(pendingProgress, line) : Effect.void;
             }),
           );
@@ -210,10 +201,6 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
   },
 );
 
-/**
- * Split a chunk of installer output into complete lines. `\r` ends a line too,
- * so a redrawn progress bar reports its latest frame.
- */
 export function splitOutputLines(
   partialLine: string,
   text: string,
@@ -222,11 +209,8 @@ export function splitOutputLines(
   return { partialLine: (parts.pop() ?? "").slice(-UPDATE_PARTIAL_LINE_MAX_LENGTH), lines: parts };
 }
 
-/** Turn one raw output line into a short status message, or null if it has no text. */
 export function toProgressLine(line: string): string | null {
-  const text = sanitizeSetupOutput(NodeUtil.stripVTControlCharacters(line))
-    .replace(/\s+/g, " ")
-    .trim();
+  const text = NodeUtil.stripVTControlCharacters(line).replace(/\s+/g, " ").trim();
   if (text.length === 0) {
     return null;
   }
@@ -235,7 +219,6 @@ export function toProgressLine(line: string): string | null {
     : `${text.slice(0, UPDATE_PROGRESS_MAX_LENGTH - 1)}…`;
 }
 
-/** `claude update` reads better in a status line than the full executable path. */
 function describeCommand(command: ProviderMaintenanceCommandAction): string {
   const executable = command.executable.split(/[\\/]/).pop() || command.executable;
   return [executable, ...command.args].join(" ");
@@ -251,9 +234,7 @@ function truncateText(value: string, maxLength: number): string {
 }
 
 function commandOutput(result: ProviderMaintenanceCommandResult): string | null {
-  const output = trimNullable(
-    sanitizeSetupOutput([result.stderr, result.stdout].filter(Boolean).join("\n\n")),
-  );
+  const output = trimNullable([result.stderr, result.stdout].filter(Boolean).join("\n\n"));
   if (!output) {
     return null;
   }
@@ -265,12 +246,7 @@ function failureMessage(result: ProviderMaintenanceCommandResult): string {
     return "Update timed out.";
   }
   if (result.exitCode !== null && result.exitCode !== 0) {
-    const detail = (
-      sanitizeSetupOutput(result.stderr).trim() || sanitizeSetupOutput(result.stdout).trim()
-    )
-      .split("\n")
-      .findLast((line) => line.trim());
-    return `Update command exited with code ${result.exitCode}.${detail ? ` ${detail.slice(0, 300)}` : ""}`;
+    return `Update command exited with code ${result.exitCode}.`;
   }
   return "Update command failed.";
 }
@@ -404,8 +380,6 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
         ? defaultInstanceIdForDriver(provider)
         : (target.instanceId ?? defaultInstanceIdForDriver(provider));
     const targetVersion = typeof target === "string" ? undefined : target.targetVersion;
-    const reviewed = typeof target !== "string" && target.expectedIntegrity !== undefined;
-    const allowUnknown = typeof target !== "string" && target.allowUnknownCompatibility === true;
     const targetKey = `instance:${instanceId}`;
     const capabilities = yield* providerRegistry.getProviderMaintenanceCapabilitiesForInstance(
       instanceId,
@@ -491,33 +465,15 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                 provider,
                 candidateVersion,
               );
-            const targeted =
+            const command =
               targetVersion !== undefined
                 ? makeTargetedProviderUpdateAction(fresh, targetVersion)
-                : fresh.update;
-            const archive = typeof target === "string" ? undefined : target.verifiedPackageArchive;
-            const packageArgument =
-              fresh.packageName && targetVersion ? `${fresh.packageName}@${targetVersion}` : null;
-            const command =
-              targeted && archive && packageArgument
-                ? {
-                    ...targeted,
-                    args: targeted.args.map((argument) =>
-                      argument === packageArgument ? archive : argument,
-                    ),
-                  }
-                : targeted;
+                : resolveLatestProviderUpdateAction(fresh, candidateVersion);
             const rejected =
               targetVersion !== undefined
                 ? !command ||
-                  (reviewed
-                    ? advisory?.status === "broken" ||
-                      advisory?.status === "unsupported" ||
-                      (advisory?.status !== "supported" &&
-                        advisory?.status !== "graceful" &&
-                        !allowUnknown)
-                    : advisory?.recommendedVersion !== targetVersion ||
-                      advisory.status !== "supported")
+                  advisory?.recommendedVersion !== targetVersion ||
+                  advisory.status !== "supported"
                 : advisory?.status === "broken" || advisory?.status === "unsupported";
             if (rejected || !command) {
               return yield* finish(
@@ -559,10 +515,8 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               verified,
               instanceId,
             );
-            // "Succeeded" needs the provider to still be installed: an
-            // installer that exits 0 and leaves the binary missing is not a
-            // success. A missing version alone is not held against it, since
-            // Cursor's `about` probe can fail transiently on a healthy binary.
+            // A missing version alone is not held against it, since Cursor's `about` probe can
+            // fail transiently on a healthy binary.
             const couldNotVerify =
               verifiedProviders.length === 0 ||
               verifiedProviders.some(
