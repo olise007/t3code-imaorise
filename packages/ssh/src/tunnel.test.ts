@@ -1391,7 +1391,11 @@ server.listen(Number(flag("--port")), "127.0.0.1", () => {
         assert.equal((yield* runLaunch).serverKind, "managed");
         const replacementPid = yield* readManagedPid;
         assert.notEqual(replacementPid, previousPid);
-        assert.isFalse(isAlive(previousPid));
+        // Container PID 1 may leave an exited child unreaped after shutdown.
+        const previousState = yield* fs
+          .readFileString(`/proc/${previousPid}/stat`)
+          .pipe(Effect.orElseSucceed(() => ""));
+        assert.isTrue(!isAlive(previousPid) || /^\d+ \(.*\) Z /u.test(previousState));
         assert.isTrue(isAlive(replacementPid));
       }).pipe(Effect.provide(NodeServices.layer)),
     60_000,

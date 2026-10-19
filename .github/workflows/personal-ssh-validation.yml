@@ -28,6 +28,7 @@ jobs:
       - name: Focused upstream SSH and preserved settings regressions
         run: timeout 900 vp test run --maxWorkers 1 packages/ssh/src packages/contracts/src/ipc.test.ts apps/desktop/src/ssh apps/desktop/src/ipc/methods/sshEnvironment.test.ts apps/web/src/connection/platform.test.ts apps/web/src/state/desktopSshHosts.test.ts apps/web/src/components/settings/ConnectionsSettings.logic.test.ts apps/web/src/components/settings/EnvironmentRoutesList.test.tsx apps/web/src/components/settings/WslSettings.test.tsx apps/web/src/components/settings/ProviderAuthenticationSection.codex.test.tsx apps/web/src/components/settings/ProviderVersions.test.tsx apps/web/src/versionSkew.test.ts apps/web/src/components/desktop/SshPasswordPromptDialog.test.tsx packages/client-runtime/src/connection
       - name: Official runtime SSH and application compatibility
+        if: ${{ !cancelled() }}
         timeout-minutes: 10
         run: |
           apt-get update -qq
@@ -47,12 +48,7 @@ jobs:
           vp exec tsc-rs --project scripts/tsconfig.ssh-setup.json --noEmit
       - name: Scoped lint
         if: ${{ !cancelled() }}
-        run: |
-          node --input-type=module - <<'JS'
-          import { execFileSync } from 'node:child_process';
-          const files = execFileSync('git', ['diff', '--name-only', '--diff-filter=ACMR', 'a21aeb787de1ea2c115b183af1e0d2af2b8666ef', 'HEAD'], {encoding:'utf8'}).trim().split('\n').filter(path => /\.[cm]?[jt]sx?$/.test(path));
-          execFileSync('vp', ['lint', ...files], {stdio:'inherit'});
-          JS
+        run: vp lint apps/desktop/src/ipc/DesktopIpcHandlers.ts apps/desktop/src/ipc/methods/sshEnvironment.test.ts apps/desktop/src/ipc/methods/sshEnvironment.ts apps/desktop/src/main.ts apps/desktop/src/preload.ts apps/desktop/src/ssh/DesktopSshEnvironment.test.ts apps/desktop/src/ssh/DesktopSshEnvironment.ts apps/desktop/src/ssh/DesktopSshPasswordPrompts.ts apps/web/src/components/desktop/SshPasswordPromptDialog.test.tsx apps/web/src/components/desktop/SshPasswordPromptDialog.tsx apps/web/src/components/settings/ConnectionsSettings.tsx apps/web/src/components/settings/EnvironmentRoutesList.test.tsx apps/web/src/components/settings/EnvironmentRoutesList.tsx apps/web/src/connection/onboarding.ts apps/web/src/connection/platform.test.ts apps/web/src/connection/platform.ts apps/web/src/versionSkew.test.ts apps/web/src/versionSkew.ts packages/client-runtime/src/connection/driver.test.ts packages/client-runtime/src/connection/driver.ts packages/contracts/src/ipc.test.ts packages/contracts/src/ipc.ts packages/shared/src/cliRelease.ts packages/ssh/src/auth.test.ts packages/ssh/src/auth.ts packages/ssh/src/command.test.ts packages/ssh/src/command.ts packages/ssh/src/config.test.ts packages/ssh/src/config.ts packages/ssh/src/runnerProcess.test.ts packages/ssh/src/tunnel.test.ts packages/ssh/src/tunnel.ts scripts/imaorise/ssh-upstream-smoke.ts
   windows:
     if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
     runs-on: windows-latest

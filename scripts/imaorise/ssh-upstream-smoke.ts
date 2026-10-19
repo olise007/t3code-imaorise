@@ -55,7 +55,10 @@ await NodeFSP.writeFile(
   config,
   `Port ${port}\nListenAddress 127.0.0.1\nHostKey ${hostKey}\nAuthorizedKeysFile ${authorized}\nStrictModes no\nUsePAM no\nPasswordAuthentication no\nLogLevel INFO\n`,
 );
-const sourceSsh = NodePath.join(NodeOS.homedir(), ".ssh");
+// OpenSSH reads the account's passwd home, even if Actions overrides HOME.
+const sourceHome = (await exec("getent", ["passwd", "0"])).stdout.trim().split(":")[5];
+if (!sourceHome) throw new Error("No fixture SSH account home.");
+const sourceSsh = NodePath.join(sourceHome, ".ssh");
 await NodeFSP.mkdir(sourceSsh, { recursive: true, mode: 0o700 });
 // The whole container is disposable; never run this against an installed client's SSH config.
 await NodeFSP.writeFile(
