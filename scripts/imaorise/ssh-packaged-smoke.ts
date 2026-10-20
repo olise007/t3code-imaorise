@@ -10,6 +10,7 @@ import * as NodeUtil from "node:util";
 
 import * as Effect from "effect/Effect";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { windowsServerJobScript } from "../../apps/server/src/cli/sshWindowsJob.ts";
 import { verifyTerminalIsolation } from "./ssh-terminal-lifecycle.ts";
 import { verifyPackagedPtyHelper } from "./packaged-pty-helper.ts";
 import { sanitizeSetupOutput } from "../../packages/shared/src/setupDetails.ts";
@@ -45,7 +46,12 @@ const run = (...args: string[]) =>
   exec(executable, args, { env: fixtureEnv, timeout: 90_000, maxBuffer: 2 * 1024 * 1024 });
 let server: NodeChildProcess.ChildProcess | undefined;
 let serverOutput = "";
+let stopRequested = false;
+const windows = HostProcess.Platform.defaultValue() === "win32";
 const startStandalone = async () => {
+  if (server && server.exitCode === null && server.signalCode === null)
+    throw new Error("Previous standalone owner is still running.");
+  stopRequested = false;
   const listener = NodeNet.createServer();
   await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
   const address = listener.address();
@@ -54,6 +60,38 @@ const startStandalone = async () => {
   await new Promise<void>((resolve) => listener.close(() => resolve()));
   const userdata = NodePath.join(fixtureEnv.T3CODE_HOME, "userdata");
   await NodeFSP.mkdir(userdata, { recursive: true });
+  await NodeFSP.rm(NodePath.join(userdata, "server-runtime.json"), { force: true });
+  const args = [
+    "serve",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    String(port),
+    "--no-browser",
+    "--base-dir",
+    fixtureEnv.T3CODE_HOME,
+  ];
+  let launcher = executable;
+  let launchArgs = args;
+  if (windows) {
+    const commandLine = [executable, ...args]
+      .map((arg) => `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, "$1$1")}"`)
+      .join(" ");
+    const jobFile = NodePath.join(home, "fixture-server-job.ps1");
+    await NodeFSP.writeFile(
+      jobFile,
+      `\uFEFF${windowsServerJobScript(executable, commandLine, home)}`,
+      { mode: 0o600 },
+    );
+    launcher = NodePath.join(
+      process.env.SystemRoot ?? "C:\\Windows",
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    launchArgs = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", jobFile];
+  }
   return await new Promise<{ remotePort: number }>((resolve, reject) => {
     let settled = false;
     const finish = (error?: Error) => {
@@ -68,7 +106,15 @@ const startStandalone = async () => {
       void NodeFSP.readFile(NodePath.join(userdata, "server-runtime.json"), "utf8")
         .then((text) => {
           const runtime = JSON.parse(text) as { pid?: number; port?: number };
-          if (runtime.pid === server?.pid && runtime.port === port) finish();
+          if (
+            runtime.port === port &&
+            Number.isInteger(runtime.pid) &&
+            runtime.pid! > 0 &&
+            (windows || runtime.pid === server?.pid) &&
+            server?.exitCode === null &&
+            server.signalCode === null
+          )
+            finish();
         })
         .catch(() => {
           /* A subsequent persisted-state event completes an atomic write. */
@@ -80,20 +126,14 @@ const startStandalone = async () => {
       () => finish(new Error("Standalone server did not persist readiness.")),
       60_000,
     );
-    server = NodeChildProcess.spawn(
-      executable,
-      [
-        "serve",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        String(port),
-        "--no-browser",
-        "--base-dir",
-        fixtureEnv.T3CODE_HOME,
-      ],
-      { env: fixtureEnv, stdio: ["ignore", "pipe", "pipe"] },
-    );
+    server = NodeChildProcess.spawn(launcher, launchArgs, {
+      env: fixtureEnv,
+      windowsHide: true,
+      stdio: [windows ? "pipe" : "ignore", "pipe", "pipe"],
+    });
+    server.stdin?.on("error", (error) => {
+      if (!stopRequested) finish(error);
+    });
     for (const stream of [server.stdout, server.stderr])
       stream?.on("data", (chunk) => {
         serverOutput = (serverOutput + String(chunk)).slice(-16_000);
@@ -105,16 +145,34 @@ const startStandalone = async () => {
     inspect();
   });
 };
-const stopStandalone = async () => {
-  if (!server?.pid || server.exitCode !== null || server.signalCode !== null) return;
-  const exited = new Promise<void>((resolve) => server!.once("exit", () => resolve()));
-  if (HostProcess.Platform.defaultValue() === "win32")
-    await exec("taskkill.exe", ["/pid", String(server.pid), "/t", "/f"], {
-      timeout: 10_000,
-      maxBuffer: 4096,
-    });
-  else server.kill("SIGTERM");
-  await exited;
+const stopStandalone = async (mode: "command" | "eof" = "command") => {
+  if (!server?.pid) return;
+  if (server.exitCode !== null || server.signalCode !== null) {
+    if (!stopRequested || (windows && server.exitCode !== 0))
+      throw new Error(
+        `Standalone owner exited unexpectedly (${server.exitCode ?? server.signalCode}).`,
+      );
+    return;
+  }
+  stopRequested = true;
+  const owner = server;
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      owner.off("exit", exited);
+      reject(new Error("Standalone owned server tree did not finish shutdown."));
+    }, 12_000);
+    const exited = (code: number | null, signal: NodeJS.Signals | null) => {
+      clearTimeout(timeout);
+      if (windows && code !== 0)
+        reject(new Error(`Owned Windows job failed shutdown (${code ?? signal}).`));
+      else resolve();
+    };
+    owner.once("exit", exited);
+    if (windows) {
+      if (mode === "eof") owner.stdin!.end();
+      else owner.stdin!.write("stop\n");
+    } else owner.kill("SIGTERM");
+  });
 };
 const start = async (resume: string) => {
   const result = await run("__ssh-helper", "managed-start", key, version, resume);
@@ -198,8 +256,29 @@ try {
       () => false,
     );
     if (answered) throw new Error("Stopped standalone fixture still answers.");
+    if (windows) {
+      const next = await startStandalone();
+      const descriptor = await fetch(
+        `http://127.0.0.1:${next.remotePort}/.well-known/t3/environment`,
+        { signal: AbortSignal.timeout(5000) },
+      );
+      if (
+        !descriptor.ok ||
+        ((await descriptor.json()) as { serverVersion: string }).serverVersion !== version
+      )
+        throw new Error("Restarted standalone fixture failed readiness.");
+      await stopStandalone("eof");
+      const stillAnswers = await fetch(
+        `http://127.0.0.1:${next.remotePort}/.well-known/t3/environment`,
+        { signal: AbortSignal.timeout(2000) },
+      ).then(
+        () => true,
+        () => false,
+      );
+      if (stillAnswers) throw new Error("EOF-stopped Windows job still answers.");
+    }
     console.log(
-      `Verified standalone Windows server, terminal isolation and owned shutdown for ${version}.`,
+      `Verified standalone Windows server, terminal isolation, explicit/EOF owned-tree shutdown for ${version}.`,
     );
   } else {
     await run("__ssh-helper", "managed-stop", key);
@@ -237,6 +316,10 @@ try {
       console.error(
         sanitizeSetupOutput(`Owned fixture stop failed: ${String(error)}`).slice(-2000),
       );
+      // Failure stays a failure. Closing this captured owner is only emergency
+      // cleanup: its kill-on-close Job Object prevents an orphaned server tree.
+      if (windows && server?.pid && server.exitCode === null && server.signalCode === null)
+        server.kill();
     },
   );
   try {
