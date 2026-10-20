@@ -12,6 +12,8 @@ import * as References from "effect/References";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
@@ -21,6 +23,60 @@ import * as DesktopUpdates from "./DesktopUpdates.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 
 describe("DesktopUpdates", () => {
+  it.effect("identifies every GitHub discovery request before selecting the updater feed", () => {
+    const harness = makeHarness({ env: { T3CODE_DESKTOP_MOCK_UPDATES: "false" } });
+    const requests: string[] = [];
+    const http = HttpClient.make((request) =>
+      Effect.sync(() => {
+        assert.equal(request.headers["user-agent"], "T3-Code-Imaorise-Updater");
+        assert.equal(request.headers.accept, "application/vnd.github+json");
+        requests.push(request.url);
+        const releases =
+          requests.length === 1
+            ? Array.from({ length: 100 }, () => ({ draft: false, prerelease: false, assets: [] }))
+            : [
+                {
+                  draft: false,
+                  prerelease: false,
+                  assets: [
+                    {
+                      name: "latest.yml",
+                      browser_download_url:
+                        "https://github.com/olise007/t3code-imaorise/releases/download/v2.0.1/latest.yml",
+                    },
+                    { name: "installer.exe" },
+                    { name: "t3-linux-x64.tar.gz" },
+                    { name: "BUILD-MANIFEST.json" },
+                    { name: "SHA256SUMS" },
+                  ],
+                },
+              ];
+        return HttpClientResponse.fromWeb(request, Response.json(releases));
+      }),
+    );
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.check("manual");
+        assert.deepEqual(
+          requests,
+          [1, 2].map(
+            (page) =>
+              `https://api.github.com/repos/olise007/t3code-imaorise/releases?per_page=100&page=${page}`,
+          ),
+        );
+        assert.equal(harness.checkCount(), 1);
+        assert.deepEqual(harness.feedUrls().at(-1), {
+          provider: "generic",
+          url: "https://github.com/olise007/t3code-imaorise/releases/download/v2.0.1/",
+        });
+      }),
+    ).pipe(
+      Effect.provide(harness.layer.pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, http)))),
+    );
+  });
+
   it("preserves complete causes for update poller and event failures", () => {
     const cause = Cause.combine(
       Cause.fail(new Error("updater failed")),

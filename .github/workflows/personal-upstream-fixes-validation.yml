@@ -32,6 +32,8 @@ jobs:
           apps/web/src/components/settings/WslSettings.test.tsx
           apps/desktop/src/wsl/DesktopWslPairing.test.ts
           apps/desktop/src/window/trayWindowPolicy.test.ts
+          apps/desktop/src/updates/DesktopUpdates.test.ts
+          apps/desktop/src/updates/personalDesktopRelease.test.ts
       - name: Terminal resize with the web WASM asset configuration
         working-directory: apps/web
         run: timeout 600 vp test run --project unit --maxWorkers 1 src/terminal/ghostty/surface.test.ts
@@ -40,6 +42,7 @@ jobs:
           vp lint apps/server/src/process/externalLauncher.ts apps/server/src/process/externalLauncher.test.ts
           apps/web/src/terminal/ghostty/surface.ts apps/web/src/terminal/ghostty/surface.test.ts
           packages/client-runtime/src/connection/registry.ts packages/client-runtime/src/connection/registry.test.ts
+          apps/desktop/src/updates/DesktopUpdates.ts apps/desktop/src/updates/DesktopUpdates.test.ts
       - name: Client runtime types
         run: timeout 600 vp run --filter @t3tools/client-runtime typecheck
       - name: Web types

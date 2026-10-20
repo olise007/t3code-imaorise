@@ -442,6 +442,12 @@ export const make = Effect.gen(function* () {
           for (let page = 1; page <= 5; page++) {
             const response = yield* releaseHttp.value.get(
               `https://api.github.com/repos/olise007/t3code-imaorise/releases?per_page=100&page=${page}`,
+              {
+                headers: {
+                  "User-Agent": "T3-Code-Imaorise-Updater",
+                  Accept: "application/vnd.github+json",
+                },
+              },
             );
             if (response.status !== 200)
               return yield* new DesktopUpdateEventHandlingError({
