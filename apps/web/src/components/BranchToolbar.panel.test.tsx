@@ -144,6 +144,8 @@ it.each([
 
 it("offers Add to another machine in the wide toolbar for a locked single-machine project", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const fontsDescriptor = Object.getOwnPropertyDescriptor(document, "fonts");
+  Object.defineProperty(document, "fonts", { configurable: true, value: new EventTarget() });
   state.addTargets = [{ environmentId: "other", label: "Other machine", machine: "server" }];
   const container = document.createElement("div");
   document.body.append(container);
@@ -191,6 +193,8 @@ it("offers Add to another machine in the wide toolbar for a locked single-machin
     container.remove();
     state.addTargets = [];
     state.openAddProject.mockClear();
+    if (fontsDescriptor) Object.defineProperty(document, "fonts", fontsDescriptor);
+    else Reflect.deleteProperty(document, "fonts");
     vi.unstubAllGlobals();
   }
 });
