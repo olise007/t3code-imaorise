@@ -24,7 +24,10 @@ import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 
 describe("DesktopUpdates", () => {
   it.effect("identifies every GitHub discovery request before selecting the updater feed", () => {
-    const harness = makeHarness({ env: { T3CODE_DESKTOP_MOCK_UPDATES: "false" } });
+    const harness = makeHarness({
+      env: { T3CODE_DESKTOP_MOCK_UPDATES: "false" },
+      appUpdateYml: "provider: github\nowner: olise007\nrepo: t3code-imaorise\n",
+    });
     const requests: string[] = [];
     const http = HttpClient.make((request) =>
       Effect.sync(() => {
@@ -58,6 +61,7 @@ describe("DesktopUpdates", () => {
       Effect.gen(function* () {
         const updates = yield* DesktopUpdates.DesktopUpdates;
         yield* updates.configure;
+        assert.equal((yield* updates.getState).enabled, true);
         yield* updates.check("manual");
         assert.deepEqual(
           requests,
@@ -73,7 +77,9 @@ describe("DesktopUpdates", () => {
         });
       }),
     ).pipe(
-      Effect.provide(harness.layer.pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, http)))),
+      Effect.provide(
+        harness.layer.pipe(Layer.provideMerge(Layer.succeed(HttpClient.HttpClient, http))),
+      ),
     );
   });
 

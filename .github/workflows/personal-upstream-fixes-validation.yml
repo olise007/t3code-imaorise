@@ -43,6 +43,7 @@ jobs:
           apps/web/src/terminal/ghostty/surface.ts apps/web/src/terminal/ghostty/surface.test.ts
           packages/client-runtime/src/connection/registry.ts packages/client-runtime/src/connection/registry.test.ts
           apps/desktop/src/updates/DesktopUpdates.ts apps/desktop/src/updates/DesktopUpdates.test.ts
+          apps/desktop/src/updates/updatesTestHarness.ts
       - name: Client runtime types
         run: timeout 600 vp run --filter @t3tools/client-runtime typecheck
       - name: Web types
