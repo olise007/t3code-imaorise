@@ -127,6 +127,7 @@ export class TailscaleStatusParseError extends Schema.TaggedError<TailscaleStatu
 }
 
 const TailscaleStatusSelf = Schema.Struct({
+  CapMap: Schema.optional(Schema.Unknown),
   DNSName: Schema.optional(Schema.Unknown),
   TailscaleIPs: Schema.optional(Schema.Unknown),
 });
@@ -138,6 +139,7 @@ const TailscaleStatusJson = Schema.Struct({
 export type TailscaleStatusJson = typeof TailscaleStatusJson.Type;
 
 export interface TailscaleStatus {
+  readonly httpsServeEnabled?: boolean | null;
   readonly magicDnsName: string | null;
   readonly tailnetIpv4Addresses: readonly string[];
 }
@@ -207,9 +209,14 @@ export const parseTailscaleStatus = (
         }
       }
 
+      const capMap = parsed.Self?.CapMap;
       return {
         magicDnsName: normalizeMagicDnsName(parsed),
         tailnetIpv4Addresses,
+        httpsServeEnabled:
+          typeof capMap === "object" && capMap !== null && !Array.isArray(capMap)
+            ? Object.hasOwn(capMap, "https")
+            : null,
       };
     }),
   );

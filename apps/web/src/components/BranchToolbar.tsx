@@ -734,8 +734,10 @@ export const BranchToolbar = memo(function BranchToolbar({
   );
 
   const addTargets = useAddProjectTargets(activeProject, availableEnvironments);
-  const onAddToMachine = (targetEnvironmentId: EnvironmentId | null) =>
-    openAddProjectToMachine({ projectRef: activeProjectRef, targetEnvironmentId });
+  const onAddToMachine = (targetEnvironmentId: EnvironmentId | null) => {
+    if (activeProjectRef)
+      openAddProjectToMachine({ projectRef: activeProjectRef, targetEnvironmentId });
+  };
   // A project on one machine still gets the picker when it can be added to another.
   const hasMultipleEnvironments = (availableEnvironments?.length ?? 0) > 1 || addTargets.length > 0;
   const showEnvironmentPicker = hasMultipleEnvironments && onEnvironmentChange !== undefined;
@@ -851,7 +853,7 @@ export const BranchToolbar = memo(function BranchToolbar({
                 envLocked={envLocked}
                 environmentId={environmentId}
                 availableEnvironments={availableEnvironments}
-                {...(showEnvironmentPicker && onEnvironmentChange ? { onEnvironmentChange } : {})}
+                {...(showEnvironmentPicker ? { onEnvironmentChange } : {})}
                 {...(addTargets.length > 0 ? { onAddToMachine: () => onAddToMachine(null) } : {})}
               />
 

@@ -27,7 +27,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ServerSettings,
-  ServerProvider,
+  type ServerProvider,
   type ServerProviderSlashCommand,
   type ServerSettings as ContractServerSettings,
 } from "@t3tools/contracts";
@@ -67,13 +67,10 @@ import type {
 } from "@t3tools/provider-core/server/driver";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
-import { ProviderDriverError } from "./Errors.ts";
 import {
   makeManualOnlyProviderMaintenanceCapabilities,
   makeProviderMaintenanceCapabilities,
 } from "@t3tools/provider-core/server/maintenanceResolver";
-const decodeServerProvider = Schema.decodeSync(ServerProvider);
-const encodeServerProvider = Schema.encodeSync(ServerProvider);
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
@@ -616,7 +613,7 @@ it.layer(
         );
 
         yield* Effect.yieldNow;
-        yield* TestClock.adjust("11 seconds");
+        yield* TestClock.adjust("21 seconds");
         yield* Effect.yieldNow;
 
         const status = yield* Fiber.join(statusFiber);

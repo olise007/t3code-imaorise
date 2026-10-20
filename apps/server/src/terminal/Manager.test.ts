@@ -2906,23 +2906,23 @@ it.layer(
       }),
   );
 
-  it.effect("fails resynchronization cleanly when the terminal was removed", () =>
+  it.effect("reports a closed terminal without a null recovery snapshot", () =>
     Effect.gen(function* () {
       const { manager } = yield* createManager();
       const input = openInput();
       const events: TerminalAttachStreamEvent[] = [];
-      const error = yield* manager
-        .resyncStream(
-          input,
-          (event) =>
-            Effect.sync(() => {
-              events.push(event);
-            }),
-          () => {},
-        )
-        .pipe(Effect.flip);
-      expect(error._tag).toBe("TerminalSessionLookupError");
-      expect(events).toEqual([]);
+      const stop = yield* manager.resyncStream(
+        input,
+        (event) =>
+          Effect.sync(() => {
+            events.push(event);
+          }),
+        () => {},
+      );
+      stop();
+      expect(events).toEqual([
+        { type: "closed", threadId: input.threadId, terminalId: input.terminalId },
+      ]);
     }),
   );
 

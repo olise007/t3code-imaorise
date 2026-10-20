@@ -2,7 +2,7 @@ import { BackgroundServerControls } from "./BackgroundServerControls";
 import { ConnectionTraceId } from "./ConnectionTraceId";
 import { SymbolView } from "../../components/AppSymbol";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
-import { hasSavedBearerRoute, hostFreezeNotice } from "@t3tools/client-runtime/connection";
+import { hostFreezeNotice } from "@t3tools/client-runtime/connection";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { type EnvironmentId, resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
@@ -58,7 +58,6 @@ export function ConnectionEnvironmentRow(props: {
   const presentation = useAtomValue(
     environmentPresentations.presentationAtom(props.environment.environmentId),
   );
-  const canRetry = presentation !== null && hasSavedBearerRoute(presentation.entry);
   const { diagnosis, state: connectionState } = useConnectionDiagnosis(
     props.environment.environmentId,
     presentation,

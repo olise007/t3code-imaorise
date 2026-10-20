@@ -561,7 +561,10 @@ describe("ManagedRelayClient", () => {
   it.effect("does not suggest network filtering for an HTTP server error", () => {
     const fetchFn = (() =>
       Promise.resolve(
-        new Response("Unavailable", { status: 503 }),
+        new Response("Unavailable", {
+          status: 503,
+          headers: { traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01" },
+        }),
       )) satisfies typeof globalThis.fetch;
     return Effect.gen(function* () {
       const relayClient = yield* ManagedRelay.ManagedRelayClient;
@@ -569,6 +572,7 @@ describe("ManagedRelayClient", () => {
         .listEnvironments({ clerkToken: "clerk-token" })
         .pipe(Effect.flip);
       expect(error.message).toBe("Could not list relay-managed environments.");
+      expect(error).toMatchObject({ status: 503, traceId: "0123456789abcdef0123456789abcdef" });
     }).pipe(Effect.provide(layerManagedRelayTest(fetchFn)));
   });
 

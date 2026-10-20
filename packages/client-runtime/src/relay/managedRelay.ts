@@ -149,6 +149,7 @@ export class ManagedRelayRequestFailedError extends Schema.TaggedError<ManagedRe
     transportFailed: Schema.optionalKey(Schema.Boolean),
     cause: Schema.Defect(),
     relayError: Schema.optional(RelayProtectedError),
+    status: Schema.optional(Schema.Number),
     traceId: Schema.optional(Schema.String),
   },
 ) {
@@ -306,6 +307,15 @@ export class ManagedRelayClient extends Context.Service<
 
 const isRelayProtectedError = Schema.is(RelayProtectedError);
 
+const TRACEPARENT_TRACE_ID = /^[\da-f]{2}-([\da-f]{32})-[\da-f]{16}-[\da-f]{2}$/i;
+
+function untypedResponseFields(cause: RelayHttpRequestError) {
+  const response = HttpClientError.isHttpClientError(cause) ? cause.response : undefined;
+  if (!response) return {};
+  const traceId = TRACEPARENT_TRACE_ID.exec(response.headers.traceparent ?? "")?.[1];
+  return { status: response.status, ...(traceId ? { traceId } : {}) };
+}
+
 function relayRequestError(action: ManagedRelayRequestAction) {
   return (cause: RelayHttpRequestError): ManagedRelayClientError =>
     new ManagedRelayRequestFailedError({
@@ -313,7 +323,9 @@ function relayRequestError(action: ManagedRelayRequestAction) {
       transportFailed:
         HttpClientError.isHttpClientError(cause) && cause.reason._tag === "TransportError",
       cause,
-      ...(isRelayProtectedError(cause) ? { relayError: cause, traceId: cause.traceId } : {}),
+      ...(isRelayProtectedError(cause)
+        ? { relayError: cause, traceId: cause.traceId }
+        : untypedResponseFields(cause)),
     });
 }
 

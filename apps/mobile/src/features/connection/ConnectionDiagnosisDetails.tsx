@@ -90,7 +90,6 @@ export function ConnectionDiagnosisDetails(props: {
       {moreInfoUrl ? (
         <Button
           label="More info"
-          icon="safari"
           tone="secondary"
           onPress={() => void Linking.openURL(moreInfoUrl).catch(() => undefined)}
         />
