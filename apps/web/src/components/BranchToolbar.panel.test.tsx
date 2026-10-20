@@ -7,9 +7,14 @@ import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   worktreePath: "/tmp/worktree" as string | null,
+  addTargets: [] as Array<{ environmentId: string; label: string; machine: string }>,
+  openAddProject: vi.fn(),
   showContextMenu: vi.fn().mockResolvedValue("copy-path"),
   writeTextToClipboard: vi.fn().mockResolvedValue(true),
 }));
+
+vi.mock("../hooks/useAddProjectTargets", () => ({ useAddProjectTargets: () => state.addTargets }));
+vi.mock("./AddProjectToMachineDialog", () => ({ openAddProjectToMachine: state.openAddProject }));
 
 vi.mock("../localApi", () => ({
   readLocalApi: () => ({ contextMenu: { show: state.showContextMenu } }),
@@ -136,3 +141,116 @@ it.each([
     }
   },
 );
+
+it("offers Add to another machine in the wide toolbar for a locked single-machine project", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.addTargets = [{ environmentId: "other", label: "Other machine", machine: "server" }];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () =>
+      root.render(
+        <BranchToolbar
+          environmentId={EnvironmentId.make("local")}
+          threadId={ThreadId.make("thread")}
+          showGitControls
+          envMode="local"
+          envLocked
+          startFromOrigin={false}
+          onStartFromOriginChange={vi.fn()}
+          onEnvModeChange={vi.fn()}
+          availableEnvironments={[
+            {
+              environmentId: EnvironmentId.make("local"),
+              projectId: ProjectId.make("project"),
+              label: "This machine",
+              isPrimary: true,
+              machine: "server",
+            },
+          ]}
+        />,
+      ),
+    );
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[role="combobox"][aria-label="Run on"]',
+    );
+    expect(trigger).not.toBeNull();
+    await act(async () => trigger!.click());
+    const add = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
+      option.textContent?.includes("Add to another machine"),
+    );
+    expect(add).toBeDefined();
+    await act(async () => add!.click());
+    expect(state.openAddProject).toHaveBeenCalledWith({
+      projectRef: { environmentId: "local", projectId: "project" },
+      targetEnvironmentId: null,
+    });
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    state.addTargets = [];
+    state.openAddProject.mockClear();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("keeps Add to another machine available in a locked combined row", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.addTargets = [{ environmentId: "other", label: "Other machine", machine: "server" }];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const switchEnvironment = vi.fn();
+  try {
+    await act(async () =>
+      root.render(
+        <BranchToolbar
+          layout="panel"
+          panelSection="workspace"
+          environmentId={EnvironmentId.make("local")}
+          threadId={ThreadId.make("thread")}
+          showGitControls
+          envMode="local"
+          envLocked
+          startFromOrigin={false}
+          onStartFromOriginChange={vi.fn()}
+          onEnvModeChange={vi.fn()}
+          onEnvironmentChange={switchEnvironment}
+          availableEnvironments={["local", "remote"].map((id) => ({
+            environmentId: EnvironmentId.make(id),
+            projectId: ProjectId.make("project"),
+            label: id,
+            isPrimary: id === "local",
+            machine: "server",
+          }))}
+        />,
+      ),
+    );
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    const remote = [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find(
+      (item) => item.textContent === "remote",
+    )!;
+    expect(remote.getAttribute("aria-disabled")).toBe("true");
+    const sub = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) =>
+      item.textContent?.includes("Add to another machine"),
+    )!;
+    await act(async () => sub.click());
+    const add = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) =>
+      item.textContent?.includes("Other machine"),
+    )!;
+    expect(add).toBeDefined();
+    await act(async () => add.click());
+    expect(state.openAddProject).toHaveBeenCalledWith({
+      projectRef: { environmentId: "local", projectId: "project" },
+      targetEnvironmentId: "other",
+    });
+    expect(switchEnvironment).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    state.addTargets = [];
+    state.openAddProject.mockClear();
+    vi.unstubAllGlobals();
+  }
+});

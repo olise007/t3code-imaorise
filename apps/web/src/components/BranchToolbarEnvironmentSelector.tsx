@@ -60,7 +60,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   // the glass seam joining it to the composer assumes a fixed strip height, so
   // a shorter label would drag the seam out of line whenever this label is the
   // only thing in the strip.
-  if (envLocked || (onEnvironmentChange === undefined && onAddToMachine === undefined)) {
+  if ((envLocked || onEnvironmentChange === undefined) && onAddToMachine === undefined) {
     const lockedRow = (
       <span
         className="inline-flex h-7 min-w-0 max-w-full items-center gap-1 border border-transparent px-1.75 font-normal text-muted-foreground/70 text-xs sm:h-6"
@@ -89,8 +89,8 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         value === "action:add-machine"
           ? onAddToMachine?.()
           : value === "auto"
-            ? onAutoEnvironment?.()
-            : onEnvironmentChange?.(value as EnvironmentId)
+            ? !envLocked && onAutoEnvironment?.()
+            : !envLocked && onEnvironmentChange?.(value as EnvironmentId)
       }
       items={environmentItems}
     >
@@ -126,8 +126,9 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
           {onAutoEnvironment && (
             <SelectItem
               value="auto"
+              disabled={envLocked}
               onClick={() => {
-                if (autoEnvironmentLabel) onAutoEnvironment?.();
+                if (!envLocked && autoEnvironmentLabel) onAutoEnvironment?.();
               }}
             >
               <span className="inline-flex items-center gap-1.5">
@@ -137,7 +138,14 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
             </SelectItem>
           )}
           {availableEnvironments.map((env) => (
-            <SelectItem key={env.environmentId} value={env.environmentId}>
+            <SelectItem
+              key={env.environmentId}
+              value={env.environmentId}
+              disabled={
+                (envLocked || onEnvironmentChange === undefined) &&
+                env.environmentId !== environmentId
+              }
+            >
               <span className="inline-flex items-center gap-1.5">
                 <EnvironmentMachineIcon kind={env.machine} className="size-3" />
                 {env.label}
