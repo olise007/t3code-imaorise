@@ -410,7 +410,6 @@ import { useEnvironmentQuery } from "../state/query";
 import { useEnvironmentScope } from "~/state/session";
 import {
   environmentServerConfigsAtom,
-  primaryServerAvailableEditorsAtom,
   primaryServerKeybindingsAtom,
   serverEnvironment,
 } from "../state/server";
@@ -4157,7 +4156,9 @@ export default function ChatView(props: ChatViewProps) {
   const scriptKeybindings =
     useAtomValue(serverEnvironment.configValueAtom(environmentId))?.keybindings ??
     DEFAULT_RESOLVED_KEYBINDINGS;
-  const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
+  const availableEditors =
+    useAtomValue(serverEnvironment.configValueAtom(activeThread?.environmentId ?? environmentId))
+      ?.availableEditors ?? [];
   const remoteOpenState = useRemoteOpenState(activeThread?.environmentId ?? environmentId);
   const showOpenInPicker = shouldShowOpenInPicker({
     activeProjectName: activeProject?.title,

@@ -15,8 +15,6 @@ export function shouldShowOpenInPicker(input: {
   ) {
     return true;
   }
-  // Remote environments get the picker in deep-link mode (or its explicit
-  // "no SSH route" state). Non-primary local backends (e.g. WSL) keep it
-  // hidden, matching pre-remote behavior.
+  // Local WSL backends also expose the picker, with separate Windows/WSL destinations.
   return input.remoteOpenMode !== "local-exec";
 }

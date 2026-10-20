@@ -138,3 +138,5 @@ export const SET_WSL_PAIRING_ROUTE_CHANNEL = "desktop:set-wsl-pairing-route";
 export const RESOLVE_SSH_SETUP_REVIEW_CHANNEL = "desktop:resolve-ssh-setup-review";
 export const CANCEL_SSH_SETUP_CHANNEL = "desktop:cancel-ssh-setup";
 export const FORGET_SSH_CREDENTIALS_CHANNEL = "desktop:forget-ssh-credentials";
+export const PROBE_LOCAL_EDITORS_CHANNEL = "desktop:probe-local-editors";
+export const OPEN_WSL_EDITOR_CHANNEL = "desktop:open-wsl-editor";

@@ -148,6 +148,7 @@ import {
   usePreferredEditor,
 } from "../editorPreferences";
 import { openInEditorMenuLabel } from "../editorLabels";
+import { useWslEditorDestinations } from "../wslEditorDestinations";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
@@ -259,7 +260,11 @@ export function canUseMarkdownFileShellActions(
   remoteOpenMode: RemoteOpenMode,
   isRemoteOpenResolved: boolean,
 ): boolean {
-  return environmentId !== null && isRemoteOpenResolved && remoteOpenMode === "local-exec";
+  return (
+    environmentId !== null &&
+    isRemoteOpenResolved &&
+    (remoteOpenMode === "local-exec" || remoteOpenMode === "local-wsl")
+  );
 }
 
 export function hasMarkdownFilePrimaryAction(input: {
@@ -2396,8 +2401,12 @@ function useChatMarkdownState({
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const projects = useProjects();
   const availableEditors = serverConfig?.availableEditors ?? [];
-  const [preferredEditor] = usePreferredEditor(availableEditors);
-  const preferredEditorMenuLabel = openInEditorMenuLabel(preferredEditor);
+  const [legacyPreferredEditor] = usePreferredEditor(availableEditors);
+  const wslEditors = useWslEditorDestinations(environmentId, availableEditors);
+  const preferredEditor = wslEditors.active
+    ? (wslEditors.preferred?.editor ?? null)
+    : legacyPreferredEditor;
+  const preferredEditorMenuLabel = `${openInEditorMenuLabel(preferredEditor)}${wslEditors.active && wslEditors.preferred ? ` · ${wslEditors.preferred.source === "windows" ? "Windows" : wslEditors.remote.mode === "local-wsl" ? wslEditors.remote.distro : "WSL"}` : ""}`;
   const openInPreferredEditor = useOpenInPreferredEditor(environmentId, availableEditors);
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, {
     reportFailure: false,

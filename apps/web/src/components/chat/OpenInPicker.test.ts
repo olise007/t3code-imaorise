@@ -66,6 +66,16 @@ describe("shouldShowOpenInPicker", () => {
 });
 
 describe("resolveOpenInOptions", () => {
+  it("shows the picker for a secondary local WSL environment", () => {
+    expect(
+      shouldShowOpenInPicker({
+        activeProjectName: "WSL project",
+        activeThreadEnvironmentId: EnvironmentId.make("wsl-env"),
+        primaryEnvironmentId: EnvironmentId.make("windows-env"),
+        remoteOpenMode: "local-wsl",
+      }),
+    ).toBe(true);
+  });
   it.each([
     ["MacIntel", "Finder", FinderIcon],
     ["Win32", "File Explorer", FileExplorerIcon],

@@ -163,6 +163,40 @@ export const EDITORS = [
 export const EditorId = Schema.Literals(EDITORS.map((e) => e.id));
 export type EditorId = typeof EditorId.Type;
 
+/** WSL support is independent of SSH support. Do not infer it from remoteScheme. */
+export const WSL_EDITOR_SCHEMES: Readonly<Partial<Record<EditorId, string>>> = {
+  vscode: "vscode",
+  "vscode-insiders": "vscode-insiders",
+  cursor: "cursor",
+};
+
+export const DesktopWslEditorInput = Schema.Struct({
+  backendId: TrimmedNonEmptyString,
+  distro: TrimmedNonEmptyString,
+  editor: EditorId,
+  path: TrimmedNonEmptyString,
+  line: Schema.optionalKey(Schema.Int),
+  column: Schema.optionalKey(Schema.Int),
+});
+export type DesktopWslEditorInput = typeof DesktopWslEditorInput.Type;
+
+/** Build a remote-WSL URI, never a Windows UNC workspace or SSH destination. */
+export function buildWslEditorUrl(input: DesktopWslEditorInput): string | undefined {
+  const scheme = WSL_EDITOR_SCHEMES[input.editor];
+  if (
+    !scheme ||
+    !/^[\w. -]+$/.test(input.distro) ||
+    !input.path.startsWith("/") ||
+    Array.from(input.path).some((character) => character.charCodeAt(0) < 32) ||
+    (input.line !== undefined && (!Number.isSafeInteger(input.line) || input.line < 1)) ||
+    (input.column !== undefined && (!Number.isSafeInteger(input.column) || input.column < 1))
+  )
+    return undefined;
+  const path = input.path.split("/").map(encodeURIComponent).join("/");
+  const position = input.line === undefined ? "" : `:${input.line}:${input.column ?? 1}`;
+  return `${scheme}://vscode-remote/wsl+${encodeURIComponent(input.distro)}${path}${position}`;
+}
+
 export const FileManagerRevealKind = Schema.Literals(["finder", "file-explorer", "files"]);
 export type FileManagerRevealKind = typeof FileManagerRevealKind.Type;
 

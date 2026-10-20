@@ -1,5 +1,7 @@
 import {
   ContextMenuItemSchema,
+  DesktopWslEditorInput,
+  buildWslEditorUrl,
   DesktopAppBrandingSchema,
   DesktopEnvironmentBootstrapSchema,
   DesktopThemeSchema,
@@ -15,15 +17,18 @@ import {
 } from "@t3tools/contracts";
 import { PROJECT_FAVICON_EXTENSIONS } from "@t3tools/shared/projectFavicon";
 import { resolveEditorCommand } from "@t3tools/shared/editor";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as DesktopBackendConfiguration from "../../backend/DesktopBackendConfiguration.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
+import { BackendInstanceId } from "../../backend/DesktopBackendManager.ts";
 import * as DesktopLocalEnvironmentAuth from "../../backend/DesktopLocalEnvironmentAuth.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
@@ -358,6 +363,76 @@ export const probeRemoteEditors = DesktopIpc.makeIpcMethod({
       }
     }
     return available;
+  }),
+});
+
+/** Probe all desktop installations; compatibility is evaluated separately by the picker. */
+export const probeLocalEditors = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PROBE_LOCAL_EDITORS_CHANNEL,
+  payload: Schema.Undefined,
+  result: Schema.Array(EditorId),
+  handler: Effect.fn("desktop.ipc.window.probeLocalEditors")(function* () {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    if (environment.platform !== "win32") return [];
+    const env = yield* HostProcess.Environment;
+    const available: EditorId[] = [];
+    for (const editor of EDITORS) {
+      if (editor.id !== "file-manager" && Option.isSome(yield* resolveEditorCommand(editor, env))) {
+        available.push(editor.id);
+      }
+    }
+    return available;
+  }),
+});
+
+/** Reject stale/default-distro guesses against the running backend, including WSL-only primary. */
+export const openWslEditor = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPEN_WSL_EDITOR_CHANNEL,
+  payload: DesktopWslEditorInput,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.openWslEditor")(function* (input) {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    if (environment.platform !== "win32") return false;
+    const pool = yield* DesktopBackendPool.DesktopBackendPool;
+    const instance = yield* pool.get(BackendInstanceId(input.backendId));
+    if (Option.isNone(instance)) return false;
+    const config = yield* instance.value.currentConfig;
+    const snapshot = yield* instance.value.snapshot;
+    if (!snapshot.ready || Option.isNone(config) || config.value.runningDistro !== input.distro) {
+      return false;
+    }
+    const editor = EDITORS.find((candidate) => candidate.id === input.editor);
+    const env = yield* HostProcess.Environment;
+    if (!editor) return false;
+    const command = yield* resolveEditorCommand(editor, env);
+    if (Option.isNone(command)) return false;
+    const url = buildWslEditorUrl(input);
+    if (url === undefined) return false;
+    // Use the detected installation and its flags (e.g. Cursor's --classic),
+    // rather than whichever version owns the OS protocol handler. The shared
+    // resolver also escapes argument arrays for Windows .cmd launchers.
+    const launch = yield* resolveSpawnCommand(
+      command.value.command,
+      [...command.value.baseArgs, "--open-url", url],
+      { env },
+    );
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    return yield* spawner
+      .spawn(
+        ChildProcess.make(launch.command, launch.args, {
+          shell: launch.shell,
+          detached: true,
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+        }),
+      )
+      .pipe(
+        Effect.flatMap((handle) => handle.unref),
+        Effect.as(true),
+        Effect.scoped,
+        Effect.orElseSucceed(() => false),
+      );
   }),
 });
 

@@ -1,0 +1,57 @@
+name: Personal WSL editor validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: WSL editor destinations and existing editor actions
+        run: >-
+          timeout 600 vp test run --maxWorkers 1
+          packages/contracts/src/wslEditor.test.ts
+          apps/desktop/src/ipc/methods/wslEditors.test.ts
+          apps/desktop/src/ipc/methods/window.test.ts
+          apps/web/src/wslEditorDestinations.test.ts
+          apps/web/src/wslEditorDestinations.hook.test.tsx
+          apps/web/src/editorPreferences.test.ts
+          apps/web/src/remoteOpen.test.ts
+          apps/web/src/fileContextMenu.test.ts
+          apps/web/src/components/chat/OpenInPicker.test.ts
+          apps/web/src/components/chat/OpenInPicker.test.tsx
+          apps/web/src/components/ChatMarkdown.permissions.test.tsx
+          apps/web/src/wslPaths.test.ts
+      - name: Scoped lint
+        run: >-
+          timeout 300 vp lint packages/contracts/src/editor.ts packages/contracts/src/ipc.ts
+          packages/contracts/src/wslEditor.test.ts
+          apps/desktop/src/ipc/methods/window.ts apps/desktop/src/ipc/methods/wslEditors.test.ts
+          apps/desktop/src/ipc/channels.ts apps/desktop/src/ipc/DesktopIpcHandlers.ts apps/desktop/src/preload.ts
+          apps/web/src/wslEditorDestinations.ts apps/web/src/wslEditorDestinations.test.ts
+          apps/web/src/wslEditorDestinations.hook.test.tsx apps/web/src/editorPreferences.ts
+          apps/web/src/editorPreferences.test.ts apps/web/src/remoteOpen.ts apps/web/src/remoteOpen.test.ts
+          apps/web/src/fileContextMenu.ts apps/web/src/fileContextMenu.test.ts
+          apps/web/src/components/chat/OpenInPicker.tsx apps/web/src/components/chat/OpenInPickerShortcut.ts
+          apps/web/src/components/chat/OpenInPicker.logic.ts apps/web/src/components/chat/OpenInPicker.test.ts
+          apps/web/src/components/chat/OpenInPicker.test.tsx apps/web/src/components/ChatMarkdown.tsx
+          apps/web/src/components/ChatView.tsx
+      - name: Web types
+        run: timeout 600 vp run --filter @t3tools/web typecheck
+      - name: Desktop types
+        run: timeout 600 vp run --filter @t3tools/desktop typecheck

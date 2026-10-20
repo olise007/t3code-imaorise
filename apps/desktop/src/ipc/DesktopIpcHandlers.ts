@@ -50,6 +50,8 @@ import {
   checkSystemPermission,
   pasteAsText,
   probeRemoteEditors,
+  probeLocalEditors,
+  openWslEditor,
   pickFolder,
   pickProjectFavicon,
   pickThemeFiles,
@@ -165,6 +167,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(checkSystemPermission);
   yield* ipc.handle(pasteAsText);
   yield* ipc.handle(probeRemoteEditors);
+  yield* ipc.handle(probeLocalEditors);
+  yield* ipc.handle(openWslEditor);
   yield* ipc.handle(getUpdateState);
   yield* ipc.handle(setUpdateChannel);
   yield* ipc.handle(downloadUpdate);

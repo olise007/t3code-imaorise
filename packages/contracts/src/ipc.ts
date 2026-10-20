@@ -12,7 +12,7 @@ import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } fr
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
-import type { EditorId } from "./editor.ts";
+import type { EditorId, DesktopWslEditorInput } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
 
 import type {
@@ -1430,6 +1430,10 @@ export interface DesktopBridge {
    * builds lack it; callers fall back to VS Code only.
    */
   probeRemoteEditors?: () => Promise<readonly EditorId[]>;
+  /** All detected desktop editors, independent of their remote capabilities. */
+  probeLocalEditors?: () => Promise<readonly EditorId[]>;
+  /** Validates the running local backend before launching a Windows WSL editor. */
+  openWslEditor?: (input: DesktopWslEditorInput) => Promise<boolean>;
   /** Present when the desktop shell can perform an ordered plain-text paste. */
   pasteAsText?: () => Promise<void>;
   onMenuAction: (listener: (action: string) => void) => () => void;

@@ -55,6 +55,30 @@ describe("resolveFileContextMenuAbsolutePath", () => {
 });
 
 describe("buildFileContextMenuItems", () => {
+  it("keeps Windows and WSL installations distinct and disables unsupported destinations", () => {
+    const items = buildFileContextMenuItems({
+      hasAbsolutePath: true,
+      capabilities: EMPTY_CAPABILITIES,
+      distro: "Debian",
+      destinations: [
+        { editor: "vscode", source: "windows", enabled: true },
+        {
+          editor: "webstorm",
+          source: "windows",
+          enabled: false,
+          reason: "No supported WSL launch integration",
+        },
+        { editor: "vscode", source: "wsl", enabled: true },
+      ],
+    });
+    const groups = items[0]?.children;
+    expect(groups?.map((entry) => entry.label)).toEqual(["Windows", "WSL · Debian"]);
+    expect(groups?.[0]?.children).toEqual([
+      expect.objectContaining({ id: "windows-editor:vscode", disabled: false }),
+      expect.objectContaining({ id: "windows-editor:webstorm", disabled: true }),
+    ]);
+    expect(groups?.[1]?.children?.[0]?.id).toBe("editor:vscode");
+  });
   it("offers open, reveal, and an open-with submenu when all are available", () => {
     const items = buildFileContextMenuItems({
       hasAbsolutePath: true,

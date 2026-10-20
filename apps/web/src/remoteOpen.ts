@@ -3,6 +3,8 @@
  * machine, "Open" must hand the OS a `vscode://vscode-remote/ssh-remote+…`
  * deep link (local editor connects over SSH) instead of exec'ing an editor
  * on the environment host.
+ * Local desktop-managed WSL backends are a separate destination: they combine
+ * Windows editor integrations with the distro's original executable launches.
  *
  * Host precedence: a desktop-SSH environment's real `~/.ssh/config` alias
  * beats server-advertised names; among advertised names the tailnet MagicDNS
@@ -14,12 +16,17 @@ import {
   type EditorId,
   type EnvironmentId,
   type RemoteOpenTarget,
+  type DesktopEnvironmentBootstrap,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { useEffect, useMemo, useState } from "react";
 
-import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
+import {
+  isDesktopLocalConnectionTarget,
+  desktopLocalBackendId,
+  readDesktopSecondaryBootstraps,
+} from "~/connection/desktopLocal";
 import { isLoopbackHostname } from "~/environments/primary/target";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useEnvironmentPresentation } from "~/state/presentation";
@@ -31,6 +38,7 @@ export interface RemoteOpenHost {
 
 export type RemoteOpenState =
   | { readonly mode: "local-exec" }
+  | { readonly mode: "local-wsl"; readonly backendId: string; readonly distro: string }
   | { readonly mode: "remote-links"; readonly host: RemoteOpenHost }
   | { readonly mode: "remote-unavailable" };
 
@@ -39,6 +47,7 @@ export type RemoteOpenMode = RemoteOpenState["mode"];
 export interface RemoteOpenResolution {
   readonly state: RemoteOpenState;
   readonly isResolved: boolean;
+  readonly connectionPhase?: string;
 }
 
 const LOCAL_EXEC: RemoteOpenState = { mode: "local-exec" };
@@ -64,8 +73,17 @@ export function resolveRemoteOpenState(input: {
   readonly remoteOpenTargets: ReadonlyArray<RemoteOpenTarget> | undefined;
   /** True when running inside the desktop app's renderer. */
   readonly isDesktopRenderer: boolean;
+  readonly localBootstraps?: ReadonlyArray<DesktopEnvironmentBootstrap>;
 }): RemoteOpenState {
   const { target } = input;
+  if (input.isDesktopRenderer && target !== null) {
+    const backendId =
+      target._tag === "PrimaryConnectionTarget" ? "primary" : desktopLocalBackendId(target);
+    const bootstrap = input.localBootstraps?.find((entry) => entry.id === backendId);
+    if (bootstrap?.runningDistro) {
+      return { mode: "local-wsl", backendId: bootstrap.id, distro: bootstrap.runningDistro };
+    }
+  }
   // No catalog entry: keep today's exec behavior rather than guessing.
   if (target === null) {
     return LOCAL_EXEC;
@@ -112,8 +130,10 @@ export function useRemoteOpenResolution(environmentId: EnvironmentId | null): Re
         sshAlias,
         remoteOpenTargets: presentation.serverConfig?.remoteOpenTargets,
         isDesktopRenderer: window.desktopBridge !== undefined,
+        localBootstraps: window.desktopBridge === undefined ? [] : readDesktopSecondaryBootstraps(),
       }),
       isResolved: true,
+      connectionPhase: presentation.connection.phase,
     };
   }, [presentation]);
 }

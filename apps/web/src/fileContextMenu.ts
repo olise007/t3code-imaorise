@@ -25,13 +25,18 @@ import { useAtomCommand } from "./state/use-atom-command";
 import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { toastManager } from "./components/ui/toast";
 import { useAtomValue } from "@effect/atom-react";
+import { useWslEditorDestinations, type EditorDestination } from "./wslEditorDestinations";
+import { useOpenInPreferredEditor } from "./editorPreferences";
 
 export type FileContextMenuAction =
   | "reveal-in-folder"
   | "open"
   /** Submenu parent; never the activated id. */
   | "open-with"
-  | `editor:${EditorId}`;
+  | "open-with-windows"
+  | "open-with-wsl"
+  | `editor:${EditorId}`
+  | `windows-editor:${EditorId}`;
 
 export interface FileContextMenuTarget {
   readonly environmentId: EnvironmentId | null;
@@ -72,13 +77,15 @@ export interface FileContextMenuCapabilities {
 }
 
 /**
- * Menu items for a resolved file, offering only what the environment's config
- * advertises: default-app open, reveal (with server-provided wording), and an
- * "Open with" submenu of detected editors. Empty when nothing can act.
+ * Menu items for a resolved file: environment-native open/reveal plus detected
+ * editors. Local WSL projects can supply distinct Windows and WSL destinations;
+ * unsupported Windows integrations stay visible but disabled.
  */
 export function buildFileContextMenuItems(input: {
   readonly hasAbsolutePath: boolean;
   readonly capabilities: FileContextMenuCapabilities;
+  readonly destinations?: readonly EditorDestination[];
+  readonly distro?: string;
 }): readonly ContextMenuItem<FileContextMenuAction>[] {
   // Without a resolvable absolute path nothing here can act on the file.
   if (!input.hasAbsolutePath) return [];
@@ -94,7 +101,22 @@ export function buildFileContextMenuItems(input: {
     });
   }
   const editorIds = input.capabilities.editorIds.filter((id) => id !== "file-manager");
-  if (editorIds.length > 0) {
+  if (input.destinations !== undefined) {
+    const groups = (["windows", "wsl"] as const)
+      .map((source): ContextMenuItem<FileContextMenuAction> => ({
+        id: source === "windows" ? "open-with-windows" : "open-with-wsl",
+        label: source === "windows" ? "Windows" : `WSL · ${input.distro ?? ""}`,
+        children: input
+          .destinations!.filter((entry) => entry.source === source)
+          .map((entry) => ({
+            id: `${source === "windows" ? "windows-editor" : "editor"}:${entry.editor}` as FileContextMenuAction,
+            label: `${EDITOR_LABEL_BY_ID.get(entry.editor) ?? entry.editor}${entry.reason ? ` — ${entry.reason}` : ""}`,
+            disabled: !entry.enabled,
+          })),
+      }))
+      .filter((group) => group.children!.length > 0);
+    if (groups.length > 0) items.push({ id: "open-with", label: "Open with", children: groups });
+  } else if (editorIds.length > 0) {
     items.push({
       id: "open-with",
       label: "Open with",
@@ -116,6 +138,11 @@ export function buildFileContextMenuItems(input: {
 export function useFileContextMenu(environmentId: EnvironmentId | null) {
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, { reportFailure: false });
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const wsl = useWslEditorDestinations(environmentId, serverConfig?.availableEditors ?? []);
+  const launchDestination = useOpenInPreferredEditor(
+    environmentId,
+    serverConfig?.availableEditors ?? [],
+  );
 
   return useMemo(() => {
     const availableEditors = serverConfig?.availableEditors ?? [];
@@ -142,6 +169,22 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
       if (absolutePath === null || environmentId === null) return;
 
       const reveal = action === "reveal-in-folder";
+      if (wsl.active && (action.startsWith("editor:") || action.startsWith("windows-editor:"))) {
+        const source = action.startsWith("windows-editor:") ? "windows" : "wsl";
+        const editor = action.slice(action.indexOf(":") + 1) as EditorId;
+        const entry = wsl.options.find(
+          (entry) => entry.source === source && entry.editor === editor && entry.enabled,
+        );
+        if (!entry) return;
+        const result = await launchDestination(absolutePath, entry);
+        if (result._tag === "Failure")
+          toastManager.add({
+            type: "error",
+            title: "Could not open editor",
+            description: "Check the editor's WSL integration and refresh the editor list.",
+          });
+        return;
+      }
       const editor =
         action === "open" || reveal
           ? ("file-manager" as const)
@@ -173,6 +216,12 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
       const items = buildFileContextMenuItems({
         hasAbsolutePath: resolveFileContextMenuAbsolutePath(target) !== null,
         capabilities,
+        ...(wsl.active
+          ? {
+              destinations: wsl.options,
+              distro: wsl.remote.mode === "local-wsl" ? wsl.remote.distro : "",
+            }
+          : {}),
       });
       if (items.length === 0 || api === undefined) return;
       const clicked = await api.contextMenu.show(items, position);
@@ -185,12 +234,18 @@ export function useFileContextMenu(environmentId: EnvironmentId | null) {
         buildFileContextMenuItems({
           hasAbsolutePath: resolveFileContextMenuAbsolutePath(target) !== null,
           capabilities,
+          ...(wsl.active
+            ? {
+                destinations: wsl.options,
+                distro: wsl.remote.mode === "local-wsl" ? wsl.remote.distro : "",
+              }
+            : {}),
         }),
       capabilities,
       activate,
       show,
     };
-  }, [environmentId, openInEditor, serverConfig]);
+  }, [environmentId, openInEditor, serverConfig, wsl, launchDestination]);
 }
 
 /** Convenience callback for onContextMenu handlers. */

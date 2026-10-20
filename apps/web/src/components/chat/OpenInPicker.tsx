@@ -8,7 +8,9 @@ import {
 } from "@t3tools/contracts";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
-import { usePreferredEditor } from "../../editorPreferences";
+import { usePreferredEditor, useOpenInPreferredEditor } from "../../editorPreferences";
+import { useWslEditorDestinations } from "../../wslEditorDestinations";
+import { toastManager } from "../ui/toast";
 import { editorLabelForPlatform } from "../../editorLabels";
 import {
   openRemoteEditorUrl,
@@ -24,6 +26,8 @@ import {
   Menu,
   MenuItem,
   MenuItemLabel,
+  MenuGroup,
+  MenuGroupLabel,
   MenuPopup,
   MenuShortcut,
   MenuSub,
@@ -228,7 +232,8 @@ export const OpenInPicker = memo(function OpenInPicker({
   const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
   const remote = useRemoteOpenState(environmentId);
   const canOperateHost = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
-  const isHostEditorDenied = remote.mode === "local-exec" && !canOperateHost;
+  const isHostEditorDenied =
+    (remote.mode === "local-exec" || remote.mode === "local-wsl") && !canOperateHost;
   const canOpenEditor = remote.mode !== "remote-unavailable" && !isHostEditorDenied;
   const [menuOpen, setMenuOpen] = useComposerMenuState(isHostEditorDenied);
   const remoteCapableEditors = useRemoteCapableEditors();
@@ -236,19 +241,66 @@ export const OpenInPicker = memo(function OpenInPicker({
   const environmentLabel = useEnvironment(environmentId)?.label ?? "this machine";
   // Remote mode ignores the server's PATH probe: what matters is what runs on
   // the viewing machine, which only the desktop app can probe.
-  const effectiveEditors = remote.mode === "local-exec" ? availableEditors : remoteCapableEditors;
-  const [preferredEditor, setPreferredEditor] = usePreferredEditor(effectiveEditors);
+  const effectiveEditors =
+    remote.mode === "local-exec" || remote.mode === "local-wsl"
+      ? availableEditors
+      : remoteCapableEditors;
+  const wsl = useWslEditorDestinations(environmentId, availableEditors);
+  const launchDestination = useOpenInPreferredEditor(environmentId, availableEditors);
+  const [legacyPreferredEditor, setPreferredEditor] = usePreferredEditor(effectiveEditors);
+  const preferredEditor = wsl.active ? (wsl.preferred?.editor ?? null) : legacyPreferredEditor;
   const options = useMemo(
-    () => resolveOpenInOptions(navigator.platform, effectiveEditors),
-    [effectiveEditors],
+    () =>
+      wsl.active
+        ? wsl.options.flatMap((destination) => {
+            const option = resolveOpenInOptions(
+              destination.source === "windows" ? "Win32" : "Linux",
+              [destination.editor],
+            )[0];
+            return option
+              ? [
+                  {
+                    ...option,
+                    source: destination.source,
+                    enabled: destination.enabled,
+                    reason: destination.reason,
+                  },
+                ]
+              : [];
+          })
+        : resolveOpenInOptions(navigator.platform, effectiveEditors).map((option) => ({
+            ...option,
+            source: "wsl" as const,
+            enabled: true,
+            reason: undefined,
+          })),
+    [effectiveEditors, wsl.active, wsl.options],
   );
-  const primaryOption = options.find(({ value }) => value === preferredEditor) ?? null;
+  const primaryOption =
+    options.find(
+      ({ value, source }) =>
+        value === preferredEditor && (!wsl.active || source === wsl.preferred?.source),
+    ) ?? null;
 
   const openInEditor = useCallback(
-    (editorId: EditorId | null) => {
+    (editorId: EditorId | null, source?: "windows" | "wsl") => {
       if (!openInCwd) return;
       const editor = editorId ?? preferredEditor;
       if (!editor) return;
+      if (wsl.active) {
+        void launchDestination(openInCwd, {
+          editor,
+          source: source ?? wsl.preferred?.source ?? "wsl",
+        }).then((result) => {
+          if (result._tag === "Failure")
+            toastManager.add({
+              type: "error",
+              title: "Could not open editor",
+              description: "Check the editor's WSL integration and refresh the editor list.",
+            });
+        });
+        return;
+      }
       if (remote.mode === "remote-unavailable") return;
       if (remote.mode === "remote-links") {
         const url = buildRemoteOpenUrl({
@@ -285,6 +337,8 @@ export const OpenInPicker = memo(function OpenInPicker({
       preferredEditor,
       remote,
       setPreferredEditor,
+      wsl,
+      launchDestination,
     ],
   );
 
@@ -300,7 +354,7 @@ export const OpenInPicker = memo(function OpenInPicker({
       if (!openInCwd) return;
       if (!preferredEditor) return;
       if (
-        remote.mode === "local-exec" &&
+        (remote.mode === "local-exec" || remote.mode === "local-wsl") &&
         !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
       )
         return;
@@ -320,7 +374,10 @@ export const OpenInPicker = memo(function OpenInPicker({
     preferredEditor,
     remote.mode,
   ]);
-  const primaryLabel = isPanel ? `Open in ${primaryOption?.label ?? "editor"}` : "Open";
+  const selectedLabel = primaryOption
+    ? `${primaryOption.label}${wsl.active ? ` · ${primaryOption.source === "windows" ? "Windows" : wsl.remote.mode === "local-wsl" ? wsl.remote.distro : "WSL"}` : ""}`
+    : "editor";
+  const primaryLabel = isPanel ? `Open in ${selectedLabel}` : "Open";
 
   const editorItems = (
     <>
@@ -330,25 +387,72 @@ export const OpenInPicker = memo(function OpenInPicker({
         </MenuItem>
       ) : (
         <>
-          {options.length === 0 && (
+          {options.length === 0 && !wsl.loading && (
             <MenuItem density={presentation === "menu" ? "touch" : "default"} disabled>
               No installed editors found
             </MenuItem>
           )}
-          {options.map(({ label, Icon, value, kind }) => (
-            <MenuItem
-              density={presentation === "menu" ? "touch" : "default"}
-              disabled={!openInCwd || !canOpenEditor}
-              key={value}
-              onClick={() => openInEditor(value)}
-            >
-              <Icon aria-hidden="true" className={getOpenInIconClass(kind)} />
-              <MenuItemLabel>{label}</MenuItemLabel>
-              {value === preferredEditor && openFavoriteEditorShortcutLabel && (
-                <MenuShortcut>{openFavoriteEditorShortcutLabel}</MenuShortcut>
+          {(wsl.active ? (["windows", "wsl"] as const) : (["wsl"] as const)).map((group) => (
+            <MenuGroup key={group}>
+              {wsl.active && (
+                <MenuGroupLabel>
+                  {group === "windows"
+                    ? "Windows"
+                    : `WSL · ${wsl.remote.mode === "local-wsl" ? wsl.remote.distro : ""}`}
+                </MenuGroupLabel>
               )}
-            </MenuItem>
+              {wsl.active &&
+                !options.some((option) => option.source === group) &&
+                !(group === "windows" && wsl.loading) && (
+                  <MenuItem disabled>
+                    No {group === "windows" ? "Windows" : "WSL"} editors detected
+                  </MenuItem>
+                )}
+              {options
+                .filter((option) => option.source === group)
+                .map(({ label, Icon, value, kind, source, enabled, reason }) => (
+                  <MenuItem
+                    density={presentation === "menu" ? "touch" : "default"}
+                    disabled={!openInCwd || !canOpenEditor || !enabled}
+                    key={`${source}:${value}`}
+                    title={reason}
+                    onClick={() => openInEditor(value, source)}
+                  >
+                    <Icon aria-hidden="true" className={getOpenInIconClass(kind)} />
+                    <MenuItemLabel>
+                      {label}
+                      {reason ? ` — ${reason}` : ""}
+                    </MenuItemLabel>
+                    {value === preferredEditor &&
+                      (!wsl.active || source === wsl.preferred?.source) &&
+                      openFavoriteEditorShortcutLabel && (
+                        <MenuShortcut>{openFavoriteEditorShortcutLabel}</MenuShortcut>
+                      )}
+                  </MenuItem>
+                ))}
+            </MenuGroup>
           ))}
+          {wsl.active && (
+            <>
+              {wsl.loading && <MenuItem disabled>Detecting Windows editors…</MenuItem>}
+              {wsl.error && <MenuItem disabled>{wsl.error}</MenuItem>}
+              {availableEditors.includes("file-manager") && (
+                <MenuItem
+                  disabled={!openInCwd || !canOpenEditor}
+                  onClick={() => {
+                    if (openInCwd)
+                      void openInEditorMutation({
+                        environmentId,
+                        input: { editor: "file-manager", cwd: openInCwd },
+                      });
+                  }}
+                >
+                  Open in file manager
+                </MenuItem>
+              )}
+              <MenuItem onClick={() => wsl.refresh()}>Refresh editors</MenuItem>
+            </>
+          )}
           {remote.mode === "remote-links" && !remoteHintSeen && (
             <MenuItem density={presentation === "menu" ? "touch" : "default"} disabled>
               Opens over SSH. Needs your key on {environmentLabel}
@@ -369,7 +473,7 @@ export const OpenInPicker = memo(function OpenInPicker({
             onClick={() => openInEditor(preferredEditor)}
           >
             <primaryOption.Icon className={cn("size-4", getOpenInIconClass(primaryOption.kind))} />
-            <MenuItemLabel>Open in {primaryOption.label}</MenuItemLabel>
+            <MenuItemLabel>Open in {selectedLabel}</MenuItemLabel>
             {openFavoriteEditorShortcutLabel && (
               <MenuShortcut>{openFavoriteEditorShortcutLabel}</MenuShortcut>
             )}
@@ -396,6 +500,7 @@ export const OpenInPicker = memo(function OpenInPicker({
     >
       <ThreadDetailsControl
         aria-label={compact ? "Open file in preferred editor" : primaryLabel}
+        title={`Open in ${selectedLabel}`}
         size={isPanel ? "sm" : "xs"}
         variant={isPanel ? "ghost" : "outline"}
         part="primary"

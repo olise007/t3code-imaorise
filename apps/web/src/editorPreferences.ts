@@ -4,6 +4,8 @@ import {
   EditorId,
   EnvironmentAuthorizationError,
   EnvironmentId,
+  buildRemoteOpenUrl,
+  REMOTE_CAPABLE_EDITOR_IDS,
 } from "@t3tools/contracts";
 import {
   mapAtomCommandResult,
@@ -18,8 +20,18 @@ import { useCallback, useMemo } from "react";
 import { shellEnvironment } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
 import { readEnvironmentScope } from "./state/session";
+import {
+  useWslEditorDestinations,
+  type EditorDestinationPreference,
+} from "./wslEditorDestinations";
+import { openRemoteEditorUrl } from "./remoteOpen";
 
 const LAST_EDITOR_KEY = "t3code:last-editor";
+
+export class EditorDestinationLaunchError extends Schema.TaggedError<EditorDestinationLaunchError>()(
+  "EditorDestinationLaunchError",
+  { message: Schema.String },
+) {}
 
 export class PreferredEditorEnvironmentRequiredError extends Schema.TaggedError<PreferredEditorEnvironmentRequiredError>()(
   "PreferredEditorEnvironmentRequiredError",
@@ -65,10 +77,16 @@ function resolveAndPersistPreferredEditor(availableEditors: readonly EditorId[])
   return editor ?? null;
 }
 
+/**
+ * Launch through the selected environment's destination. Recheck host grants at
+ * invocation time; persist WSL choices only after the launcher accepts them.
+ * Returns structured failures so file actions can keep their existing error UI.
+ */
 export function useOpenInPreferredEditor(
   environmentId: EnvironmentId | null,
   availableEditors: readonly EditorId[],
 ) {
+  const destinations = useWslEditorDestinations(environmentId, availableEditors);
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, {
     reportFailure: false,
   });
@@ -77,6 +95,7 @@ export function useOpenInPreferredEditor(
   return useCallback(
     async (
       targetPath: string,
+      destination?: EditorDestinationPreference,
     ): Promise<
       AtomCommandResult<
         EditorId,
@@ -84,6 +103,7 @@ export function useOpenInPreferredEditor(
         | PreferredEditorEnvironmentRequiredError
         | PreferredEditorUnavailableError
         | EnvironmentAuthorizationError
+        | EditorDestinationLaunchError
       >
     > => {
       if (environmentId === null) {
@@ -91,6 +111,44 @@ export function useOpenInPreferredEditor(
           Cause.fail(
             new PreferredEditorEnvironmentRequiredError({
               targetPath,
+            }),
+          ),
+        );
+      }
+      if (destinations.remote.mode === "remote-links") {
+        try {
+          const installed = (await window.desktopBridge?.probeRemoteEditors?.()) ?? [
+            "vscode" as const,
+          ];
+          const available = installed.filter((id) => REMOTE_CAPABLE_EDITOR_IDS.includes(id));
+          const saved = getLocalStorageItem(LAST_EDITOR_KEY, EditorId);
+          const editor = saved && available.includes(saved) ? saved : available[0];
+          const url = editor
+            ? buildRemoteOpenUrl({
+                editor,
+                host: destinations.remote.host.host,
+                absolutePath: targetPath,
+              })
+            : undefined;
+          if (!url || !editor || !(await openRemoteEditorUrl(url)))
+            throw new Error("The remote editor could not be opened on this device.");
+          setLocalStorageItem(LAST_EDITOR_KEY, editor, EditorId);
+          return AsyncResult.success(editor);
+        } catch (error) {
+          return AsyncResult.failure(
+            Cause.fail(
+              new EditorDestinationLaunchError({
+                message: error instanceof Error ? error.message : "Could not open remote editor.",
+              }),
+            ),
+          );
+        }
+      }
+      if (destinations.remote.mode === "remote-unavailable") {
+        return AsyncResult.failure(
+          Cause.fail(
+            new EditorDestinationLaunchError({
+              message: "No SSH route is available for this environment.",
             }),
           ),
         );
@@ -105,7 +163,61 @@ export function useOpenInPreferredEditor(
           ),
         );
       }
-      const editor = resolveAndPersistPreferredEditor(availableEditors);
+      const selected = destination ?? destinations.preferred;
+      if (
+        destinations.active &&
+        selected &&
+        !destinations.options.some(
+          (entry) =>
+            entry.enabled && entry.editor === selected.editor && entry.source === selected.source,
+        )
+      ) {
+        return AsyncResult.failure(
+          Cause.fail(
+            new EditorDestinationLaunchError({
+              message: "This editor destination is unavailable. Refresh the editor list.",
+            }),
+          ),
+        );
+      }
+      if (destinations.active && selected?.source === "windows") {
+        const remote = destinations.remote;
+        if (remote.mode !== "local-wsl")
+          return AsyncResult.failure(
+            Cause.fail(
+              new EditorDestinationLaunchError({ message: "WSL environment is unavailable." }),
+            ),
+          );
+        // Existing file-link paths encode line/column as a trailing suffix.
+        const position = /^(.*?):(\d+)(?::(\d+))?$/.exec(targetPath);
+        try {
+          const opened = await window.desktopBridge!.openWslEditor!({
+            backendId: remote.backendId,
+            distro: remote.distro,
+            editor: selected.editor,
+            path: position?.[1] ?? targetPath,
+            ...(position ? { line: Number(position[2]), column: Number(position[3] ?? 1) } : {}),
+          });
+          if (!opened)
+            throw new Error(
+              "The editor could not open this WSL project. Check the editor's WSL extension and refresh the editor list.",
+            );
+          destinations.remember(selected);
+          return AsyncResult.success(selected.editor);
+        } catch (error) {
+          return AsyncResult.failure(
+            Cause.fail(
+              new EditorDestinationLaunchError({
+                message:
+                  error instanceof Error ? error.message : "Could not open the Windows editor.",
+              }),
+            ),
+          );
+        }
+      }
+      const editor = destinations.active
+        ? (selected?.editor ?? null)
+        : resolveAndPersistPreferredEditor(availableEditors);
       if (!editor) {
         return AsyncResult.failure(
           Cause.fail(
@@ -124,8 +236,10 @@ export function useOpenInPreferredEditor(
           editor,
         },
       });
+      if (result._tag !== "Failure" && destinations.active && selected)
+        destinations.remember(selected);
       return mapAtomCommandResult(result, () => editor);
     },
-    [availableEditors, environmentId, openInEditor],
+    [availableEditors, environmentId, openInEditor, destinations],
   );
 }

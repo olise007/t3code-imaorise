@@ -25,6 +25,53 @@ const TAILSCALE_TARGETS = [
 ] as const;
 
 describe("resolveRemoteOpenState", () => {
+  it.each(["primary", "wsl:default", "wsl:Debian"])(
+    "uses concrete running distro metadata for %s",
+    (backendId) => {
+      const target =
+        backendId === "primary"
+          ? primaryTarget("http://172.20.0.2:3773")
+          : new BearerConnectionTarget({
+              environmentId,
+              connectionId: `local:${backendId}`,
+              label: "WSL",
+            });
+      expect(
+        resolveRemoteOpenState({
+          target,
+          sshAlias: null,
+          isDesktopRenderer: true,
+          remoteOpenTargets: [],
+          localBootstraps: [
+            {
+              id: backendId,
+              label: "WSL",
+              runningDistro: "Debian",
+              httpBaseUrl: null,
+              wsBaseUrl: null,
+            },
+          ],
+        }),
+      ).toEqual({ mode: "local-wsl", backendId, distro: "Debian" });
+      expect(
+        resolveRemoteOpenState({
+          target,
+          sshAlias: null,
+          isDesktopRenderer: true,
+          remoteOpenTargets: [],
+          localBootstraps: [
+            {
+              id: backendId,
+              label: "WSL",
+              runningDistro: null,
+              httpBaseUrl: null,
+              wsBaseUrl: null,
+            },
+          ],
+        }),
+      ).toEqual({ mode: "local-exec" });
+    },
+  );
   it("keeps exec behavior for a loopback primary target", () => {
     expect(
       resolveRemoteOpenState({

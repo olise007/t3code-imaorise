@@ -16,6 +16,8 @@ const state = vi.hoisted(() => ({
   markHintSeen: vi.fn(),
   keydown: null as ((event: KeyboardEvent) => void) | null,
   listeners: new Set<() => void>(),
+  wslActive: false,
+  launchDestination: vi.fn(),
 }));
 
 vi.mock("../../state/session", async () => {
@@ -38,10 +40,33 @@ vi.mock("../../state/shell", () => ({ shellEnvironment: { openInEditor: "openInE
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.run }));
 vi.mock("../../state/environments", () => ({ useEnvironment: () => ({ label: "Test host" }) }));
 vi.mock("../../editorPreferences", () => ({
+  useOpenInPreferredEditor: () => state.launchDestination,
   usePreferredEditor: (available: readonly EditorId[]) => [
     available[0] ?? null,
     state.setPreferred,
   ],
+}));
+vi.mock("../../wslEditorDestinations", () => ({
+  useWslEditorDestinations: () => ({
+    active: state.wslActive,
+    remote: state.remote,
+    options: state.wslActive
+      ? [
+          { editor: "vscode", source: "windows", enabled: true },
+          {
+            editor: "webstorm",
+            source: "windows",
+            enabled: false,
+            reason: "No supported WSL launch integration",
+          },
+          { editor: "vscode", source: "wsl", enabled: true },
+        ]
+      : [],
+    preferred: state.wslActive ? { editor: "vscode", source: "windows" } : null,
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+  }),
 }));
 vi.mock("../../remoteOpen", () => ({
   useRemoteOpenState: () => state.remote,
@@ -91,6 +116,8 @@ vi.mock("../ui/menu", () => ({
   MenuPopup: "section",
   MenuItem: "button",
   MenuItemLabel: "span",
+  MenuGroup: "div",
+  MenuGroupLabel: "span",
   MenuShortcut: "span",
 }));
 
@@ -104,6 +131,8 @@ let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
   state.allowed.clear();
   state.remote = { mode: "local-exec" };
+  state.wslActive = false;
+  state.launchDestination.mockReset().mockResolvedValue(AsyncResult.success("vscode"));
   state.run.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   state.openUrl.mockReset().mockResolvedValue(true);
   state.setPreferred.mockReset();
@@ -198,6 +227,34 @@ describe("host editor access", () => {
 });
 
 describe("client editor links", () => {
+  it("groups distinct Windows and WSL installations and dispatches their selected source", async () => {
+    state.remote = { mode: "local-wsl", backendId: "wsl:default", distro: "Debian" };
+    state.wslActive = true;
+    state.allowed.add(selected);
+    await renderPicker();
+    expect(
+      renderer!.root.findAllByType("span").some((node) => node.children.includes("Windows")),
+    ).toBe(true);
+    expect(
+      renderer!.root.findAllByType("span").some((node) => node.children.includes("WSL · Debian")),
+    ).toBe(true);
+    expect(
+      renderer!.root.findByProps({ title: "No supported WSL launch integration" }).props.disabled,
+    ).toBe(true);
+    const choices = renderer!.root
+      .findAllByType("button")
+      .filter((button) =>
+        button.findAllByType("span").some((span) => span.children.includes("VS Code")),
+      );
+    expect(choices).toHaveLength(2);
+    await act(async () => choices[0]!.props.onClick());
+    await act(async () => choices[1]!.props.onClick());
+    expect(state.launchDestination.mock.calls).toEqual([
+      ["/work/project", { editor: "vscode", source: "windows" }],
+      ["/work/project", { editor: "vscode", source: "wsl" }],
+    ]);
+    expect(state.run).not.toHaveBeenCalled();
+  });
   it("opens an SSH editor URL without host operate permission", async () => {
     state.remote = { mode: "remote-links", host: { kind: "ssh-alias", host: "test-host" } };
     await renderPicker();
