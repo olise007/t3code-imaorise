@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -106,7 +107,11 @@ function testLayer(backendId = "primary", ready = true) {
     waitForReady: () => Effect.succeed(ready),
   };
   return Layer.mergeAll(
-    Layer.mock(DesktopEnvironment, { platform: "win32" }),
+    NodeServices.layer,
+    Layer.succeed(
+      DesktopEnvironment,
+      DesktopEnvironment.of({ platform: "win32" } as DesktopEnvironment["Service"]),
+    ),
     DesktopBackendPool.layerTest([instance]),
     Layer.succeed(HostProcess.Environment, {}),
     // Argument construction is platform-independent; shared shell tests own .cmd escaping.
