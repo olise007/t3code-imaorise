@@ -365,32 +365,51 @@ export const make = Effect.gen(function* () {
       relativePath: input.relativePath,
     });
 
-    yield* fileSystem.makeDirectory(path.dirname(target.absolutePath), { recursive: true }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new WorkspaceFileSystemOperationError({
-            workspaceRoot: input.cwd,
-            relativePath: input.relativePath,
-            resolvedPath: target.absolutePath,
-            operationPath: path.dirname(target.absolutePath),
-            operation: "make-directory",
-            cause,
-          }),
-      ),
-    );
-    yield* fileSystem.writeFileString(target.absolutePath, input.contents).pipe(
-      Effect.mapError(
-        (cause) =>
-          new WorkspaceFileSystemOperationError({
-            workspaceRoot: input.cwd,
-            relativePath: input.relativePath,
-            resolvedPath: target.absolutePath,
-            operationPath: target.absolutePath,
-            operation: "write-file",
-            cause,
-          }),
-      ),
-    );
+    // Resolve the root once, then reject repository-controlled symlinks before
+    // creating anything. Atomic replacement also avoids following a file symlink
+    // or hard link supplied by the cloned repository.
+    yield* Effect.tryPromise({
+      try: async () => {
+        const root = await NodeFSP.realpath(input.cwd);
+        const parts = target.relativePath.split("/");
+        let parent = root;
+        for (const part of parts.slice(0, -1)) {
+          parent = path.join(parent, part);
+          await NodeFSP.mkdir(parent).catch((cause: NodeJS.ErrnoException) => {
+            if (cause.code !== "EEXIST") throw cause;
+          });
+          const stat = await NodeFSP.lstat(parent);
+          if (stat.isSymbolicLink() || !stat.isDirectory()) {
+            throw new Error("Refusing to write through a linked workspace directory.");
+          }
+        }
+        const destination = path.join(parent, parts.at(-1)!);
+        const existing = await NodeFSP.lstat(destination).catch((cause: NodeJS.ErrnoException) => {
+          if (cause.code === "ENOENT") return null;
+          throw cause;
+        });
+        if (existing && (!existing.isFile() || existing.isSymbolicLink())) {
+          throw new Error("Refusing to overwrite a linked or non-file workspace entry.");
+        }
+        const temporary = await NodeFSP.mkdtemp(path.join(parent, ".t3-write-"));
+        try {
+          const staged = path.join(temporary, "contents");
+          await NodeFSP.writeFile(staged, input.contents, { mode: existing?.mode ?? 0o600 });
+          await NodeFSP.rename(staged, destination);
+        } finally {
+          await NodeFSP.rm(temporary, { recursive: true, force: true });
+        }
+      },
+      catch: (cause) =>
+        new WorkspaceFileSystemOperationError({
+          workspaceRoot: input.cwd,
+          relativePath: input.relativePath,
+          resolvedPath: target.absolutePath,
+          operationPath: target.absolutePath,
+          operation: "write-file",
+          cause,
+        }),
+    });
     yield* workspaceEntries.refresh(input.cwd);
     return { relativePath: target.relativePath };
   });

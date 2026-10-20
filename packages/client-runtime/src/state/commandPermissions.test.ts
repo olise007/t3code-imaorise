@@ -7,6 +7,7 @@ import type { RpcSession } from "../rpc/session.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
+  AuthFilesystemWriteScope,
   AuthOrchestrationOperateScope,
   AuthEnvironmentMaintainScope,
   AuthSettingsWriteScope,
@@ -60,6 +61,27 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("requires a destination filesystem grant when copying project files", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const copying = createCommandPermissions(runtime, WS_METHODS.projectsWriteFile);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(copying.permissionAtom(env))).toBe(false);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(true),
+            scopes: [AuthFilesystemWriteScope],
+            permissions: [AuthFilesystemWriteScope],
+          }),
+        );
+        yield* copying.authorize(registry, env);
+        expect(registry.get(copying.permissionAtom(env))).toBe(true);
+        expect(registry.get(copying.permissionAtom(other))).toBe(false);
+      }),
+    ),
+  );
   it.effect("requires the destination source-control grant for commit previews", () =>
     Effect.scoped(
       Effect.gen(function* () {

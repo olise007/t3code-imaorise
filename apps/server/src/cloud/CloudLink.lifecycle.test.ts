@@ -41,6 +41,7 @@ import {
   RELAY_URL_SECRET,
 } from "./config.ts";
 import * as CloudLink from "./CloudLink.ts";
+import * as ConnectReachability from "./ConnectReachability.ts";
 import { consumeCloudReplayGuards } from "./CloudLink.ts";
 import { pendingServiceUpdateExists } from "./updateHandoff.ts";
 import {
@@ -153,6 +154,13 @@ describe("reconcileDesiredCloudLink", () => {
       expect(error._tag).toBe("CloudLinkAuthorizationMissingError");
     }).pipe(
       Effect.provide(CloudLink.layer),
+      Effect.provideService(
+        ConnectReachability.ConnectReachability,
+        ConnectReachability.ConnectReachability.of({
+          check: Effect.die("unused"),
+          latest: Effect.succeed(Option.none()),
+        }),
+      ),
       Effect.provideService(HttpServer.HttpServer, idleHttpServer),
       Effect.provideService(
         ServerConfigModule.ServerConfig,
@@ -176,6 +184,8 @@ describe("reconcileDesiredCloudLink", () => {
           recoveryRequests: Stream.empty,
           requestRecovery: () => Effect.void,
           tunnelConnected: Stream.empty,
+          inspectConnector: Effect.succeed(null),
+          readinessChanged: Stream.empty,
           withLinkStateLock: (effect) => effect,
         } satisfies ManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"]),
       ),
@@ -278,6 +288,13 @@ describe("releaseManagedTunnelOnShutdown", () => {
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       effect.pipe(
         Effect.provide(CloudLink.layer),
+        Effect.provideService(
+          ConnectReachability.ConnectReachability,
+          ConnectReachability.ConnectReachability.of({
+            check: Effect.die("unused"),
+            latest: Effect.succeed(Option.none()),
+          }),
+        ),
         Effect.provideService(HttpServer.HttpServer, idleHttpServer),
         Effect.provideService(ServerSecretStore.ServerSecretStore, harness.store),
         Effect.provideService(AgentAwarenessRelay.AgentAwarenessRelay, idleAwarenessRelay),
@@ -307,6 +324,8 @@ describe("releaseManagedTunnelOnShutdown", () => {
             recoveryRequests: Stream.empty,
             requestRecovery: () => Effect.void,
             tunnelConnected: Stream.empty,
+            inspectConnector: Effect.succeed(null),
+            readinessChanged: Stream.empty,
             withLinkStateLock: (effect) => effect,
           }),
         ),

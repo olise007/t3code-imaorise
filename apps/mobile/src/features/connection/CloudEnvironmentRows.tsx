@@ -26,6 +26,8 @@ import { serverEnvironment } from "../../state/server";
 import { availableCloudEnvironmentPresentation } from "../cloud/cloudEnvironmentPresentation";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { ConnectionStatusDot } from "./ConnectionStatusDot";
+import { useConnectionDiagnosis } from "./ConnectionDiagnosisDetails";
+import { environmentPresentations } from "../../state/presentation";
 import { type RelayEnvironmentView, useConnectionController } from "./useConnectionController";
 
 interface CloudEnvironmentRowsProps {
@@ -213,6 +215,10 @@ function ConnectedCloudEnvironmentRow(props: {
   );
   const unsupported = props.environment.connectionState === "unsupported";
   const enabled = props.environment.isEnabled && !unsupported;
+  const presentation = useAtomValue(
+    environmentPresentations.presentationAtom(props.environment.environmentId),
+  );
+  const { diagnosis } = useConnectionDiagnosis(props.environment.environmentId, presentation);
   // Discovery empties its map on every refresh; hold the last descriptor seen
   // so the glyph does not blink back to the generic one each time.
   const [lastDescriptor, setLastDescriptor] = useState(props.descriptor);
@@ -240,7 +246,11 @@ function ConnectedCloudEnvironmentRow(props: {
         onValueChange={props.onSetEnabled}
         onToggleError={props.onToggleError}
         disabled={unsupported}
-        {...(enabled || unsupported ? {} : { statusText: "Off" })}
+        {...(enabled || unsupported
+          ? diagnosis
+            ? { statusText: diagnosis.headline }
+            : {}
+          : { statusText: "Off" })}
         value={enabled}
       />
     </Pressable>

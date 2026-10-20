@@ -16,6 +16,7 @@ import {
   type PlatformConnectionRegistration,
   PrimaryConnectionRegistration,
   PrimaryConnectionTarget,
+  sshTargetKey,
   Wakeups,
 } from "@t3tools/client-runtime/connection";
 import { bootstrapRemoteBearerSession } from "@t3tools/client-runtime/authorization";
@@ -28,6 +29,7 @@ import {
   AuthStandardClientScopes,
   type DesktopBridge,
   type DesktopEnvironmentBootstrap,
+  type DesktopSshEnvironmentBootstrap,
   type DesktopSshEnvironmentTarget,
   type EnvironmentId,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
@@ -184,6 +186,36 @@ function sshPreparationError(cause: unknown) {
   });
 }
 
+// IPC keeps running after its waiter is interrupted. A retry can adopt only
+// that interrupted waiter's unfinished setup.
+const pendingSshSetups = new Map<
+  string,
+  { readonly promise: Promise<DesktopSshEnvironmentBootstrap>; signal: AbortSignal }
+>();
+
+const ensureDesktopSshEnvironment = (bridge: DesktopBridge, target: DesktopSshEnvironmentTarget) =>
+  Effect.tryPromise({
+    try: (signal) => {
+      const key = sshTargetKey(target);
+      const pending = pendingSshSetups.get(key);
+      if (pending?.signal.aborted) {
+        pending.signal = signal;
+        return pending.promise;
+      }
+      const setup = {
+        promise: bridge.ensureSshEnvironment(target, { issuePairingToken: true }),
+        signal,
+      };
+      pendingSshSetups.set(key, setup);
+      const forget = () => {
+        if (pendingSshSetups.get(key) === setup) pendingSshSetups.delete(key);
+      };
+      setup.promise.then(forget, forget);
+      return setup.promise;
+    },
+    catch: sshPreparationError,
+  });
+
 export const provisionDesktopSshEnvironment = Effect.fn(
   "web.connectionPlatform.ssh.provisionDesktop",
 )(function* (
@@ -197,13 +229,7 @@ export const provisionDesktopSshEnvironment = Effect.fn(
       reason: "configuration",
       detail: unsupportedReason,
     });
-  const bootstrap = yield* Effect.tryPromise({
-    try: () =>
-      bridge.ensureSshEnvironment(target, {
-        issuePairingToken: true,
-      }),
-    catch: sshPreparationError,
-  });
+  const bootstrap = yield* ensureDesktopSshEnvironment(bridge, target);
   const pairingToken = bootstrap.pairingToken;
   if (pairingToken === null) {
     return yield* new ConnectionBlockedError({
@@ -370,6 +396,7 @@ const layerCapabilities = Layer.effectContext(
         if (bridge === undefined) {
           return;
         }
+        pendingSshSetups.delete(sshTargetKey(target));
         yield* Effect.tryPromise({
           try: () => bridge.disconnectSshEnvironment(target),
           catch: (cause) =>
@@ -805,11 +832,11 @@ const layerEnvironmentOwnedDataCleanup = Layer.succeed(
 const layerRpcRequestObserver = Layer.succeed(
   EnvironmentRpcRequestObserver,
   EnvironmentRpcRequestObserver.of({
-    observe: ({ environmentId, method }) =>
+    observe: ({ environmentId, environmentLabel, method }) =>
       Effect.sync(() => {
         nextObservedRpcRequestId += 1;
         const requestId = `${environmentId}:${nextObservedRpcRequestId}`;
-        trackRpcRequestSent(requestId, method, `${method} · ${environmentId}`);
+        trackRpcRequestSent(requestId, method, `${method} · ${environmentLabel}`);
         return Effect.sync(() => {
           acknowledgeRpcRequest(requestId);
         });

@@ -159,3 +159,27 @@ export const withMetrics: {
   ): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   <A, E, R>(effect: Effect.Effect<A, E, R>, options: WithMetricsOptions): Effect.Effect<A, E, R>;
 } = dual(2, withMetricsImpl);
+
+// OTLP carries the unit, and Prometheus names the series by it: a unitless gauge gains `_ratio`.
+export const serverResidentBytes = Metric.gauge("t3_server_resident_bytes", {
+  description: "Resident memory of the server process.",
+  attributes: { unit: "By" },
+});
+
+export const serverHeapUsedBytes = Metric.gauge("t3_server_heap_used_bytes", {
+  description: "JavaScript heap in use by the server process.",
+  attributes: { unit: "By" },
+});
+
+export const serverCpuUtilization = Metric.gauge("t3_server_cpu_utilization", {
+  description: "CPU time the server used per second over the last sample; 1 is one full core.",
+});
+
+export const serverEventLoopUtilization = Metric.gauge("t3_server_event_loop_utilization", {
+  description: "Share of the last sample the server's event loop spent busy.",
+});
+
+export const serverEventLoopDelayMax = Metric.gauge("t3_server_event_loop_delay_max", {
+  description: "Longest event loop delay over the last sample.",
+  attributes: { unit: "ms" },
+});

@@ -341,6 +341,30 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
   });
 
   describe("writeFile", () => {
+    it.effect.skipIf(!symlinksSupported)(
+      "does not copy secrets through cloned file or parent symlinks",
+      () =>
+        Effect.gen(function* () {
+          const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const cwd = yield* makeTempDir;
+          const outside = yield* makeTempDir;
+          yield* writeTextFile(outside, ".env", "original");
+          yield* fs.symlink(path.join(outside, ".env"), path.join(cwd, ".env"));
+          const fileError = yield* service
+            .writeFile({ cwd, relativePath: ".env", contents: "secret" })
+            .pipe(Effect.flip);
+          expect(fileError).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFileSystemOperationError);
+          yield* fs.symlink(outside, path.join(cwd, "linked"));
+          const parentError = yield* service
+            .writeFile({ cwd, relativePath: "linked/.env", contents: "secret" })
+            .pipe(Effect.flip);
+          expect(parentError).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFileSystemOperationError);
+          expect(yield* fs.readFileString(path.join(outside, ".env"))).toBe("original");
+        }),
+    );
+
     it.effect("writes files relative to the workspace root", () =>
       Effect.gen(function* () {
         const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;

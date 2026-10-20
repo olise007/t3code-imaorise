@@ -15,8 +15,11 @@ import {
   disableTailscaleServe,
   ensureTailscaleServe,
   isTailscaleIpv4Address,
+  parseTailscaleExitNode,
   parseTailscaleMagicDnsName,
+  parseTailscaleSshEnabled,
   parseTailscaleStatus,
+  readTailscaleSshEnabled,
   readTailscaleStatus,
   TAILSCALE_STATUS_TIMEOUT,
   TailscaleCommandExitError,
@@ -153,6 +156,42 @@ describe("tailscale", () => {
     }),
   );
 
+  it.effect("names the exit node in use", () =>
+    Effect.gen(function* () {
+      const inUse = yield* parseTailscaleExitNode(
+        JSON.stringify({
+          ExitNodeStatus: { ID: "nX", Online: true, TailscaleIPs: ["100.101.102.103/32"] },
+          Peer: {
+            "nodekey:a": { HostName: "laptop", DNSName: "laptop.tail.ts.net.", ExitNode: false },
+            "nodekey:b": {
+              HostName: "raspberrypi",
+              DNSName: "home-pi.tail.ts.net.",
+              ExitNode: true,
+            },
+          },
+        }),
+      );
+      assert.deepEqual(inUse, { name: "home-pi", online: true });
+
+      const unnamed = yield* parseTailscaleExitNode(`{"ExitNodeStatus":{"Online":false}}`);
+      assert.deepEqual(unnamed, { name: null, online: false });
+
+      assert.equal(yield* parseTailscaleExitNode(tailscaleStatusJson), null);
+    }),
+  );
+
+  it.effect("reads the HTTPS serve capability from the status capability map", () =>
+    Effect.gen(function* () {
+      const enabled = yield* parseTailscaleStatus(
+        `{"Self":{"CapMap":{"https":null,"funnel":null}}}`,
+      );
+      assert.equal(enabled.httpsServeEnabled, true);
+
+      const disabled = yield* parseTailscaleStatus(`{"Self":{"CapMap":{"funnel":null}}}`);
+      assert.equal(disabled.httpsServeEnabled, false);
+    }),
+  );
+
   it.effect("preserves status decoding failures without exposing cause text", () =>
     Effect.gen(function* () {
       const error = yield* parseTailscaleStatus("{not-json").pipe(Effect.flip);
@@ -163,6 +202,26 @@ describe("tailscale", () => {
       assert.notInclude(error.message, String(error.cause));
     }),
   );
+
+  it.effect("reads Tailscale SSH enablement from local prefs", () => {
+    // `tailscale debug prefs` output, trimmed.
+    const prefsJson =
+      '{\n\t"ControlURL": "https://controlplane.tailscale.com",\n\t"RunSSH": true,\n\t"WantRunning": true\n}\n';
+    const layer = layerMockSpawner((command, args) => {
+      assert.equal(command, "tailscale");
+      assert.deepEqual(args, ["debug", "prefs"]);
+      return { stdout: prefsJson };
+    });
+
+    return Effect.gen(function* () {
+      assert.isTrue(yield* readTailscaleSshEnabled.pipe(Effect.provide(layer)));
+      assert.isFalse(yield* parseTailscaleSshEnabled('{"RunSSH":false,"WantRunning":true}'));
+      assert.isFalse(yield* parseTailscaleSshEnabled('{"RunSSH":true,"WantRunning":false}'));
+      assert.isFalse(yield* parseTailscaleSshEnabled("{}"));
+      const error = yield* parseTailscaleSshEnabled("{not-json").pipe(Effect.flip);
+      assert.instanceOf(error, TailscaleStatusParseError);
+    });
+  });
 
   it.effect("builds clean HTTPS base URLs", () =>
     Effect.sync(() => {

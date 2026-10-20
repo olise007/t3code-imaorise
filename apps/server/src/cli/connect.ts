@@ -1,6 +1,10 @@
 import {
+  AuthRelayReadScope,
   AuthRelayWriteScope,
+  type AuthEnvironmentScope,
+  type EnvironmentConnectReachability,
   EnvironmentHttpApi,
+  formatConnectReachable,
   type RelayClientInstallProgressEvent,
   type RelayClientInstallProgressStage,
 } from "@t3tools/contracts";
@@ -9,6 +13,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
@@ -29,6 +34,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as BootService from "../cloud/bootService.ts";
 import * as CliState from "../cloud/CliState.ts";
 import * as CliTokenManager from "../cloud/CliTokenManager.ts";
+import { formatReachabilityFailure } from "../cloud/ConnectReachability.ts";
 import { filterRelayResponse } from "../cloud/relayResponse.ts";
 import {
   CLOUD_LINKED_USER_ID,
@@ -144,6 +150,9 @@ interface CloudCliStatus {
   readonly relayUrl: string | null;
   readonly publishAgentActivity: boolean;
   readonly relayClient: RelayClient.RelayClientStatus;
+  readonly linkMode: CliState.CliDesiredLinkMode;
+  /** `null` when no server answered the live check, or none ran because no tunnel is wanted. */
+  readonly reachability: EnvironmentConnectReachability | null;
 }
 
 function formatRelayClientStatus(executable: RelayClient.RelayClientStatus): ReadonlyArray<string> {
@@ -197,8 +206,19 @@ function formatCloudStatus(status: CloudCliStatus, options?: { readonly json?: b
     `  Relay: ${status.relayUrl ?? "not provisioned"}`,
     `  Publish agent activity: ${status.publishAgentActivity ? "enabled" : "disabled"}`,
     ...formatRelayClientStatus(status.relayClient),
-    "",
-    "This is saved setup, not a live connection check. Check the background service with `t3 service status`.",
+    ...(!status.desired || status.linkMode !== "managed"
+      ? []
+      : status.reachability === null
+        ? [
+            "",
+            "No running server answered, so reachability was not checked. Check the background service with `t3 service status`.",
+          ]
+        : status.reachability.status === "reachable"
+          ? [
+              "",
+              `✓ Other devices can reach this machine · ${formatConnectReachable(status.reachability)}`,
+            ]
+          : ["", formatReachabilityFailure(status.reachability)]),
     ...(nextStep ? ["", `Next: ${nextStep}`] : []),
   ].join("\n");
 }
@@ -259,11 +279,12 @@ export const acquireRelayClientForLink = Effect.fn("cloud.cli.acquire_relay_clie
 
 const withCloudCliSessionToken = <A, E, R>(
   environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
+  scope: AuthEnvironmentScope,
   run: (token: string) => Effect.Effect<A, E, R>,
 ) =>
   Effect.acquireUseRelease(
     environmentAuth.issueSession({
-      scopes: [AuthRelayWriteScope],
+      scopes: [scope],
       subject: "cloud-cli",
       label: "t3 connect cli",
     }),
@@ -285,7 +306,7 @@ const runLiveCloudUnlink = Effect.fn("cloud.cli.run_live_unlink")(function* () {
 
   const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
   const result = yield* Effect.exit(
-    withCloudCliSessionToken(environmentAuth, (token) =>
+    withCloudCliSessionToken(environmentAuth, AuthRelayWriteScope, (token) =>
       HttpApiClient.make(EnvironmentHttpApi, {
         baseUrl: runtimeState.value.origin,
       }).pipe(
@@ -299,6 +320,73 @@ const runLiveCloudUnlink = Effect.fn("cloud.cli.run_live_unlink")(function* () {
   return Exit.isSuccess(result)
     ? ({ status: "succeeded" } satisfies LiveCloudActionResult)
     : ({ status: "failed", cause: result.cause } satisfies LiveCloudActionResult);
+});
+
+// One check probes the endpoint, the tunnel edge, and Tailscale, each with its own timeout.
+const CLOUD_CLI_REACHABILITY_TIMEOUT = Duration.seconds(30);
+const CLOUD_CLI_REACHABILITY_WAIT = Duration.seconds(60);
+const CLOUD_CLI_REACHABILITY_RETRY = Duration.seconds(5);
+
+/** Asks the running server to check T3 Connect now. `null` when no server answers. */
+const checkLiveReachability = Effect.fn("cloud.cli.check_live_reachability")(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+  if (Option.isNone(runtimeState)) return null;
+  const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+  return yield* withCloudCliSessionToken(environmentAuth, AuthRelayReadScope, (token) =>
+    HttpApiClient.make(EnvironmentHttpApi, { baseUrl: runtimeState.value.origin }).pipe(
+      Effect.flatMap((client) =>
+        client.connect.checkReachability({ headers: { authorization: `Bearer ${token}` } }),
+      ),
+      Effect.timeout(CLOUD_CLI_REACHABILITY_TIMEOUT),
+    ),
+  ).pipe(Effect.orElseSucceed(() => null));
+});
+
+function formatAlertBox(text: string): string {
+  const lines = text.split("\n");
+  const width = Math.max(...lines.map((line) => line.length));
+  const color = process.stdout.isTTY === true && !process.env.NO_COLOR;
+  const red = (line: string) => (color ? `\x1b[1;31m${line}\x1b[0m` : line);
+  return [
+    `┌${"─".repeat(width + 2)}┐`,
+    ...lines.map((line) => `│ ${line.padEnd(width)} │`),
+    `└${"─".repeat(width + 2)}┘`,
+  ]
+    .map(red)
+    .join("\n");
+}
+
+/**
+ * Waits for the server that `t3 connect` just started to prove other devices
+ * can reach it, so a broken tunnel fails setup instead of looking green.
+ */
+const waitForReachability = Effect.fn("cloud.cli.wait_for_reachability")(function* () {
+  yield* Console.log("\nChecking that other devices can reach this machine...");
+  const deadline =
+    (yield* Clock.currentTimeMillis) + Duration.toMillis(CLOUD_CLI_REACHABILITY_WAIT);
+  let last: EnvironmentConnectReachability | null = null;
+  while (true) {
+    last = (yield* checkLiveReachability()) ?? last;
+    if (last?.status === "reachable") {
+      yield* Console.log(
+        `✓ Other devices can reach this machine · ${formatConnectReachable(last)}`,
+      );
+      return;
+    }
+    if ((yield* Clock.currentTimeMillis) >= deadline) break;
+    yield* Effect.sleep(CLOUD_CLI_REACHABILITY_RETRY);
+  }
+  yield* Console.error(
+    formatAlertBox(
+      last === null
+        ? "✕ Could not check T3 Connect\n  The T3 server on this machine did not answer.\n  Fix: run `t3 service status`, then `t3 connect status`."
+        : formatReachabilityFailure(last),
+    ),
+  );
+  yield* Effect.sync(() => {
+    process.exitCode = 1;
+  });
 });
 
 type RelayUnlinkResult =
@@ -535,7 +623,9 @@ const connectStatusCommand = Command.make("status", {
   ...projectLocationFlags,
   json: jsonFlag,
 }).pipe(
-  Command.withDescription("Show persisted T3 Connect and relay client state."),
+  Command.withDescription(
+    "Show T3 Connect setup and check that other devices can reach this machine.",
+  ),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
@@ -543,18 +633,28 @@ const connectStatusCommand = Command.make("status", {
         const secrets = yield* ServerSecretStore.ServerSecretStore;
         const relayClient = yield* RelayClient.RelayClient;
         const tokens = yield* CliTokenManager.CloudCliTokenManager;
-        const [desired, authenticated, cloudUserId, relayUrl, publishAgentActivity, executable] =
-          yield* Effect.all(
-            [
-              CliState.readCliDesiredCloudLink,
-              tokens.hasCredential,
-              secrets.get(CLOUD_LINKED_USER_ID),
-              secrets.get(RELAY_URL_SECRET),
-              secrets.get(PUBLISH_AGENT_ACTIVITY_SECRET),
-              relayClient.resolve,
-            ],
-            { concurrency: "unbounded" },
-          );
+        const [
+          desired,
+          authenticated,
+          cloudUserId,
+          relayUrl,
+          publishAgentActivity,
+          executable,
+          linkMode,
+        ] = yield* Effect.all(
+          [
+            CliState.readCliDesiredCloudLink,
+            tokens.hasCredential,
+            secrets.get(CLOUD_LINKED_USER_ID),
+            secrets.get(RELAY_URL_SECRET),
+            secrets.get(PUBLISH_AGENT_ACTIVITY_SECRET),
+            relayClient.resolve,
+            CliState.readCliDesiredLinkMode,
+          ],
+          { concurrency: "unbounded" },
+        );
+        const reachability =
+          desired && linkMode === "managed" ? yield* checkLiveReachability() : null;
         const status: CloudCliStatus = {
           desired,
           authenticated,
@@ -565,6 +665,8 @@ const connectStatusCommand = Command.make("status", {
             Option.isSome(publishAgentActivity) ? bytesToString(publishAgentActivity.value) : null,
           ),
           relayClient: executable,
+          linkMode,
+          reachability,
         };
         yield* Console.log(formatCloudStatus(status, { json: flags.json }));
       }),
@@ -686,6 +788,7 @@ export const connectCommand = Command.make("connect", {
         // show how to run the server manually.
         const background = yield* recoverServiceOnboardingOffer(offerServiceDuringOnboarding);
         if (background) {
+          yield* waitForReachability();
           const platform = yield* HostProcess.Platform;
           yield* Console.log(
             platform === "darwin"
