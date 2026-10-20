@@ -1,15 +1,16 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off globalTimers:off - Native disposable hosted ownership fixture.
-import * as ChildProcess from "node:child_process";
-import * as FS from "node:fs/promises";
-import * as OS from "node:os";
-import * as Path from "node:path";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { windowsServerJobScript } from "../../apps/server/src/cli/sshWindowsJob.ts";
 
-if (process.env.GITHUB_ACTIONS !== "true" || process.platform !== "win32")
+if (process.env.GITHUB_ACTIONS !== "true" || HostProcess.Platform.defaultValue() !== "win32")
   throw new Error("Native Windows hosted fixture only.");
-const home = await FS.mkdtemp(Path.join(OS.tmpdir(), "t3 owned job "));
-const program = Path.join(home, "owned parent.cjs");
-await FS.writeFile(
+const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3 owned job "));
+const program = NodePath.join(home, "owned parent.cjs");
+await NodeFSP.writeFile(
   program,
   `const {spawn}=require('node:child_process');
 const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});
@@ -18,11 +19,11 @@ setInterval(()=>{},1000);`,
 );
 const quote = (arg: string) => `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, "$1$1")}"`;
 const command = [process.execPath, program].map(quote).join(" ");
-const script = Path.join(home, "owned job.ps1");
-await FS.writeFile(script, `\uFEFF${windowsServerJobScript(process.execPath, command, home)}`);
+const script = NodePath.join(home, "owned job.ps1");
+await NodeFSP.writeFile(script, `\uFEFF${windowsServerJobScript(process.execPath, command, home)}`);
 try {
   for (const mode of ["command", "eof"] as const) {
-    const owner = ChildProcess.spawn(
+    const owner = NodeChildProcess.spawn(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script],
       { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
@@ -112,5 +113,5 @@ try {
     }
   }
 } finally {
-  await FS.rm(home, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+  await NodeFSP.rm(home, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
 }
