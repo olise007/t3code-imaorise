@@ -19,7 +19,12 @@ vi.mock("../state/environments", () => ({
       {
         environmentId: "source",
         label: "Source",
-        serverConfig: { environment: { capabilities: {} } },
+        serverConfig: {
+          environment: {
+            capabilities: {},
+            platform: { os: "linux", arch: "x64", machine: "linux" },
+          },
+        },
       },
       { environmentId: "target", label: "Target", serverConfig: null },
     ],
@@ -37,8 +42,11 @@ vi.mock("../state/projects", () => ({ projectEnvironment: {} }));
 vi.mock("../composerDraftStore", () => ({
   useComposerDraftStore: { getState: () => ({ getDraftSession: () => null }) },
 }));
-vi.mock("../lib/addProjectToMachine", async (original) => ({
-  ...(await original<typeof import("../lib/addProjectToMachine")>()),
+vi.mock("../lib/addProjectToMachine", () => ({
+  COPYABLE_FILE_MAX_BYTES: 1024 * 1024,
+  cloneUrlProtocol: () => "ssh",
+  cloneUrlForProtocol: (url: string) => url,
+  isDefaultCopiedFile: () => false,
   addProjectToMachine: state.prepare,
 }));
 import {
