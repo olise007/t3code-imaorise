@@ -1,4 +1,4 @@
-import { Buffer } from "node:buffer";
+import * as NodeBuffer from "node:buffer";
 import type {
   DirectActivityBatch,
   DirectActivityEvent,
@@ -25,7 +25,7 @@ function snapshotCursor(cursor: string | null): { baseline: string; after: strin
   if (!cursor?.startsWith("s-")) return null;
   try {
     const value: unknown = JSON.parse(
-      Buffer.from(cursor.slice(2, -2), "base64url").toString("utf8"),
+      NodeBuffer.Buffer.from(cursor.slice(2, -2), "base64url").toString("utf8"),
     );
     if (
       typeof value !== "object" ||
@@ -134,7 +134,7 @@ export const make = Effect.gen(function* () {
       const more = candidates.length > 100;
       // Snapshot pagination is stateless and never mutates another listener's live replay window.
       const cursor = more
-        ? `s-${Buffer.from(JSON.stringify({ baseline, after: page.at(-1)!.thread.id })).toString("base64url")}:0`
+        ? `s-${NodeBuffer.Buffer.from(JSON.stringify({ baseline, after: page.at(-1)!.thread.id })).toString("base64url")}:0`
         : baseline;
       return {
         environmentId,

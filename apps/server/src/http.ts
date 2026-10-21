@@ -333,7 +333,7 @@ export const directActivityRequest = Effect.gen(function* () {
   const activity = yield* DirectActivity.DirectActivity;
   const batch = yield* activity
     .read(cursor)
-    .pipe(Effect.catchTag("DirectActivityUnavailable", () => Effect.succeed(null)));
+    .pipe(Effect.catchTags({ DirectActivityUnavailable: () => Effect.succeed(null) }));
   if (batch === null) return HttpServerResponse.empty({ status: 503 });
   // A parked poll must not emit after its paired session has been revoked.
   yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
