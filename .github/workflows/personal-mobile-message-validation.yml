@@ -51,6 +51,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
         with:
           node-version-file: package.json
@@ -65,7 +67,10 @@ jobs:
         shell: bash
         run: |
           read -r ndk sdk buildTools < <(node -e 'const s=require("fs").readFileSync("node_modules/react-native/gradle/libs.versions.toml","utf8"); const value=k=>s.match(new RegExp(k+"\\s*=\\s*\"([^\"]+)\""))?.[1]; console.log(value("ndkVersion"),value("compileSdk"),value("buildTools"))')
-          sdkmanager "ndk;$ndk" "platforms;android-$sdk" "build-tools;$buildTools" 'cmake;3.22.1'
+          catalog=$(sdkmanager --list)
+          platformPackage="platforms;android-$sdk"
+          if [[ "$catalog" != *"$platformPackage "* ]]; then platformPackage="platforms;android-$sdk.0"; fi
+          sdkmanager "ndk;$ndk" "$platformPackage" "build-tools;$buildTools" 'cmake;3.22.1'
       - name: Native service, credential, cancellation and protocol tests; Android lint
         working-directory: apps/mobile/android
         run: ./gradlew --no-daemon --max-workers=2 :t3-agent-notifications:testDebugUnitTest :t3-agent-notifications:lintRelease -Pandroid.lint.useK2Uast=false
