@@ -15,33 +15,27 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { shouldPublishAgentAwarenessEvent } from "./AgentAwarenessRelay.ts";
 import { DirectActivityJournal } from "./DirectActivityJournal.ts";
 
+const SnapshotPosition = Schema.fromJsonString(
+  Schema.Struct({
+    baseline: Schema.String.check(Schema.isPattern(/^[\w-]+:\d+$/)),
+    after: Schema.String.check(Schema.isMaxLength(256)),
+  }),
+);
+const encodePosition = Schema.encodeSync(SnapshotPosition);
+const decodePosition = Schema.decodeUnknownOption(SnapshotPosition);
+
 function snapshotCursor(cursor: string | null): { baseline: string; after: string } | null {
-  if (!cursor?.startsWith("s-")) return null;
-  try {
-    const value: unknown = JSON.parse(
-      NodeBuffer.Buffer.from(cursor.slice(2, -2), "base64url").toString("utf8"),
-    );
-    if (
-      typeof value !== "object" ||
-      value === null ||
-      !("baseline" in value) ||
-      !("after" in value) ||
-      typeof value.baseline !== "string" ||
-      !/^[\w-]+:\d+$/.test(value.baseline) ||
-      typeof value.after !== "string" ||
-      value.after.length > 256
-    )
-      return null;
-    return { baseline: value.baseline, after: value.after };
-  } catch {
-    return null;
-  }
+  if (!cursor || !/^s-[\w-]+:0$/.test(cursor)) return null;
+  return Option.getOrNull(
+    decodePosition(NodeBuffer.Buffer.from(cursor.slice(2, -2), "base64url").toString("utf8")),
+  );
 }
 
 export class DirectActivityUnavailable extends Data.TaggedError("DirectActivityUnavailable") {}
@@ -134,7 +128,7 @@ export const make = Effect.gen(function* () {
       const more = candidates.length > 100;
       // Snapshot pagination is stateless and never mutates another listener's live replay window.
       const cursor = more
-        ? `s-${NodeBuffer.Buffer.from(JSON.stringify({ baseline, after: page.at(-1)!.thread.id })).toString("base64url")}:0`
+        ? `s-${NodeBuffer.Buffer.from(encodePosition({ baseline, after: page.at(-1)!.thread.id })).toString("base64url")}:0`
         : baseline;
       return {
         environmentId,
