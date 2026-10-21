@@ -339,9 +339,48 @@ it("removes duplicate async questions from the composer when the original answer
     createdAt: v2Now,
     resolvedAt: null,
   };
+  const item: OrchestrationV2ThreadProjection["turnItems"][number] = {
+    id: TurnItemId.make("question-item"),
+    threadId: v2Projection.thread.id,
+    runId: null,
+    nodeId: duplicate.nodeId,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 0,
+    status: "completed",
+    title: null,
+    startedAt: v2Now,
+    completedAt: v2Now,
+    updatedAt: v2Now,
+    type: "user_input_request",
+    requestId: duplicate.id,
+    responseMode: "message",
+    questions: [
+      {
+        id: "next",
+        header: "Next",
+        question: "What should happen next?",
+        required: true,
+        allowCustomAnswer: true,
+        options: [],
+      },
+    ],
+  };
   const projection: OrchestrationV2ThreadProjection = {
     ...v2Projection,
     runtimeRequests: [duplicate],
+    turnItems: [item],
+    visibleTurnItems: [
+      {
+        item,
+        position: 0,
+        sourceItemId: item.id,
+        sourceThreadId: item.threadId,
+        visibility: "local",
+      },
+    ],
   };
   const source = Atom.make(
     AsyncResult.success(
@@ -373,6 +412,13 @@ it("removes duplicate async questions from the composer when the original answer
   );
   const pending = registry.get(details.pendingRequestsAtom(ref));
   expect(pending?.userInputs).toEqual([]);
+  expect(registry.get(details.visibleTurnItemsAtom(ref))[0]?.item).toMatchObject({
+    status: "completed",
+    questionAnswer: {
+      answers: { next: "My typed response" },
+      questionTextById: { next: "What should happen next?" },
+    },
+  });
   registry.set(
     source,
     AsyncResult.success(
