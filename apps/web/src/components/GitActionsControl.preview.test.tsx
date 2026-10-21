@@ -60,7 +60,7 @@ vi.mock("~/state/threads", () => ({
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: (query: unknown) =>
     query === "discovery"
-      ? { data: {} }
+      ? { data: { sourceControlProviders: [] } }
       : {
           dataUpdatedAt: state.version,
           error: null,
@@ -68,7 +68,7 @@ vi.mock("~/state/query", () => ({
             isRepo: true,
             refName: "main",
             isDefaultRef: false,
-            hasPrimaryRemote: false,
+            hasPrimaryRemote: true,
             hasWorkingTreeChanges: true,
             workingTree: { files: state.files },
           },

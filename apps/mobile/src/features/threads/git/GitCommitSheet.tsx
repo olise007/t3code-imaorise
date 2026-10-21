@@ -88,11 +88,18 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   ]);
   const hasEmptyPreview = emptyPreviewKey === previewKey;
   const visibleSkippedFiles = skippedCommitFiles.filter((filePath) => excludedFiles.has(filePath));
-  useEffect(() => {
+  const selectionScope = JSON.stringify([
+    selectedThread?.environmentId,
+    selectedThread?.id,
+    selectedThreadCwd,
+  ]);
+  const [previousSelectionScope, setPreviousSelectionScope] = useState(selectionScope);
+  if (previousSelectionScope !== selectionScope) {
+    setPreviousSelectionScope(selectionScope);
     setSkippedCommitFiles([]);
     setEmptyPreviewKey(null);
     setExcludedFiles(new Set());
-  }, [selectedThread?.environmentId, selectedThread?.id, selectedThreadCwd]);
+  }
   useEffect(() => {
     if (preview.current.key !== previewKey) previewRequest.current++;
     preview.current = { key: previewKey, message: dialogCommitMessage, mounted: true };

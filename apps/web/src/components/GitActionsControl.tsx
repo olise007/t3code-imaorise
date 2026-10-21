@@ -1185,11 +1185,20 @@ export default function GitActionsControl({
   ]);
   const hasEmptyCommitPreview = emptyCommitPreviewKey === commitPreviewKey;
   const visibleSkippedFiles = skippedCommitFiles.filter((filePath) => excludedFiles.has(filePath));
-  useEffect(() => {
+  const commitSelectionScope = JSON.stringify([
+    activeEnvironmentId,
+    activeThreadRef?.threadId,
+    gitCwd,
+    isCommitDialogOpen,
+  ]);
+  const [previousCommitSelectionScope, setPreviousCommitSelectionScope] =
+    useState(commitSelectionScope);
+  if (previousCommitSelectionScope !== commitSelectionScope) {
+    setPreviousCommitSelectionScope(commitSelectionScope);
     setSkippedCommitFiles([]);
     setEmptyCommitPreviewKey(null);
     setExcludedFiles(new Set());
-  }, [activeEnvironmentId, activeThreadRef?.threadId, gitCwd, isCommitDialogOpen]);
+  }
   useEffect(() => {
     if (
       commitPreviewState.current.key !== commitPreviewKey ||
