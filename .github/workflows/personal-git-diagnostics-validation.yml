@@ -30,14 +30,17 @@ jobs:
           node-version-file: package.json
           cache: false
           run-install: false
-      - run: vp install --frozen-lockfile
+      - id: install
+        run: vp install --frozen-lockfile
       - name: Git errors and commit preview regressions
         env:
           DRIVER_TEST_PATTERN: ${{ inputs.driver_test_pattern }}
         run: timeout 900 vp test run --maxWorkers 1 apps/server/src/vcs/GitVcsDriverCore.test.ts --testNamePattern "$DRIVER_TEST_PATTERN"
       - name: Commit manager regressions
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: timeout 900 vp test run --maxWorkers 1 apps/server/src/git/GitManager.test.ts
       - name: Contracts and client interactions
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: >-
           timeout 900 vp test run --maxWorkers 1
           packages/contracts/src/git.test.ts
@@ -46,16 +49,19 @@ jobs:
           apps/web/src/components/GitActionsControl.preview.test.tsx
           apps/mobile/src/features/threads/git/GitCommitSheet.test.tsx
       - name: Async question replay
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: >-
           timeout 900 vp test run --maxWorkers 1
           apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts
           --testNamePattern "asynchronous Codex question"
       - name: Durable question answers
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: >-
           timeout 900 vp test run --maxWorkers 1
           apps/server/src/orchestration-v2/runtimeLayer.test.ts
           --testNamePattern "async|asynchronous"
       - name: Changed source and test lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: >-
           timeout 600 vp lint
           packages/contracts/src/git.ts packages/contracts/src/git.test.ts

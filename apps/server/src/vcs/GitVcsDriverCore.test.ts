@@ -3542,8 +3542,8 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           const cwd = yield* makeTmpDir();
           yield* initRepoWithCommit(cwd);
           const driver = yield* GitVcsDriver.GitVcsDriver;
-          yield* writeTextFile(cwd, "tracked.txt", "before\n");
-          yield* git(cwd, ["add", "tracked.txt"]);
+          yield* writeTextFile(cwd, "tracked/existing.txt", "before\n");
+          yield* git(cwd, ["add", "tracked/existing.txt"]);
           yield* git(cwd, ["commit", "-m", "Track file"]);
           const ignoreFile =
             source === "local"
@@ -3551,18 +3551,18 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
               : source === "global"
                 ? ".git/global-excludes"
                 : ".gitignore";
-          yield* writeTextFile(cwd, ignoreFile, "tests/\ntracked.txt\n");
+          yield* writeTextFile(cwd, ignoreFile, "tests/\ntracked/\n");
           if (source === "global")
             yield* git(cwd, ["config", "core.excludesFile", `${cwd}/${ignoreFile}`]);
           const ignored = "tests/customers/directory_pagination_browser_test.js";
           yield* writeTextFile(cwd, ignored, "ignored test content\n");
-          yield* writeTextFile(cwd, "tracked.txt", "tracked working content\n");
+          yield* writeTextFile(cwd, "tracked/existing.txt", "tracked working content\n");
           yield* writeTextFile(cwd, "selected[1].txt", "literal working content\n");
           yield* writeTextFile(cwd, "selected1.txt", "do not include\n");
           yield* writeTextFile(cwd, "unselected.txt", "unrelated staged content\n");
           yield* git(cwd, ["add", "unselected.txt"]);
           const before = NodeFS.readFileSync(`${cwd}/.git/index`);
-          const paths = ["tracked.txt", ignored, "selected[1].txt"];
+          const paths = ["tracked/existing.txt", ignored, "selected[1].txt"];
           const { context, skippedFilePaths } = yield* driver.prepareCommitContext(cwd, paths, {
             skipIgnoredFiles: true,
           });

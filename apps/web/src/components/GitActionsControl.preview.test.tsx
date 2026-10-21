@@ -329,4 +329,14 @@ describe("commit message preview interactions", () => {
     render();
     expect(button("Commit").disabled).toBe(false);
   });
+
+  it("does not carry skipped-file exclusions into another project", async () => {
+    await click("Generate commit message");
+    state.cwd = "/another-project";
+    render();
+    expect(dialog().textContent).not.toContain("Ignored files were excluded");
+    expect(dialog().textContent).not.toContain("(1 of 2)");
+    await click("Generate commit message");
+    expect(state.generate.mock.calls[1]?.[0].input.filePaths).toEqual(["eligible.ts", ignored]);
+  });
 });

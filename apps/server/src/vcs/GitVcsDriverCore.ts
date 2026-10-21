@@ -2325,19 +2325,37 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const skipped = new Set(skippedFilePaths);
       const selected = filePaths.filter((filePath) => !skipped.has(filePath));
       if (selected.length === 0) return skippedFilePaths;
-      yield* runGit(
-        "GitVcsDriver.commit.addSelected",
+      const tracked = yield* executeGit(
+        "GitVcsDriver.commit.trackedSelectedFiles",
         cwd,
-        [
-          ...config,
-          "--literal-pathspecs",
-          "add",
-          "-A",
-          "--pathspec-from-file=-",
-          "--pathspec-file-nul",
-        ],
-        { ...options, stdin: `${selected.join("\0")}\0` },
+        ["--literal-pathspecs", "ls-files", "--cached", "-z", "--", ...selected],
+        { ...options, maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
       );
+      const trackedPaths = new Set(
+        splitNullSeparatedGitStdoutPaths(tracked).map((filePath) => path.resolve(cwd, filePath)),
+      );
+      // add -A traverses ignored parent directories even for tracked pathspecs.
+      // Update known entries separately, without granting permission to add any
+      // ignored untracked file. Both groups keep NUL-delimited literal names.
+      for (const trackedOnly of [true, false]) {
+        const paths = selected.filter(
+          (filePath) => trackedPaths.has(path.resolve(cwd, filePath)) === trackedOnly,
+        );
+        if (paths.length === 0) continue;
+        yield* runGit(
+          "GitVcsDriver.commit.addSelected",
+          cwd,
+          [
+            ...config,
+            "--literal-pathspecs",
+            "add",
+            trackedOnly ? "-u" : "-A",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+          ],
+          { ...options, stdin: `${paths.join("\0")}\0` },
+        );
+      }
       return skippedFilePaths;
     } else {
       yield* runGit(

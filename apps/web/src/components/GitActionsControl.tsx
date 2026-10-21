@@ -1188,6 +1188,7 @@ export default function GitActionsControl({
   useEffect(() => {
     setSkippedCommitFiles([]);
     setEmptyCommitPreviewKey(null);
+    setExcludedFiles(new Set());
   }, [activeEnvironmentId, activeThreadRef?.threadId, gitCwd, isCommitDialogOpen]);
   useEffect(() => {
     if (
@@ -2060,6 +2061,7 @@ export default function GitActionsControl({
                         checked={allSelected}
                         indeterminate={!allSelected && !noneSelected}
                         onCheckedChange={() => {
+                          previewRequest.current++;
                           setExcludedFiles(
                             allSelected ? new Set(allFiles.map((f) => f.path)) : new Set(),
                           );
@@ -2101,6 +2103,7 @@ export default function GitActionsControl({
                                   <Checkbox
                                     checked={!excludedFiles.has(file.path)}
                                     onCheckedChange={() => {
+                                      previewRequest.current++;
                                       setExcludedFiles((prev) => {
                                         const next = new Set(prev);
                                         if (next.has(file.path)) {

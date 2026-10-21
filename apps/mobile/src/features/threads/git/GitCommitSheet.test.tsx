@@ -299,4 +299,13 @@ describe("mobile commit message preview", () => {
     expect(message().value).toBe("Retry succeeded");
     expect(element.textContent).not.toContain("index is locked");
   });
+
+  it("does not carry skipped-file exclusions into another project", async () => {
+    await click("Generate commit message");
+    state.cwd = "/another-project";
+    render();
+    expect(element.textContent).not.toContain("Ignored files were excluded");
+    await click("Generate commit message");
+    expect(state.generate.mock.calls[1]?.[0].input.filePaths).toEqual(["eligible.ts", ignored]);
+  });
 });

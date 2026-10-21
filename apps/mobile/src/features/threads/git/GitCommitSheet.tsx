@@ -91,6 +91,7 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   useEffect(() => {
     setSkippedCommitFiles([]);
     setEmptyPreviewKey(null);
+    setExcludedFiles(new Set());
   }, [selectedThread?.environmentId, selectedThread?.id, selectedThreadCwd]);
   useEffect(() => {
     if (preview.current.key !== previewKey) previewRequest.current++;
@@ -237,7 +238,10 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
                 {!allSelected && isEditingFiles ? (
                   <Pressable
                     className="rounded-full px-3 android:min-h-12 android:justify-center android:active:bg-subtle ios:bg-subtle ios:py-2"
-                    onPress={() => setExcludedFiles(new Set())}
+                    onPress={() => {
+                      previewRequest.current++;
+                      setExcludedFiles(new Set());
+                    }}
                   >
                     <Text className="android:text-primary-text android:text-sm android:font-t3-medium ios:text-foreground ios:text-2xs ios:font-t3-bold ios:uppercase">
                       Reset
@@ -297,6 +301,7 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
                       accessibilityLabel={file.path}
                       accessibilityState={{ checked: included }}
                       onPress={() => {
+                        previewRequest.current++;
                         setExcludedFiles((current) => {
                           const next = new Set(current);
                           if (next.has(file.path)) {
