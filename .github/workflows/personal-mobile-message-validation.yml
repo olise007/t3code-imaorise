@@ -1,6 +1,11 @@
 name: Personal direct Android alerts validation
 on:
   workflow_dispatch:
+    inputs:
+      android_native:
+        description: Run native Android compilation, tests and lint (retain prior evidence only when mobile sources are unchanged)
+        type: boolean
+        default: true
 permissions:
   contents: read
 jobs:
@@ -27,7 +32,7 @@ jobs:
       - name: Direct activity authorization, replay and mobile routing
         run: vp test run --maxWorkers 1 apps/server/src/relay/DirectActivityJournal.test.ts apps/server/src/relay/DirectActivity.test.ts apps/server/src/relay/DirectActivityHttp.test.ts apps/mobile/src/features/agent-awareness/directAlertTarget.test.ts apps/mobile/src/features/settings/DirectAlertsSettings.test.tsx apps/server/src/relay/AgentAwarenessRelay.test.ts packages/shared/src/agentAwareness.test.ts
       - name: Scoped lint
-        run: git diff --name-only 47a662ebc53f164197a24f4c7e88762d6ff0a0af HEAD -- '*.ts' '*.tsx' | xargs -r vp lint
+        run: vp lint apps/mobile/src/App.tsx apps/mobile/src/features/agent-awareness/DirectAlertsCoordinator.tsx apps/mobile/src/features/agent-awareness/directAlertTarget.test.ts apps/mobile/src/features/agent-awareness/directAlertTarget.ts apps/mobile/src/features/agent-awareness/directAlerts.ts apps/mobile/src/features/settings/DirectAlertsSettings.test.tsx apps/mobile/src/features/settings/DirectAlertsSettings.tsx apps/mobile/src/features/settings/SettingsNotificationsRouteScreen.tsx apps/server/src/environment/ServerEnvironment.ts apps/server/src/http.ts apps/server/src/relay/DirectActivity.test.ts apps/server/src/relay/DirectActivity.ts apps/server/src/relay/DirectActivityHttp.test.ts apps/server/src/relay/DirectActivityJournal.test.ts apps/server/src/relay/DirectActivityJournal.ts apps/server/src/server.ts packages/contracts/src/directActivity.ts packages/contracts/src/environment.ts packages/contracts/src/index.ts
       - name: Contracts types
         run: timeout 600 vp run --filter @t3tools/contracts typecheck
       - name: Mobile types
@@ -35,7 +40,7 @@ jobs:
       - name: Server types
         run: timeout 900 vp run --filter t3 typecheck
   android-native:
-    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true' && inputs.android_native
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
