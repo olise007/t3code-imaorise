@@ -326,3 +326,64 @@ it("keeps worktree and pending requests stable during output updates, then refle
   dispose();
   registry.dispose();
 });
+
+it("removes duplicate async questions from the composer when the original answer arrives", () => {
+  const duplicate = {
+    id: RuntimeRequestId.make("duplicate-question"),
+    nodeId: NodeId.make("question-node"),
+    providerTurnId: null,
+    nativeRequestRef: null,
+    kind: "user_input" as const,
+    status: "pending" as const,
+    responseCapability: { type: "message" as const },
+    createdAt: v2Now,
+    resolvedAt: null,
+  };
+  const projection: OrchestrationV2ThreadProjection = {
+    ...v2Projection,
+    runtimeRequests: [duplicate],
+  };
+  const source = Atom.make(
+    AsyncResult.success(
+      threadState({ data: Option.some(projection), status: "live", error: Option.none() }),
+    ),
+  );
+  const details = createEnvironmentThreadDetailAtoms(() => source);
+  const registry = AtomRegistry.make();
+  const dispose = registry.mount(details.pendingRequestsAtom(ref));
+  expect(registry.get(details.pendingRequestsAtom(ref))?.userInputs).toHaveLength(1);
+  const answered: OrchestrationV2ThreadProjection = {
+    ...projection,
+    runtimeRequests: [
+      {
+        ...duplicate,
+        id: RuntimeRequestId.make("original-question"),
+        status: "resolved",
+        resolvedAt: v2Now,
+        answers: { next: "My typed response" },
+      },
+      duplicate,
+    ],
+  };
+  registry.set(
+    source,
+    AsyncResult.success(
+      threadState({ data: Option.some(answered), status: "live", error: Option.none() }),
+    ),
+  );
+  const pending = registry.get(details.pendingRequestsAtom(ref));
+  expect(pending?.userInputs).toEqual([]);
+  registry.set(
+    source,
+    AsyncResult.success(
+      threadState({
+        data: Option.some({ ...answered, turnItems: [...answered.turnItems] }),
+        status: "live",
+        error: Option.none(),
+      }),
+    ),
+  );
+  expect(registry.get(details.pendingRequestsAtom(ref))).toBe(pending);
+  dispose();
+  registry.dispose();
+});

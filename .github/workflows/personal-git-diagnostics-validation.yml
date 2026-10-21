@@ -45,6 +45,7 @@ jobs:
           timeout 900 vp test run --maxWorkers 1
           packages/contracts/src/git.test.ts
           packages/client-runtime/src/state/threadRequests.test.ts
+          packages/client-runtime/src/state/threadDetail.test.ts
           apps/web/src/components/GitActionsControl.test.ts
           apps/web/src/components/GitActionsControl.preview.test.tsx
           apps/mobile/src/features/threads/git/GitCommitSheet.test.tsx
@@ -66,6 +67,7 @@ jobs:
           timeout 600 vp lint
           packages/contracts/src/git.ts packages/contracts/src/git.test.ts
           packages/client-runtime/src/state/threadRequests.ts packages/client-runtime/src/state/threadRequests.test.ts
+          packages/client-runtime/src/state/threadDetail.ts packages/client-runtime/src/state/threadDetail.test.ts
           apps/server/src/vcs/GitVcsDriver.ts
           apps/server/src/vcs/GitVcsDriverCore.ts apps/server/src/vcs/GitVcsDriverCore.test.ts
           apps/server/src/git/GitManager.ts apps/server/src/git/GitManager.test.ts

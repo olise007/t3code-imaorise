@@ -140,10 +140,20 @@ export function createEnvironmentThreadDetailAtoms<E>(
         value = null;
         return value;
       }
+      // Answers identify duplicate pending questions in snapshots from older adapters.
       const runtimeRequests = projection.runtimeRequests.filter(
-        (request) => request.status === "pending",
+        (request) =>
+          request.status === "pending" ||
+          (request.kind === "user_input" &&
+            request.status === "resolved" &&
+            request.responseCapability.type === "message" &&
+            request.answers !== undefined),
       );
-      const ids = new Set(runtimeRequests.map((request) => request.id));
+      const ids = new Set(
+        runtimeRequests
+          .filter((request) => request.status === "pending")
+          .map((request) => request.id),
+      );
       const turnItems =
         ids.size === 0
           ? []
