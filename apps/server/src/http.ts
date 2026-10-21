@@ -327,11 +327,14 @@ export const directActivityRequest = Effect.gen(function* () {
   yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
   const request = yield* HttpServerRequest.HttpServerRequest;
   const cursor = new URL(request.url, "http://local.invalid").searchParams.get("cursor");
-  if (cursor !== null && (cursor.length > 100 || !/^[\w-]+:\d+$/.test(cursor))) {
+  if (cursor !== null && (cursor.length > 1024 || !/^[\w-]+:\d+$/.test(cursor))) {
     return HttpServerResponse.text("Invalid activity cursor", { status: 400 });
   }
   const activity = yield* DirectActivity.DirectActivity;
-  const batch = yield* activity.read(cursor);
+  const batch = yield* activity
+    .read(cursor)
+    .pipe(Effect.catchTag("DirectActivityUnavailable", () => Effect.succeed(null)));
+  if (batch === null) return HttpServerResponse.empty({ status: 503 });
   // A parked poll must not emit after its paired session has been revoked.
   yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
   return yield* HttpServerResponse.json(batch, { headers: { "cache-control": "no-store" } });

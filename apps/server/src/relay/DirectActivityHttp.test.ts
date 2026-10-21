@@ -8,7 +8,12 @@ import { directActivityRequest } from "../http.ts";
 import * as DirectActivity from "./DirectActivity.ts";
 
 function request(
-  options: { scopes?: AuthEnvironmentScope[]; revokeAfterRead?: boolean; cursor?: string } = {},
+  options: {
+    scopes?: AuthEnvironmentScope[];
+    revokeAfterRead?: boolean;
+    cursor?: string;
+    unavailable?: boolean;
+  } = {},
 ) {
   let reads = 0;
   let authentications = 0;
@@ -43,16 +48,18 @@ function request(
     ),
     Effect.provideService(DirectActivity.DirectActivity, {
       read: () =>
-        Effect.sync(() => {
-          reads++;
-          return {
-            environmentId: EnvironmentId.make("environment"),
-            cursor: "epoch:1",
-            reset: false,
-            more: false,
-            events: [],
-          };
-        }),
+        options.unavailable
+          ? Effect.fail(new DirectActivity.DirectActivityUnavailable())
+          : Effect.sync(() => {
+              reads++;
+              return {
+                environmentId: EnvironmentId.make("environment"),
+                cursor: "epoch:1",
+                reset: false,
+                more: false,
+                events: [],
+              };
+            }),
     }),
   );
   return { effect, reads: () => reads, authentications: () => authentications };
@@ -95,5 +102,14 @@ it.effect("rejects malformed cursor values without reading activity", () =>
     const response = yield* test.effect;
     assert.equal(response.status, 400);
     assert.equal(test.reads(), 0);
+  }),
+);
+
+it.effect("returns a retryable response when current attention cannot be resynchronized", () =>
+  Effect.gen(function* () {
+    const test = request({ unavailable: true });
+    const response = HttpServerResponse.toWeb(yield* test.effect);
+    assert.equal(response.status, 503);
+    assert.equal(yield* Effect.promise(() => response.text()), "");
   }),
 );
