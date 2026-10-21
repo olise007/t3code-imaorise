@@ -1,5 +1,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeCrypto from "node:crypto";
+import * as NodeBuffer from "node:buffer";
 import { selectReleaseTargets } from "./release-targets.mjs";
 import { hasPersonalSurfaceAssets } from "../../packages/shared/src/personalReleaseAssets.ts";
 const repo = "olise007/t3code-imaorise";
@@ -16,12 +18,66 @@ const releases = gh(
   "--paginate",
   `repos/${repo}/releases?per_page=100`,
   "--jq",
-  ".[] | {tag_name, draft, prerelease, body, assets: [.assets[] | {name, size}]}",
+  ".[] | {tag_name, draft, prerelease, body, assets: [.assets[] | {id, name, size, digest}]}",
 )
   .trim()
   .split("\n")
   .filter(Boolean)
   .map((line) => JSON.parse(line));
+// Release notes are editable prose. Artifact manifests retain the shipped code/source
+// even when publication replaces the original reservation line.
+const records = new Map();
+for (const release of releases) {
+  let body = {};
+  try {
+    const value = JSON.parse(release.body.split("\n")[0]);
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) body = value;
+  } catch {
+    /* Human-readable notes. */
+  }
+  const asset = release.assets.find((asset) => asset.name === "BUILD-MANIFEST.json");
+  if (!asset) {
+    records.set(release, body);
+    continue;
+  }
+  if (
+    !Number.isSafeInteger(asset.id) ||
+    !Number.isSafeInteger(asset.size) ||
+    asset.size <= 0 ||
+    asset.size > 262144
+  )
+    throw new Error(`Invalid release manifest metadata for ${release.tag_name}.`);
+  const text = gh(
+    "api",
+    `repos/${repo}/releases/assets/${asset.id}`,
+    "-H",
+    "Accept: application/octet-stream",
+  );
+  if (
+    NodeBuffer.Buffer.byteLength(text) !== asset.size ||
+    (asset.digest &&
+      asset.digest !== `sha256:${NodeCrypto.createHash("sha256").update(text).digest("hex")}`)
+  )
+    throw new Error(`Release manifest integrity failed for ${release.tag_name}.`);
+  const manifest = JSON.parse(text);
+  if (
+    !manifest ||
+    typeof manifest !== "object" ||
+    manifest.version !== release.tag_name.slice(1) ||
+    !/^[a-f0-9]{40}$/.test(manifest.sourceRevision) ||
+    !Number.isSafeInteger(manifest.versionCode) ||
+    manifest.versionCode <= 0
+  )
+    throw new Error(`Invalid release manifest identity for ${release.tag_name}.`);
+  records.set(release, {
+    ...body,
+    ...manifest,
+    versionCode: Math.max(
+      Number.isSafeInteger(body.versionCode) ? body.versionCode : 0,
+      manifest.versionCode,
+    ),
+  });
+}
 const channel = process.env.RELEASE_CHANNEL === "stable" ? "stable" : "beta";
 let revision = process.env.GITHUB_SHA;
 let base = "2.0.1";
@@ -31,7 +87,7 @@ if (channel === "stable") {
   );
   if (!beta || !/^v2\.\d+\.\d+-beta\.\d+$/.test(beta.tag_name))
     throw new Error("Stable requires a published tested personal beta tag.");
-  const record = JSON.parse(beta.body.split("\n")[0]);
+  const record = records.get(beta);
   revision = record.sourceRevision;
   base = beta.tag_name.slice(1).split("-beta.")[0];
   if (!/^[a-f0-9]{40}$/.test(revision)) throw new Error("Beta source revision is invalid.");
@@ -59,14 +115,14 @@ const changesSince = (surface) => {
       hasPersonalSurfaceAssets(release, surface, channel) &&
       (() => {
         try {
-          return /^[a-f0-9]{40}$/.test(JSON.parse(release.body.split("\n")[0]).sourceRevision);
+          return /^[a-f0-9]{40}$/.test(records.get(release).sourceRevision);
         } catch {
           return false;
         }
       })(),
   );
   if (!previous) return ["package.json"];
-  const source = JSON.parse(previous.body.split("\n")[0]).sourceRevision;
+  const source = records.get(previous).sourceRevision;
   if (!/^[a-f0-9]{40}$/.test(source)) throw new Error("Invalid published source revision.");
   return NodeChildProcess.execFileSync("git", ["diff", "--name-only", "-z", source, revision], {
     encoding: "utf8",
@@ -97,7 +153,7 @@ const maxCode = Math.max(
   5215,
   ...releases.map((r) => {
     try {
-      const value = JSON.parse(r.body.split("\n")[0]).versionCode;
+      const value = records.get(r).versionCode;
       return Number.isInteger(value) && value > 0 ? value : 0;
     } catch {
       return 0;
@@ -123,7 +179,7 @@ if (
       !r.draft &&
       (() => {
         try {
-          return JSON.parse(r.body.split("\n")[0]).versionCode >= reservation.versionCode;
+          return records.get(r).versionCode >= reservation.versionCode;
         } catch {
           return false;
         }
