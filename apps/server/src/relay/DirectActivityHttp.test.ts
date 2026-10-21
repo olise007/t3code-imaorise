@@ -39,7 +39,7 @@ function request(
     ),
     Effect.provideService(
       EnvironmentAuth.EnvironmentAuth,
-      auth as EnvironmentAuth.EnvironmentAuth["Service"],
+      auth as unknown as EnvironmentAuth.EnvironmentAuth["Service"],
     ),
     Effect.provideService(DirectActivity.DirectActivity, {
       read: () =>

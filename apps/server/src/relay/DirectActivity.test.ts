@@ -97,11 +97,11 @@ const fixture = Effect.gen(function* () {
   const service = yield* DirectActivity.make.pipe(
     Effect.provideService(
       ThreadManagement.ThreadManagementService,
-      threads as ThreadManagement.ThreadManagementService["Service"],
+      threads as unknown as ThreadManagement.ThreadManagementService["Service"],
     ),
     Effect.provideService(
       ProjectService.ProjectService,
-      projects as ProjectService.ProjectService["Service"],
+      projects as unknown as ProjectService.ProjectService["Service"],
     ),
     Effect.provideService(ServerEnvironment.ServerEnvironment, {
       getEnvironmentId: Effect.succeed(EnvironmentId.make("environment")),

@@ -25,7 +25,7 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - name: Direct activity authorization, replay and mobile routing
-        run: vp test run --maxWorkers 1 apps/server/src/relay/DirectActivityJournal.test.ts apps/server/src/relay/DirectActivity.test.ts apps/server/src/relay/DirectActivityHttp.test.ts apps/mobile/src/features/agent-awareness/directAlertTarget.test.ts apps/server/src/relay/AgentAwarenessRelay.test.ts packages/shared/src/agentAwareness.test.ts
+        run: vp test run --maxWorkers 1 apps/server/src/relay/DirectActivityJournal.test.ts apps/server/src/relay/DirectActivity.test.ts apps/server/src/relay/DirectActivityHttp.test.ts apps/mobile/src/features/agent-awareness/directAlertTarget.test.ts apps/mobile/src/features/settings/DirectAlertsSettings.test.tsx apps/server/src/relay/AgentAwarenessRelay.test.ts packages/shared/src/agentAwareness.test.ts
       - name: Scoped lint
         run: git diff --name-only 47a662ebc53f164197a24f4c7e88762d6ff0a0af HEAD -- '*.ts' '*.tsx' | xargs -r vp lint
       - name: Contracts types

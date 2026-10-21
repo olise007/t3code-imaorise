@@ -5,10 +5,12 @@ import type { EnvironmentId } from "@t3tools/contracts";
 export class DirectActivityJournal {
   private sequence = 0;
   private events: Array<{ sequence: number; event: DirectActivityEvent }> = [];
-  constructor(
-    private readonly environmentId: EnvironmentId,
-    private readonly epoch: string,
-  ) {}
+  private readonly environmentId: EnvironmentId;
+  private readonly epoch: string;
+  constructor(environmentId: EnvironmentId, epoch: string) {
+    this.environmentId = environmentId;
+    this.epoch = epoch;
+  }
 
   append(event: DirectActivityEvent): void {
     this.events.push({ sequence: ++this.sequence, event });
