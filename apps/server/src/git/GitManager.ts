@@ -28,6 +28,7 @@ import {
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   GitGenerateCommitMessageInput,
+  type GitGenerateCommitMessageResult,
   GitRunStackedActionResult,
   GitStackedAction,
   VcsStatusInput,
@@ -148,7 +149,7 @@ export class GitManager extends Context.Service<
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
     readonly generateCommitMessage: (
       input: GitGenerateCommitMessageInput,
-    ) => Effect.Effect<{ readonly message: string }, GitManagerServiceError>;
+    ) => Effect.Effect<GitGenerateCommitMessageResult, GitManagerServiceError>;
     readonly runStackedAction: (
       input: GitRunStackedActionInput,
       options?: GitRunStackedActionOptions,
@@ -2060,22 +2061,32 @@ export const make = Effect.gen(function* () {
       /** When true, also produce a semantic feature branch name. */
       includeBranch?: boolean;
       filePaths?: readonly string[];
+      skipIgnoredFiles?: boolean;
       settings: SourceControlTextGenerationSettings;
     }) {
-      const context = yield* gitCore.prepareCommitContext(input.cwd, input.filePaths);
+      const { context, skippedFilePaths } = yield* gitCore.prepareCommitContext(
+        input.cwd,
+        input.filePaths,
+        {
+          skipIgnoredFiles: input.skipIgnoredFiles ?? false,
+        },
+      );
       if (!context) {
-        return null;
+        return { suggestion: null, skippedFilePaths };
       }
 
       const customCommit = parseCustomCommitMessage(input.commitMessage ?? "");
       if (customCommit) {
         return {
-          subject: customCommit.subject,
-          body: customCommit.body,
-          ...(input.includeBranch
-            ? { branch: sanitizeFeatureBranchName(customCommit.subject) }
-            : {}),
-          commitMessage: formatCommitMessage(customCommit.subject, customCommit.body),
+          suggestion: {
+            subject: customCommit.subject,
+            body: customCommit.body,
+            ...(input.includeBranch
+              ? { branch: sanitizeFeatureBranchName(customCommit.subject) }
+              : {}),
+            commitMessage: formatCommitMessage(customCommit.subject, customCommit.body),
+          },
+          skippedFilePaths,
         };
       }
 
@@ -2094,10 +2105,13 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.map((result) => sanitizeCommitMessage(result)));
 
       return {
-        subject: generated.subject,
-        body: generated.body,
-        ...(generated.branch !== undefined ? { branch: generated.branch } : {}),
-        commitMessage: formatCommitMessage(generated.subject, generated.body),
+        suggestion: {
+          subject: generated.subject,
+          body: generated.body,
+          ...(generated.branch !== undefined ? { branch: generated.branch } : {}),
+          commitMessage: formatCommitMessage(generated.subject, generated.body),
+        },
+        skippedFilePaths,
       };
     },
   );
@@ -2138,19 +2152,23 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     const settings = yield* resolveCommitTextSettings(input);
     const status = yield* gitCore.statusDetails(input.cwd);
-    const suggestion = yield* resolveCommitAndBranchSuggestion({
+    const { suggestion, skippedFilePaths } = yield* resolveCommitAndBranchSuggestion({
       cwd: input.cwd,
       ...(input.filePaths ? { filePaths: input.filePaths } : {}),
+      skipIgnoredFiles: input.skipIgnoredFiles ?? false,
       branch: status.branch,
       settings,
     });
-    if (!suggestion)
+    if (!suggestion && !input.skipIgnoredFiles)
       return yield* new GitManagerError({
         operation: "generateCommitMessage",
         cwd: input.cwd,
         detail: "There are no selected changes to describe.",
       });
-    return { message: suggestion.commitMessage };
+    return {
+      message: suggestion?.commitMessage ?? null,
+      ...(input.skipIgnoredFiles ? { skippedFilePaths } : {}),
+    };
   });
 
   const runCommitStep = Effect.fn("runCommitStep")(function* (
@@ -2184,13 +2202,14 @@ export const make = Effect.gen(function* () {
           label: "Generating commit message...",
         });
       }
-      suggestion = yield* resolveCommitAndBranchSuggestion({
+      const resolved = yield* resolveCommitAndBranchSuggestion({
         cwd,
         branch,
         ...(commitMessage ? { commitMessage } : {}),
         ...(filePaths ? { filePaths } : {}),
         settings,
       });
+      suggestion = resolved.suggestion;
     }
     if (!suggestion) {
       return { status: "skipped_no_changes" as const };
@@ -2878,7 +2897,7 @@ export const make = Effect.gen(function* () {
     commitMessage?: string,
     filePaths?: readonly string[],
   ) {
-    const suggestion = yield* resolveCommitAndBranchSuggestion({
+    const { suggestion } = yield* resolveCommitAndBranchSuggestion({
       cwd,
       branch,
       ...(commitMessage ? { commitMessage } : {}),

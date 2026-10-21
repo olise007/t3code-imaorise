@@ -1,5 +1,6 @@
 import {
   NodeId,
+  ProviderTurnId,
   ProviderSessionId,
   RuntimeRequestId,
   TurnItemId,
@@ -44,6 +45,66 @@ describe("initial user input drafts", () => {
     });
   });
 });
+
+it.each(["pending", "resolved"] as const)(
+  "restores answers when a duplicate async request is %s",
+  (status) => {
+    const original = projection.runtimeRequests[0]!;
+    const answered = {
+      ...original,
+      status: "resolved" as const,
+      answers: { next: "My typed response" },
+    };
+    const duplicate = { ...original, id: RuntimeRequestId.make("duplicate"), status };
+    const originalItem = projection.turnItems[0]!;
+    if (originalItem.type !== "user_input_request") throw new Error("Missing question fixture");
+    const item = { ...originalItem, requestId: duplicate.id, status: "cancelled" as const };
+    const row = {
+      item,
+      position: 0,
+      sourceItemId: item.id,
+      sourceThreadId: item.threadId,
+      visibility: "local" as const,
+    };
+    const restored = {
+      ...projection,
+      runtimeRequests: [answered, duplicate],
+      turnItems: [item],
+      visibleTurnItems: [row],
+    };
+    expect(derivePendingThreadRequests(restored).userInputs).toEqual([]);
+    const history = createQuestionHistoryProjector()(restored);
+    expect(history[0]?.item).toMatchObject({
+      status: "completed",
+      questionAnswer: {
+        requestId: original.id,
+        answers: { next: "My typed response" },
+        questionTextById: { next: "What should happen next?" },
+      },
+    });
+    expect(item.status).toBe("cancelled");
+
+    // A different turn or node must remain independently answerable.
+    const differentTurn = {
+      ...duplicate,
+      status: "pending" as const,
+      providerTurnId: ProviderTurnId.make("different-turn"),
+    };
+    expect(
+      derivePendingThreadRequests({ ...restored, runtimeRequests: [answered, differentTurn] })
+        .userInputs,
+    ).toHaveLength(1);
+    const differentNode = {
+      ...duplicate,
+      status: "pending" as const,
+      nodeId: NodeId.make("different-node"),
+    };
+    expect(
+      derivePendingThreadRequests({ ...restored, runtimeRequests: [answered, differentNode] })
+        .userInputs,
+    ).toHaveLength(1);
+  },
+);
 const projection: OrchestrationV2ThreadProjection = {
   ...v2Projection,
   runtimeRequests: [

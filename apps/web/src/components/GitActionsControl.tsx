@@ -1053,6 +1053,8 @@ export default function GitActionsControl({
   const [dialogCommitMessage, setDialogCommitMessage] = useState("");
   const [isGeneratingCommitMessage, setIsGeneratingCommitMessage] = useState(false);
   const [commitMessageError, setCommitMessageError] = useState<string | null>(null);
+  const [skippedCommitFiles, setSkippedCommitFiles] = useState<readonly string[]>([]);
+  const [emptyCommitPreviewKey, setEmptyCommitPreviewKey] = useState<string | null>(null);
   const canGenerateCommitMessage = useAtomValue(
     gitEnvironment.generateCommitMessage.permissionAtom(activeEnvironmentId),
   );
@@ -1176,10 +1178,17 @@ export default function GitActionsControl({
   const noneSelected = selectedFiles.length === 0;
   const commitPreviewKey = JSON.stringify([
     activeEnvironmentId,
+    activeThreadRef?.threadId,
     gitCwd,
     selectedFiles,
     gitStatusQuery.dataUpdatedAt,
   ]);
+  const hasEmptyCommitPreview = emptyCommitPreviewKey === commitPreviewKey;
+  const visibleSkippedFiles = skippedCommitFiles.filter((filePath) => excludedFiles.has(filePath));
+  useEffect(() => {
+    setSkippedCommitFiles([]);
+    setEmptyCommitPreviewKey(null);
+  }, [activeEnvironmentId, activeThreadRef?.threadId, gitCwd, isCommitDialogOpen]);
   useEffect(() => {
     if (
       commitPreviewState.current.key !== commitPreviewKey ||
@@ -1206,12 +1215,14 @@ export default function GitActionsControl({
     const request = ++previewRequest.current;
     setIsGeneratingCommitMessage(true);
     setCommitMessageError(null);
+    setEmptyCommitPreviewKey(null);
     try {
       const result = await generateCommitMessage({
         environmentId: activeEnvironmentId,
         input: {
           cwd: gitCwd,
           filePaths: selectedFiles.map((file) => file.path),
+          skipIgnoredFiles: true,
           ...(activeServerThread ? { threadId: activeServerThread.id } : {}),
         },
       });
@@ -1223,8 +1234,25 @@ export default function GitActionsControl({
         current.message !== snapshot.message
       )
         return;
-      if (result._tag === "Success") setDialogCommitMessage(result.value.message);
-      else if (!isAtomCommandInterrupted(result))
+      if (result._tag === "Success") {
+        const skipped = new Set(result.value.skippedFilePaths ?? []);
+        setSkippedCommitFiles((previous) => [...new Set([...previous, ...skipped])]);
+        if (skipped.size > 0) {
+          setExcludedFiles((previous) => new Set([...previous, ...skipped]));
+        }
+        if (result.value.message !== null) setDialogCommitMessage(result.value.message);
+        else {
+          setEmptyCommitPreviewKey(
+            JSON.stringify([
+              activeEnvironmentId,
+              activeThreadRef?.threadId,
+              gitCwd,
+              selectedFiles.filter((file) => !skipped.has(file.path)),
+              gitStatusQuery.dataUpdatedAt,
+            ]),
+          );
+        }
+      } else if (!isAtomCommandInterrupted(result))
         setCommitMessageError(String(squashAtomCommandFailure(result)));
     } finally {
       previewPending.current = false;
@@ -1517,7 +1545,8 @@ export default function GitActionsControl({
   const runDialogActionOnNewBranch = () => {
     if (!canChangeThreadBranch || !isCommitDialogOpen) return;
     const commitMessage = dialogCommitMessage.trim();
-    if (!commitMessage || isGeneratingCommitMessage || noneSelected) return;
+    if (!commitMessage || isGeneratingCommitMessage || noneSelected || hasEmptyCommitPreview)
+      return;
 
     previewRequest.current++;
     setIsCommitDialogOpen(false);
@@ -1620,7 +1649,8 @@ export default function GitActionsControl({
   const runDialogAction = () => {
     if (!isCommitDialogOpen) return;
     const commitMessage = dialogCommitMessage.trim();
-    if (!commitMessage || isGeneratingCommitMessage || noneSelected) return;
+    if (!commitMessage || isGeneratingCommitMessage || noneSelected || hasEmptyCommitPreview)
+      return;
     previewRequest.current++;
     setIsCommitDialogOpen(false);
     setDialogCommitMessage("");
@@ -2156,6 +2186,21 @@ export default function GitActionsControl({
                   {commitMessageError}
                 </p>
               )}
+              {visibleSkippedFiles.length > 0 && (
+                <div role="status" className="text-sm text-warning">
+                  <p>Ignored files were excluded from this commit:</p>
+                  <ul className="list-inside list-disc break-all">
+                    {visibleSkippedFiles.map((filePath) => (
+                      <li key={filePath}>{filePath}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {hasEmptyCommitPreview && (
+                <p role="status" className="text-sm text-muted-foreground">
+                  No selected changes remain to describe. Refresh or change the file selection.
+                </p>
+              )}
             </div>
           </DialogPanel>
           <DialogFooter variant="bare">
@@ -2178,6 +2223,7 @@ export default function GitActionsControl({
               disabled={
                 !canChangeThreadBranch ||
                 noneSelected ||
+                hasEmptyCommitPreview ||
                 isGeneratingCommitMessage ||
                 !dialogCommitMessage.trim()
               }
@@ -2190,6 +2236,7 @@ export default function GitActionsControl({
               disabled={
                 !canWriteSourceControl ||
                 noneSelected ||
+                hasEmptyCommitPreview ||
                 isGeneratingCommitMessage ||
                 !dialogCommitMessage.trim()
               }

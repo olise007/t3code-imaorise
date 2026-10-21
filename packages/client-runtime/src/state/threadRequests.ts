@@ -62,17 +62,41 @@ export function seedUserInputDraftAnswers<Draft extends { readonly customAnswer?
   return seeded;
 }
 
+// Older Codex adapters recreated async requests for the same question node when
+// the turn completed. Keep the original answer available to every client.
+function answeredAsyncRequestsByNode(requests: readonly OrchestrationV2RuntimeRequest[]) {
+  return new Map(
+    requests
+      .filter(
+        (request) =>
+          request.kind === "user_input" &&
+          request.status === "resolved" &&
+          request.responseCapability.type === "message" &&
+          request.answers !== undefined,
+      )
+      .map((request) => [request.nodeId, request]),
+  );
+}
+
 /** Joins pending request entities to the request items that carry display data. */
 export function derivePendingThreadRequests(
   projection: Pick<OrchestrationV2ThreadProjection, "runtimeRequests" | "turnItems">,
 ): PendingThreadRequests {
   const approvals: ThreadPendingApproval[] = [];
   const userInputs: ThreadPendingUserInput[] = [];
+  const answeredAsync = answeredAsyncRequestsByNode(projection.runtimeRequests);
 
   for (const request of projection.runtimeRequests) {
     if (request.status !== "pending") continue;
     const responseCapability = request.responseCapability.type;
     if (request.kind === "user_input") {
+      const answered = answeredAsync.get(request.nodeId);
+      if (
+        responseCapability === "message" &&
+        answered &&
+        answered.providerTurnId === request.providerTurnId
+      )
+        continue;
       const item = projection.turnItems.findLast(
         (candidate) =>
           candidate.type === "user_input_request" && candidate.requestId === request.id,
@@ -114,7 +138,7 @@ export function derivePendingThreadRequests(
   return { approvals, userInputs };
 }
 
-/** Older V2 answers were saved on requests without updating their timeline items. */
+/** Restores answers from older requests whose timeline items were not kept in sync. */
 export function createQuestionHistoryProjector() {
   type Rows = OrchestrationV2ThreadProjection["visibleTurnItems"];
   type Requests = OrchestrationV2ThreadProjection["runtimeRequests"];
@@ -129,13 +153,24 @@ export function createQuestionHistoryProjector() {
     if (rows === previousRows && requests === previousRequests && previousResult)
       return previousResult;
     const byId = new Map(requests.map((request) => [request.id, request]));
+    const answeredAsync = answeredAsyncRequestsByNode(requests);
     let result: Rows[number][] | undefined;
     for (const [index, row] of rows.entries()) {
       const item = row.item;
-      const request =
+      let request =
         item.type === "user_input_request" && !item.questionAnswer
           ? byId.get(item.requestId)
           : undefined;
+      if (
+        item.type === "user_input_request" &&
+        !item.questionAnswer &&
+        item.responseMode === "message" &&
+        item.nodeId !== null &&
+        request?.answers === undefined
+      ) {
+        const answered = answeredAsync.get(item.nodeId);
+        if (answered?.providerTurnId === item.providerTurnId) request = answered;
+      }
       let next = row;
       if (
         item.type === "user_input_request" &&
@@ -150,6 +185,7 @@ export function createQuestionHistoryProjector() {
                 ...row,
                 item: {
                   ...item,
+                  status: "completed",
                   questionAnswer: {
                     requestId: request.id,
                     answers: request.answers,

@@ -58,6 +58,8 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   const [isEditingFiles, setIsEditingFiles] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
+  const [skippedCommitFiles, setSkippedCommitFiles] = useState<readonly string[]>([]);
+  const [emptyPreviewKey, setEmptyPreviewKey] = useState<string | null>(null);
   const canGenerateCommitMessage = useAtomValue(
     gitEnvironment.generateCommitMessage.permissionAtom(selectedThread?.environmentId ?? null),
   );
@@ -77,7 +79,19 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   const selectedFiles = allFiles.filter((file) => !excludedFiles.has(file.path));
   const allSelected = excludedFiles.size === 0;
   const noneSelected = selectedFiles.length === 0;
-  const previewKey = JSON.stringify([selectedThread, selectedThreadCwd, selectedFiles]);
+  const previewKey = JSON.stringify([
+    selectedThread?.environmentId,
+    selectedThread?.id,
+    selectedThreadCwd,
+    selectedFiles,
+    gitStatus.dataUpdatedAt,
+  ]);
+  const hasEmptyPreview = emptyPreviewKey === previewKey;
+  const visibleSkippedFiles = skippedCommitFiles.filter((filePath) => excludedFiles.has(filePath));
+  useEffect(() => {
+    setSkippedCommitFiles([]);
+    setEmptyPreviewKey(null);
+  }, [selectedThread?.environmentId, selectedThread?.id, selectedThreadCwd]);
   useEffect(() => {
     if (preview.current.key !== previewKey) previewRequest.current++;
     preview.current = { key: previewKey, message: dialogCommitMessage, mounted: true };
@@ -97,6 +111,7 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
     const request = ++previewRequest.current;
     setGenerating(true);
     setGenerationError(null);
+    setEmptyPreviewKey(null);
     try {
       const result = await generateMessage({
         environmentId: selectedThread.environmentId,
@@ -104,6 +119,7 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
           cwd: selectedThreadCwd,
           threadId: selectedThread.id,
           filePaths: selectedFiles.map((file) => file.path),
+          skipIgnoredFiles: true,
         },
       });
       const current = preview.current;
@@ -114,8 +130,25 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
         current.message !== snapshot.message
       )
         return;
-      if (result._tag === "Success") setDialogCommitMessage(result.value.message);
-      else if (!isAtomCommandInterrupted(result))
+      if (result._tag === "Success") {
+        const skipped = new Set(result.value.skippedFilePaths ?? []);
+        setSkippedCommitFiles((previous) => [...new Set([...previous, ...skipped])]);
+        if (skipped.size > 0) {
+          setExcludedFiles((previous) => new Set([...previous, ...skipped]));
+        }
+        if (result.value.message !== null) setDialogCommitMessage(result.value.message);
+        else {
+          setEmptyPreviewKey(
+            JSON.stringify([
+              selectedThread?.environmentId,
+              selectedThread?.id,
+              selectedThreadCwd,
+              selectedFiles.filter((file) => !skipped.has(file.path)),
+              gitStatus.dataUpdatedAt,
+            ]),
+          );
+        }
+      } else if (!isAtomCommandInterrupted(result))
         setGenerationError(String(squashAtomCommandFailure(result)));
     } finally {
       previewPending.current = false;
@@ -130,7 +163,7 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   const runCommitAction = async (featureBranch: boolean) => {
     if (!canWriteSourceControl || (featureBranch && !canChangeThreadBranch)) return;
     const commitMessage = dialogCommitMessage.trim();
-    if (!commitMessage || generating || busy || noneSelected) return;
+    if (!commitMessage || generating || busy || noneSelected || hasEmptyPreview) return;
     navigation.goBack();
     await gitActions.onRunSelectedThreadGitAction({
       action: "commit",
@@ -342,6 +375,16 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
                 {generationError}
               </Text>
             )}
+            {visibleSkippedFiles.length > 0 && (
+              <Text accessibilityRole="alert" className="text-warning-foreground">
+                {`Ignored files were excluded from this commit:\n${visibleSkippedFiles.join("\n")}`}
+              </Text>
+            )}
+            {hasEmptyPreview && (
+              <Text accessibilityRole="alert" className="text-foreground-muted">
+                No selected changes remain to describe. Refresh or change the file selection.
+              </Text>
+            )}
             <TextInput
               multiline
               accessibilityLabel="Commit message"
@@ -364,6 +407,7 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
                 disabled={
                   !canChangeThreadBranch ||
                   noneSelected ||
+                  hasEmptyPreview ||
                   busy ||
                   generating ||
                   !dialogCommitMessage.trim()
@@ -379,6 +423,7 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
                 disabled={
                   !canWriteSourceControl ||
                   noneSelected ||
+                  hasEmptyPreview ||
                   busy ||
                   generating ||
                   !dialogCommitMessage.trim()

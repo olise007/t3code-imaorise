@@ -1127,6 +1127,7 @@ interface ActiveCodexTurnContext {
   readonly subagent: CodexSubagentThreadContext | null;
   readonly startedAt: DateTime.Utc;
   readonly runningCompactionItemIds: Set<string>;
+  readonly emittedAsyncQuestionItemIds: Set<string>;
   // Item positions allocated in this turn. Later turns never look items up
   // here: late background items resolve their settled turn's context, and a
   // subagent's approvals allocate on the owning root turn.
@@ -2027,6 +2028,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               startedAt: input.startedAt,
               itemPositions: new Map(),
               runningCompactionItemIds: new Set(),
+              emittedAsyncQuestionItemIds: new Set(),
             };
             yield* Ref.update(limitedTurnItems, (current) => {
               const next = new Map(current);
@@ -2687,6 +2689,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               startedAt: turn.startedAt,
               itemPositions: new Map(),
               runningCompactionItemIds: new Set(),
+              emittedAsyncQuestionItemIds: new Set(),
             };
             beginTurnTokenUsage(activeContext);
             yield* Ref.update(activeTurns, (current) => {
@@ -4879,6 +4882,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         ) =>
           Effect.gen(function* () {
             if (payload.item.delivery === "async" && payload.item.questions?.length) {
+              // turn/completed repeats item/completed in its snapshot. Recreating
+              // the request replaces an answered item and reopens the question.
+              if (context.emittedAsyncQuestionItemIds.has(payload.item.id)) return;
               const artifacts = yield* buildUserInputRequestArtifacts({
                 context,
                 nativeItemId: payload.item.id,
@@ -4907,6 +4913,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 threadId: artifacts.node.threadId,
                 runtimeRequest: artifacts.request,
               });
+              context.emittedAsyncQuestionItemIds.add(payload.item.id);
               yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
                 const ids = current.get(payload.turnId);
                 if (!ids?.has(payload.item.id)) return current;
@@ -6258,6 +6265,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             startedAt: now,
             itemPositions: new Map(),
             runningCompactionItemIds: new Set(),
+            emittedAsyncQuestionItemIds: new Set(),
           };
           const providerTurn = {
             id: context.providerTurnId,

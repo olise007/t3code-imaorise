@@ -3499,6 +3499,207 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
   });
 
   describe("commit context", () => {
+    it.effect.each([false, true])(
+      "keeps staged ignored files in preview and selected commits (unborn: %s)",
+      (unborn) =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          if (unborn) {
+            yield* driver.initRepo({ cwd });
+            yield* git(cwd, ["config", "user.email", "test@test.com"]);
+            yield* git(cwd, ["config", "user.name", "Test"]);
+          } else yield* initRepoWithCommit(cwd);
+          yield* writeTextFile(cwd, ".gitignore", "tests/\n");
+          const selected = "tests/customers/new [1].txt";
+          yield* writeTextFile(cwd, selected, "staged content\n");
+          yield* writeTextFile(cwd, "unselected.txt", "unselected staged content\n");
+          yield* git(cwd, ["add", "-f", "--", selected, "unselected.txt"]);
+          yield* writeTextFile(cwd, selected, "current working content\n");
+          const before = NodeFS.readFileSync(`${cwd}/.git/index`);
+          for (const skipIgnoredFiles of [false, true]) {
+            const { context, skippedFilePaths } = yield* driver.prepareCommitContext(
+              cwd,
+              [selected],
+              { skipIgnoredFiles },
+            );
+            assert.deepEqual(skippedFilePaths, []);
+            assert.include(context?.stagedPatch ?? "", "current working content");
+            assert.notInclude(context?.stagedSummary ?? "", "unselected.txt");
+            assert.deepEqual(NodeFS.readFileSync(`${cwd}/.git/index`), before);
+          }
+          yield* driver.commit(cwd, "Add selected test", "", { stage: { filePaths: [selected] } });
+          assert.equal(yield* git(cwd, ["show", `HEAD:${selected}`]), "current working content");
+          assert.equal(yield* git(cwd, ["show", "--pretty=", "--name-only", "HEAD"]), selected);
+          assert.isTrue(NodeFS.existsSync(`${cwd}/unselected.txt`));
+        }),
+    );
+
+    it.effect.each(["repository", "local", "global"])(
+      "skips only existing untracked files excluded by %s ignore rules",
+      (source) =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          yield* initRepoWithCommit(cwd);
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          yield* writeTextFile(cwd, "tracked.txt", "before\n");
+          yield* git(cwd, ["add", "tracked.txt"]);
+          yield* git(cwd, ["commit", "-m", "Track file"]);
+          const ignoreFile =
+            source === "local"
+              ? ".git/info/exclude"
+              : source === "global"
+                ? ".git/global-excludes"
+                : ".gitignore";
+          yield* writeTextFile(cwd, ignoreFile, "tests/\ntracked.txt\n");
+          if (source === "global")
+            yield* git(cwd, ["config", "core.excludesFile", `${cwd}/${ignoreFile}`]);
+          const ignored = "tests/customers/directory_pagination_browser_test.js";
+          yield* writeTextFile(cwd, ignored, "ignored test content\n");
+          yield* writeTextFile(cwd, "tracked.txt", "tracked working content\n");
+          yield* writeTextFile(cwd, "selected[1].txt", "literal working content\n");
+          yield* writeTextFile(cwd, "selected1.txt", "do not include\n");
+          yield* writeTextFile(cwd, "unselected.txt", "unrelated staged content\n");
+          yield* git(cwd, ["add", "unselected.txt"]);
+          const before = NodeFS.readFileSync(`${cwd}/.git/index`);
+          const paths = ["tracked.txt", ignored, "selected[1].txt"];
+          const { context, skippedFilePaths } = yield* driver.prepareCommitContext(cwd, paths, {
+            skipIgnoredFiles: true,
+          });
+          assert.deepEqual(skippedFilePaths, [ignored]);
+          assert.include(context?.stagedPatch ?? "", "tracked working content");
+          assert.include(context?.stagedPatch ?? "", "literal working content");
+          assert.notInclude(context?.stagedPatch ?? "", "ignored test content");
+          assert.notInclude(context?.stagedPatch ?? "", "unrelated staged content");
+          assert.notInclude(context?.stagedSummary ?? "", "selected1.txt");
+          assert.deepEqual(NodeFS.readFileSync(`${cwd}/.git/index`), before);
+          const strict = yield* driver.prepareCommitContext(cwd, paths).pipe(Effect.flip);
+          assert.include(strict.detail, "Git ignore rule");
+          assert.deepEqual(NodeFS.readFileSync(`${cwd}/.git/index`), before);
+        }),
+    );
+
+    it.effect(
+      "never stages all files when every selection is ignored or the selection is empty",
+      () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          yield* initRepoWithCommit(cwd);
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          yield* writeTextFile(cwd, ".gitignore", "tests/\n");
+          yield* writeTextFile(cwd, "tests/ignored.txt", "ignored\n");
+          yield* writeTextFile(cwd, "unrelated.txt", "unrelated\n");
+          yield* git(cwd, ["add", "unrelated.txt"]);
+          const before = NodeFS.readFileSync(`${cwd}/.git/index`);
+          assert.deepEqual(
+            yield* driver.prepareCommitContext(cwd, ["tests/ignored.txt"], {
+              skipIgnoredFiles: true,
+            }),
+            {
+              context: null,
+              skippedFilePaths: ["tests/ignored.txt"],
+            },
+          );
+          assert.deepEqual(yield* driver.prepareCommitContext(cwd, []), {
+            context: null,
+            skippedFilePaths: [],
+          });
+          const error = yield* driver
+            .commit(cwd, "Must not commit", "", { stage: { filePaths: [] } })
+            .pipe(Effect.flip);
+          assert.include(error.detail, "No files were selected");
+          assert.deepEqual(NodeFS.readFileSync(`${cwd}/.git/index`), before);
+        }),
+    );
+
+    it.effect("retains missing-path and real index-lock errors", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* writeTextFile(cwd, ".gitignore", "missing*\n");
+        yield* writeTextFile(cwd, "README.md", "working change\n");
+        const before = NodeFS.readFileSync(`${cwd}/.git/index`);
+        const missing = yield* driver
+          .prepareCommitContext(cwd, ["missing.txt"], { skipIgnoredFiles: true })
+          .pipe(Effect.flip);
+        assert.include(missing.detail, "selected path no longer matches");
+        yield* writeTextFile(cwd, ".git/index.lock", "owned by another process\n");
+        const locked = yield* driver
+          .commit(cwd, "Must not commit", "", { stage: { filePaths: ["README.md"] } })
+          .pipe(Effect.flip);
+        assert.include(locked.detail, "index lock");
+        assert.deepEqual(NodeFS.readFileSync(`${cwd}/.git/index`), before);
+      }),
+    );
+
+    it.effect("preserves staged ignored entries when preparing from a subdirectory", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* writeTextFile(cwd, ".gitignore", "nested/tests/\n");
+        yield* writeTextFile(cwd, "nested/tests/new.txt", "keep selected\n");
+        yield* git(cwd, ["add", "-f", "nested/tests/new.txt"]);
+        const { context, skippedFilePaths } = yield* driver.prepareCommitContext(
+          `${cwd}/nested`,
+          ["tests/new.txt"],
+          { skipIgnoredFiles: true },
+        );
+        assert.deepEqual(skippedFilePaths, []);
+        assert.include(context?.stagedPatch ?? "", "keep selected");
+        assert.include(context?.stagedSummary ?? "", "nested/tests/new.txt");
+      }),
+    );
+
+    it.effect("preserves literal tabs, newlines and pathspec syntax through selected staging", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const selected = "tests/new\t[1]\nfile.txt";
+        const ignored = "tests/ignored\t[2]\nfile.txt";
+        const eligible = ":(glob)*.txt";
+        yield* writeTextFile(cwd, ".gitignore", "tests/\n");
+        yield* writeTextFile(cwd, selected, "staged literal\n");
+        yield* git(cwd, ["--literal-pathspecs", "add", "-f", "--", selected]);
+        yield* writeTextFile(cwd, selected, "working literal\n");
+        yield* writeTextFile(cwd, ignored, "omitted literal\n");
+        yield* writeTextFile(cwd, eligible, "literal pathspec\n");
+        const before = NodeFS.readFileSync(`${cwd}/.git/index`);
+        const { context, skippedFilePaths } = yield* driver.prepareCommitContext(
+          cwd,
+          [selected, ignored, eligible],
+          { skipIgnoredFiles: true },
+        );
+        assert.deepEqual(skippedFilePaths, [ignored]);
+        assert.include(context?.stagedPatch ?? "", "working literal");
+        assert.include(context?.stagedPatch ?? "", "literal pathspec");
+        assert.notInclude(context?.stagedPatch ?? "", "omitted literal");
+        assert.deepEqual(NodeFS.readFileSync(`${cwd}/.git/index`), before);
+        yield* driver.commit(cwd, "Literal files", "", {
+          stage: { filePaths: [selected, eligible] },
+        });
+        const names = yield* git(cwd, ["show", "--pretty=", "--name-only", "-z", "HEAD"]);
+        assert.sameMembers(names.split("\0").filter(Boolean), [selected, eligible]);
+      }),
+    );
+
+    it.effect("reports a corrupt index without replacing it during ignored-file filtering", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* writeTextFile(cwd, ".git/index", "corrupt index\n");
+        const before = NodeFS.readFileSync(`${cwd}/.git/index`);
+        const error = yield* driver
+          .prepareCommitContext(cwd, ["README.md"], { skipIgnoredFiles: true })
+          .pipe(Effect.flip);
+        assert.include(error.detail, "index");
+        assert.deepEqual(NodeFS.readFileSync(`${cwd}/.git/index`), before);
+      }),
+    );
+
     it.effect.each([
       {
         stderr: "fatal: Unable to create '/private/secret/index.lock': File exists.",
@@ -3583,7 +3784,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* writeTextFile(cwd, "a.txt", "a\n");
         yield* writeTextFile(cwd, "b.txt", "b\n");
 
-        const context = yield* driver.prepareCommitContext(cwd, ["a.txt"]);
+        const { context } = yield* driver.prepareCommitContext(cwd, ["a.txt"]);
         assert.include(context?.stagedSummary ?? "", "a.txt");
         assert.notInclude(context?.stagedSummary ?? "", "b.txt");
         assert.equal(yield* git(cwd, ["diff", "--cached", "--name-only"]), "");
@@ -3607,7 +3808,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* writeTextFile(cwd, "selected[1].txt", "literal\n");
         yield* writeTextFile(cwd, "selected1.txt", "pattern match\n");
 
-        const context = yield* driver.prepareCommitContext(cwd, ["selected[1].txt"]);
+        const { context } = yield* driver.prepareCommitContext(cwd, ["selected[1].txt"]);
 
         assert.include(context?.stagedSummary ?? "", "selected[1].txt");
         assert.notInclude(context?.stagedSummary ?? "", "selected1.txt");
@@ -3644,7 +3845,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           );
           const driver = yield* GitVcsDriver.GitVcsDriver;
           for (const paths of [undefined, ["README.md"]]) {
-            const context = yield* driver.prepareCommitContext(cwd, paths);
+            const { context } = yield* driver.prepareCommitContext(cwd, paths);
             assert.include(context?.stagedPatch ?? "", "unstaged");
             assert.notInclude(context?.stagedSummary ?? "", "ignored.txt");
             assert.deepEqual(NodeFS.readFileSync(`${cwd}/.git/index`), before);
@@ -3664,11 +3865,19 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* git(cwd, ["config", "user.email", "test@test.com"]);
         yield* git(cwd, ["config", "user.name", "Test"]);
         yield* writeTextFile(cwd, "initial.txt", "initial\n");
+        yield* writeTextFile(cwd, ".gitignore", "ignored.txt\n");
+        yield* writeTextFile(cwd, "ignored.txt", "ignored\n");
         for (const paths of [undefined, ["initial.txt"]]) {
-          const context = yield* driver.prepareCommitContext(cwd, paths);
+          const { context } = yield* driver.prepareCommitContext(cwd, paths);
           assert.include(context?.stagedSummary ?? "", "initial.txt");
           assert.isFalse(NodeFS.existsSync(`${cwd}/.git/index`));
         }
+        const filtered = yield* driver.prepareCommitContext(cwd, ["initial.txt", "ignored.txt"], {
+          skipIgnoredFiles: true,
+        });
+        assert.deepEqual(filtered.skippedFilePaths, ["ignored.txt"]);
+        assert.include(filtered.context?.stagedPatch ?? "", "initial");
+        assert.isFalse(NodeFS.existsSync(`${cwd}/.git/index`));
         yield* driver.commit(cwd, "Initial", "", { stage: { filePaths: ["initial.txt"] } });
         assert.equal(yield* git(cwd, ["show", "HEAD:initial.txt"]), "initial");
       }),

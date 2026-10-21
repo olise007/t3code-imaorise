@@ -2,6 +2,8 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import {
+  GitGenerateCommitMessageInput,
+  GitGenerateCommitMessageResult,
   VcsCreateWorktreeInput,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
@@ -11,6 +13,31 @@ import {
 } from "./git.ts";
 
 const decodeCreateWorktreeInput = Schema.decodeUnknownSync(VcsCreateWorktreeInput);
+const decodeCommitPreviewInput = Schema.decodeUnknownSync(GitGenerateCommitMessageInput);
+const decodeCommitPreviewResult = Schema.decodeUnknownSync(GitGenerateCommitMessageResult);
+
+describe("commit preview compatibility", () => {
+  it("retains legacy requests and successful results", () => {
+    expect(decodeCommitPreviewInput({ cwd: "/repo", filePaths: ["file.txt"] })).toEqual({
+      cwd: "/repo",
+      filePaths: ["file.txt"],
+    });
+    expect(decodeCommitPreviewResult({ message: "Describe changes" })).toEqual({
+      message: "Describe changes",
+    });
+  });
+  it("accepts opted-in skipped-file and empty-selection results", () => {
+    expect(
+      decodeCommitPreviewInput({ cwd: "/repo", skipIgnoredFiles: true }).skipIgnoredFiles,
+    ).toBe(true);
+    for (const message of ["Describe eligible changes", null]) {
+      const result = { message, skippedFilePaths: ["tests/ignored.txt"] };
+      expect(decodeCommitPreviewResult(result)).toEqual(result);
+    }
+    expect(() => decodeCommitPreviewResult({ message: " " })).toThrow();
+    expect(() => decodeCommitPreviewInput({ cwd: "/repo", filePaths: [] })).toThrow();
+  });
+});
 const decodePreparePullRequestThreadInput = Schema.decodeUnknownSync(
   GitPreparePullRequestThreadInput,
 );

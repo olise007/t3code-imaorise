@@ -37,7 +37,63 @@ jobs:
         run: timeout 900 vp test run --maxWorkers 1 apps/server/src/vcs/GitVcsDriverCore.test.ts --testNamePattern "$DRIVER_TEST_PATTERN"
       - name: Commit manager regressions
         run: timeout 900 vp test run --maxWorkers 1 apps/server/src/git/GitManager.test.ts
-      - name: Scoped lint
-        run: vp lint apps/server/src/vcs/GitVcsDriverCore.ts apps/server/src/vcs/GitVcsDriverCore.test.ts
-      - name: Server types
-        run: timeout 900 vp run --filter t3 typecheck
+      - name: Contracts and client interactions
+        run: >-
+          timeout 900 vp test run --maxWorkers 1
+          packages/contracts/src/git.test.ts
+          packages/client-runtime/src/state/threadRequests.test.ts
+          apps/web/src/components/GitActionsControl.test.ts
+          apps/web/src/components/GitActionsControl.preview.test.tsx
+          apps/mobile/src/features/threads/git/GitCommitSheet.test.tsx
+      - name: Async question replay
+        run: >-
+          timeout 900 vp test run --maxWorkers 1
+          apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts
+          --testNamePattern "asynchronous Codex question"
+      - name: Durable question answers
+        run: >-
+          timeout 900 vp test run --maxWorkers 1
+          apps/server/src/orchestration-v2/runtimeLayer.test.ts
+          --testNamePattern "async|asynchronous"
+      - name: Changed source and test lint
+        run: >-
+          timeout 600 vp lint
+          packages/contracts/src/git.ts packages/contracts/src/git.test.ts
+          packages/client-runtime/src/state/threadRequests.ts packages/client-runtime/src/state/threadRequests.test.ts
+          apps/server/src/vcs/GitVcsDriver.ts
+          apps/server/src/vcs/GitVcsDriverCore.ts apps/server/src/vcs/GitVcsDriverCore.test.ts
+          apps/server/src/git/GitManager.ts apps/server/src/git/GitManager.test.ts
+          apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts
+          apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts
+          apps/web/src/components/GitActionsControl.tsx apps/web/src/components/GitActionsControl.preview.test.tsx
+          apps/mobile/src/features/threads/git/GitCommitSheet.tsx apps/mobile/src/features/threads/git/GitCommitSheet.test.tsx
+  types:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        package:
+          [t3, "@t3tools/contracts", "@t3tools/client-runtime", "@t3tools/web", "@t3tools/mobile"]
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_revision || github.sha }}
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Affected package types
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: timeout 900 vp run --filter "$PACKAGE" typecheck

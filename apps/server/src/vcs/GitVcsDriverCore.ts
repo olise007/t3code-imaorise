@@ -2220,36 +2220,125 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     cwd: string,
     filePaths?: readonly string[],
     env?: NodeJS.ProcessEnv,
+    skipIgnoredFiles = false,
   ) {
     const config = env
       ? ["-c", "core.splitIndex=false", "-c", "splitIndex.sharedIndexExpire=never"]
       : [];
-    if (filePaths && filePaths.length > 0) {
-      if (env) {
-        const head = yield* executeGit(
-          "GitVcsDriver.prepareCommitContext.head",
+    const options = env ? { env } : {};
+    if (filePaths) {
+      if (filePaths.length === 0) {
+        return yield* new GitCommandError({
+          operation: "GitVcsDriver.commit.addSelected",
+          command: "git",
           cwd,
-          ["rev-parse", "--verify", "--quiet", "HEAD"],
-          { allowNonZeroExit: true },
-        );
-        // Even with GIT_INDEX_FILE, reset clears the repository's merge state.
+          detail: "No files were selected to stage.",
+        });
+      }
+      // Keep selected entries that are not in HEAD yet. Otherwise rebuilding the
+      // index turns a deliberately staged ignored file back into an ignored file.
+      const selectedEntries = yield* executeGit(
+        "GitVcsDriver.commit.selectedEntries",
+        cwd,
+        ["--literal-pathspecs", "ls-files", "--stage", "--full-name", "-z", "--", ...filePaths],
+        { ...options, maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
+      );
+      if (selectedEntries.stdoutTruncated) {
+        return yield* new GitCommandError({
+          operation: "GitVcsDriver.commit.selectedEntries",
+          command: "git",
+          cwd,
+          detail: "The selected index entries exceeded the preparation limit.",
+        });
+      }
+      const head = yield* executeGit(
+        "GitVcsDriver.prepareCommitContext.head",
+        cwd,
+        ["rev-parse", "--verify", "--quiet", "HEAD"],
+        { allowNonZeroExit: true },
+      );
+      if (head.exitCode !== 0 && head.exitCode !== 1) {
+        return yield* new GitCommandError({
+          operation: "GitVcsDriver.prepareCommitContext.head",
+          command: "git",
+          cwd,
+          detail: "Could not resolve the commit preparation base.",
+          exitCode: head.exitCode,
+        });
+      }
+      // Even with GIT_INDEX_FILE, reset clears the repository's merge state.
+      yield* runGit(
+        "GitVcsDriver.commit.readTree",
+        cwd,
+        [...config, "read-tree", ...(head.exitCode === 0 ? ["HEAD"] : ["--empty"])],
+        options,
+      );
+      if (selectedEntries.stdout.length > 0) {
+        // Remove the HEAD entries first so higher-stage entries can also be
+        // restored. --index-info takes repository-relative names, even in a subdir.
+        const removals = splitNullSeparatedGitStdoutPaths(selectedEntries).map((entry) => {
+          const tab = entry.indexOf("\t");
+          const objectId = entry.slice(0, tab).split(" ")[1];
+          return `0 ${objectId}\t${entry.slice(tab + 1)}\0`;
+        });
         yield* runGit(
-          "GitVcsDriver.prepareCommitContext.readTree",
+          "GitVcsDriver.commit.restoreSelectedEntries",
           cwd,
-          [...config, "read-tree", ...(head.exitCode === 0 ? ["HEAD"] : ["--empty"])],
-          { env },
-        );
-      } else {
-        yield* runGit("GitVcsDriver.commit.reset", cwd, ["reset"]).pipe(
-          Effect.catchTags({ GitCommandError: () => Effect.void }),
+          [...config, "update-index", "-z", "--index-info"],
+          { ...options, stdin: removals.join("") + selectedEntries.stdout },
         );
       }
+      let skippedFilePaths: string[] = [];
+      if (skipIgnoredFiles) {
+        // ls-files checks every ignore source against the prepared index and only
+        // reports existing untracked files. A missing selected path must still fail.
+        const ignored = yield* executeGit(
+          "GitVcsDriver.prepareCommitContext.ignoredFiles",
+          cwd,
+          [
+            "--literal-pathspecs",
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ...filePaths,
+          ],
+          { ...options, maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
+        );
+        if (ignored.stdoutTruncated) {
+          return yield* new GitCommandError({
+            operation: "GitVcsDriver.prepareCommitContext.ignoredFiles",
+            command: "git",
+            cwd,
+            detail: "The ignored file selection exceeded the preparation limit.",
+          });
+        }
+        const ignoredPaths = new Set(
+          splitNullSeparatedGitStdoutPaths(ignored).map((filePath) => path.resolve(cwd, filePath)),
+        );
+        skippedFilePaths = filePaths.filter((filePath) =>
+          ignoredPaths.has(path.resolve(cwd, filePath)),
+        );
+      }
+      const skipped = new Set(skippedFilePaths);
+      const selected = filePaths.filter((filePath) => !skipped.has(filePath));
+      if (selected.length === 0) return skippedFilePaths;
       yield* runGit(
         "GitVcsDriver.commit.addSelected",
         cwd,
-        [...config, "--literal-pathspecs", "add", "-A", "--", ...filePaths],
-        env ? { env } : {},
+        [
+          ...config,
+          "--literal-pathspecs",
+          "add",
+          "-A",
+          "--pathspec-from-file=-",
+          "--pathspec-file-nul",
+        ],
+        { ...options, stdin: `${selected.join("\0")}\0` },
       );
+      return skippedFilePaths;
     } else {
       yield* runGit(
         "GitVcsDriver.commit.addAll",
@@ -2257,11 +2346,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         [...config, "add", "-A"],
         env ? { env } : {},
       );
+      return [];
     }
   });
 
   const prepareCommitContext: GitVcsDriver.GitVcsDriver["Service"]["prepareCommitContext"] =
-    Effect.fn("prepareCommitContext")(function* (cwd, filePaths) {
+    Effect.fn("prepareCommitContext")(function* (cwd, filePaths, options) {
+      if (filePaths?.length === 0) return { context: null, skippedFilePaths: [] };
       return yield* Effect.scoped(
         Effect.gen(function* () {
           const indexValue = yield* runGitStdout(
@@ -2302,7 +2393,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               { env },
             );
           }
-          yield* stageCommitChanges(cwd, filePaths, env);
+          const skippedFilePaths = yield* stageCommitChanges(
+            cwd,
+            filePaths,
+            env,
+            options?.skipIgnoredFiles,
+          );
 
           const stagedSummary = yield* runGitStdoutWithOptions(
             "GitVcsDriver.prepareCommitContext.stagedSummary",
@@ -2311,7 +2407,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             { env },
           ).pipe(Effect.map((stdout) => stdout.trim()));
           if (stagedSummary.length === 0) {
-            return null;
+            return { context: null, skippedFilePaths };
           }
 
           const stagedPatch = yield* runGitStdoutWithOptions(
@@ -2326,8 +2422,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           );
 
           return {
-            stagedSummary,
-            stagedPatch,
+            context: { stagedSummary, stagedPatch },
+            skippedFilePaths,
           };
         }),
       ).pipe(

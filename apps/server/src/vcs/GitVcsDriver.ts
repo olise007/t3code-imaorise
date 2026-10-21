@@ -320,7 +320,14 @@ export class GitVcsDriver extends Context.Service<
     readonly prepareCommitContext: (
       cwd: string,
       filePaths?: readonly string[],
-    ) => Effect.Effect<GitPreparedCommitContext | null, GitCommandError>;
+      options?: { readonly skipIgnoredFiles?: boolean },
+    ) => Effect.Effect<
+      {
+        readonly context: GitPreparedCommitContext | null;
+        readonly skippedFilePaths: readonly string[];
+      },
+      GitCommandError
+    >;
     readonly commit: (
       cwd: string,
       subject: string,

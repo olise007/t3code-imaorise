@@ -129,11 +129,15 @@ export const GitGenerateCommitMessageInput = Schema.Struct({
     Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
   ),
   threadId: Schema.optional(ThreadId),
+  skipIgnoredFiles: Schema.optional(Schema.Boolean),
 });
 export type GitGenerateCommitMessageInput = typeof GitGenerateCommitMessageInput.Type;
 export const GitGenerateCommitMessageResult = Schema.Struct({
-  message: TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000)),
+  // Null is returned only to callers opting into ignored-file filtering.
+  message: Schema.NullOr(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(10_000))),
+  skippedFilePaths: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
 });
+export type GitGenerateCommitMessageResult = typeof GitGenerateCommitMessageResult.Type;
 
 export const GitRunStackedActionInput = Schema.Struct({
   actionId: TrimmedNonEmptyStringSchema,

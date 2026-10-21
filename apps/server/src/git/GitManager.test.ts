@@ -3423,6 +3423,88 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  it.effect("generates from eligible files and reports ignored selections without staging", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-ignored-commit-preview-");
+      yield* initRepo(repoDir);
+      NodeFS.mkdirSync(NodePath.join(repoDir, "tests/customers"), { recursive: true });
+      const ignored = "tests/customers/directory_pagination_browser_test.js";
+      NodeFS.writeFileSync(NodePath.join(repoDir, ".gitignore"), "tests/customers/\n");
+      NodeFS.writeFileSync(NodePath.join(repoDir, ignored), "ignored content\n");
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "eligible content\n");
+      const before = NodeFS.readFileSync(NodePath.join(repoDir, ".git/index"));
+      let calls = 0;
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: (input) => {
+            calls++;
+            expect(input.stagedPatch).toContain("eligible content");
+            expect(input.stagedPatch).not.toContain("ignored content");
+            return Effect.succeed({ subject: "Update README", body: "" });
+          },
+        },
+      });
+      const preview = yield* manager.generateCommitMessage({
+        cwd: repoDir,
+        filePaths: ["README.md", ignored],
+        skipIgnoredFiles: true,
+      });
+      expect(preview).toEqual({ message: "Update README", skippedFilePaths: [ignored] });
+      expect(calls).toBe(1);
+      expect(NodeFS.readFileSync(NodePath.join(repoDir, ".git/index"))).toEqual(before);
+      const strict = yield* manager
+        .generateCommitMessage({ cwd: repoDir, filePaths: ["README.md", ignored] })
+        .pipe(Effect.result);
+      expect(strict._tag).toBe("Failure");
+      expect(calls).toBe(1);
+    }),
+  );
+
+  it.effect("does not call the writer when ignored selections leave no changes", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-empty-commit-preview-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, ".gitignore"), "ignored.txt\n");
+      NodeFS.writeFileSync(NodePath.join(repoDir, "ignored.txt"), "ignored content\n");
+      NodeFS.writeFileSync(NodePath.join(repoDir, "unrelated.txt"), "unrelated content\n");
+      yield* runGit(repoDir, ["add", "unrelated.txt"]);
+      const before = NodeFS.readFileSync(NodePath.join(repoDir, ".git/index"));
+      let calls = 0;
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: () => {
+            calls++;
+            return Effect.succeed({ subject: "Must not generate", body: "" });
+          },
+        },
+      });
+      expect(
+        yield* manager.generateCommitMessage({
+          cwd: repoDir,
+          filePaths: ["ignored.txt"],
+          skipIgnoredFiles: true,
+        }),
+      ).toEqual({
+        message: null,
+        skippedFilePaths: ["ignored.txt"],
+      });
+      expect(calls).toBe(0);
+      expect(NodeFS.readFileSync(NodePath.join(repoDir, ".git/index"))).toEqual(before);
+      expect(
+        yield* manager.generateCommitMessage({
+          cwd: repoDir,
+          filePaths: ["README.md"],
+          skipIgnoredFiles: true,
+        }),
+      ).toEqual({ message: null, skippedFilePaths: [] });
+      const legacy = yield* manager
+        .generateCommitMessage({ cwd: repoDir, filePaths: ["README.md"] })
+        .pipe(Effect.result);
+      expect(legacy._tag).toBe("Failure");
+      expect(calls).toBe(0);
+    }),
+  );
+
   it.effect("creates a commit when working tree is dirty", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
