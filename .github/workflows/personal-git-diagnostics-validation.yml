@@ -73,6 +73,7 @@ jobs:
           apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts
           apps/web/src/components/GitActionsControl.tsx apps/web/src/components/GitActionsControl.preview.test.tsx
           apps/mobile/src/features/threads/git/GitCommitSheet.tsx apps/mobile/src/features/threads/git/GitCommitSheet.test.tsx
+          apps/mobile/src/state/query.ts
   types:
     if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
     runs-on: ubuntu-latest
