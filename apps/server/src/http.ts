@@ -3,6 +3,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  DIRECT_ACTIVITY_PATH,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
@@ -47,6 +48,7 @@ import {
   failEnvironmentInternal,
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as DirectActivity from "./relay/DirectActivity.ts";
 import { WEBHOOK_ROUTE_PREFIX } from "./scheduledTasks/ScheduledTaskService.ts";
 import {
   browserApiCorsAllowedHeaders,
@@ -320,6 +322,25 @@ const authenticateRawRouteWithScope = (
       return yield* failEnvironmentScopeRequired(scope);
     }
   });
+
+export const directActivityRequest = Effect.gen(function* () {
+  yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const cursor = new URL(request.url, "http://local.invalid").searchParams.get("cursor");
+  if (cursor !== null && (cursor.length > 100 || !/^[\w-]+:\d+$/.test(cursor))) {
+    return HttpServerResponse.text("Invalid activity cursor", { status: 400 });
+  }
+  const activity = yield* DirectActivity.DirectActivity;
+  const batch = yield* activity.read(cursor);
+  // A parked poll must not emit after its paired session has been revoked.
+  yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+  return yield* HttpServerResponse.json(batch, { headers: { "cache-control": "no-store" } });
+});
+export const layerDirectActivityRoute = HttpRouter.add(
+  "GET",
+  DIRECT_ACTIVITY_PATH,
+  directActivityRequest,
+);
 
 export const layerServerEnvironmentHttpApi = HttpApiBuilder.group(
   EnvironmentHttpApi,

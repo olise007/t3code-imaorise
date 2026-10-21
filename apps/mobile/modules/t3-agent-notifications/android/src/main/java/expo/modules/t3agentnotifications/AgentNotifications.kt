@@ -42,6 +42,20 @@ class AgentActivityExpiryReceiver : BroadcastReceiver() {
 
 /** Handles data pushes natively so delivery does not depend on a running JS bridge. */
 object AgentNotifications {
+  /** Direct transport shares rendering, while retaining separate identity and replay storage. */
+  @Synchronized fun receiveDirect(context: Context, scheme: String, data: Map<String, String>) {
+    channels(context)
+    val resumed = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+    if (resumed && threadOnScreen != null && threadOnScreen == data["alert_path"]) return
+    postAlert(context, scheme, data, data.getValue("alert_id"))
+  }
+
+  fun clearDirectEnvironment(context: Context, environmentId: String) {
+    val manager = manager(context)
+    manager.activeNotifications.filter { it.notification.group == "direct:$environmentId" }
+      .forEach { manager.cancel(it.tag, it.id) }
+  }
+
   private const val STORE = "t3-agent-notifications"
   private const val ACTIVITY_CHANNEL = "agent-activity"
   private const val ALERT_CHANNEL = "agent-alerts"

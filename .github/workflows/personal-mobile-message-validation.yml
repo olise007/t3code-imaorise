@@ -1,108 +1,79 @@
-name: Personal upstream integration validation
+name: Personal direct Android alerts validation
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  validate:
+  activity:
     if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     container:
-      image: node:24-bookworm
+      image: node:26-bookworm
       options: --memory=6g --memory-swap=6g --cpus=2
     env:
       NODE_OPTIONS: --max-old-space-size=3072
       GOMEMLIMIT: 5GiB
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
         with:
           node-version-file: package.json
           cache: false
           run-install: false
       - run: vp install --frozen-lockfile
-      - name: Message disclosure and submission regressions
-        run: vp test run packages/shared/src/questionReview.test.ts packages/shared/src/userMessageCollapse.test.ts apps/web/src/components/chat/MessagesTimeline.logic.test.ts apps/mobile/src/features/threads/plan-action-state.test.ts apps/mobile/src/state/legacy-plan-mode.test.ts apps/mobile/src/features/threads/plan-action-availability.test.ts apps/mobile/src/lib/enrichedLinkPresentation.test.ts apps/mobile/src/lib/markdownHtml.test.ts apps/mobile/src/features/threads/thread-feed-live-follow.test.ts packages/client-runtime/src/state/commandPermissions.test.ts
+      - name: Direct activity authorization, replay and mobile routing
+        run: vp test run --maxWorkers 1 apps/server/src/relay/DirectActivityJournal.test.ts apps/server/src/relay/DirectActivity.test.ts apps/server/src/relay/DirectActivityHttp.test.ts apps/mobile/src/features/agent-awareness/directAlertTarget.test.ts apps/server/src/relay/AgentAwarenessRelay.test.ts packages/shared/src/agentAwareness.test.ts
       - name: Scoped lint
-        run: vp lint packages/shared/src/questionReview.test.ts packages/shared/src/userMessageCollapse.ts packages/shared/src/userMessageCollapse.test.ts apps/mobile/src/features/threads/CollapsibleUserMessageBody.tsx apps/mobile/src/features/threads/ThreadFeed.tsx apps/web/src/components/chat/MessagesTimeline.logic.ts apps/mobile/src/features/threads/ProposedPlanCard.tsx
-      - name: Mobile types
-        run: timeout 600 vp run --filter @t3tools/mobile typecheck
-      - name: Web types
-        run: timeout 600 vp run --filter @t3tools/web typecheck
-      - name: Shared types
-        run: timeout 300 vp run --filter @t3tools/shared typecheck
+        run: git diff --name-only 47a662ebc53f164197a24f4c7e88762d6ff0a0af HEAD -- '*.ts' '*.tsx' | xargs -r vp lint
       - name: Contracts types
         run: timeout 600 vp run --filter @t3tools/contracts typecheck
-      - name: Client runtime types
-        run: timeout 600 vp run --filter @t3tools/client-runtime typecheck
-  backend:
+      - name: Mobile types
+        run: timeout 600 vp run --filter @t3tools/mobile typecheck
+      - name: Server types
+        run: timeout 900 vp run --filter t3 typecheck
+  android-native:
     if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    container:
-      image: node:24-bookworm
-      options: --memory=6g --memory-swap=6g --cpus=2
     env:
       NODE_OPTIONS: --max-old-space-size=3072
-      GOMEMLIMIT: 5GiB
+      GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx3g -Dorg.gradle.workers.max=2
+      APP_VARIANT: production
+      T3CODE_IMAORISE_MOBILE_CONNECT_ENABLED: '0'
+      T3CODE_IMAORISE_MOBILE_OTA_ENABLED: '0'
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
         with:
           node-version-file: package.json
           cache: false
           run-install: false
       - run: vp install --frozen-lockfile
-      - name: Commit preview and runtime regressions
-        run: vp test run --maxWorkers 1 apps/server/src/git/GitManager.test.ts apps/server/src/mcp/toolkits/environment/handlers.test.ts apps/server/src/mcp/toolkits/worktree/registration.test.ts apps/server/src/desktopRuntime.test.ts apps/server/src/desktopRuntime.integration.test.ts apps/server/src/desktopUpdate/DesktopRuntimeManagement.test.ts apps/server/src/orchestration-v2/runtimeLayer.test.ts apps/web/src/components/GitActionsControl.test.ts
-      - name: Scoped server lint
-        run: vp lint apps/server/src/mcp/toolkits/environment/handlers.test.ts apps/server/src/mcp/toolkits/worktree/registration.test.ts apps/server/src/git/GitManager.ts apps/server/src/git/GitManager.test.ts
-      - name: Server types
-        run: timeout 900 vp run --filter t3 typecheck
-  recovery:
-    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    container:
-      image: node:24-bookworm
-      options: --memory=6g --memory-swap=6g --cpus=2
-    env:
-      NODE_OPTIONS: --max-old-space-size=3072
-      GOMEMLIMIT: 5GiB
-    steps:
-      - uses: actions/checkout@v6
-      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+      - name: Generate isolated Android project
+        working-directory: apps/mobile
+        run: vp exec expo prebuild --platform android --clean --no-install
+      - name: Install locked Android toolchain
+        working-directory: apps/mobile
+        shell: bash
+        run: |
+          read -r ndk sdk buildTools < <(node -e 'const s=require("fs").readFileSync("node_modules/react-native/gradle/libs.versions.toml","utf8"); const value=k=>s.match(new RegExp(k+"\\s*=\\s*\"([^\"]+)\""))?.[1]; console.log(value("ndkVersion"),value("compileSdk"),value("buildTools"))')
+          sdkmanager "ndk;$ndk" "platforms;android-$sdk" "build-tools;$buildTools" 'cmake;3.22.1'
+      - name: Native service, credential, cancellation and protocol tests; Android lint
+        working-directory: apps/mobile/android
+        run: ./gradlew --no-daemon --max-workers=2 :t3-agent-notifications:testDebugUnitTest :t3-agent-notifications:lintRelease -Pandroid.lint.useK2Uast=false
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          node-version-file: package.json
-          cache: false
-          run-install: false
-      - run: vp install --frozen-lockfile
-      - name: Codex recovery and provider transport regressions
-        run: vp test run --maxWorkers 1 packages/effect-codex-app-server/src/client.test.ts packages/effect-codex-app-server/src/protocol.test.ts packages/effect-codex-app-server/src/_internal/stdio.test.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts apps/server/src/orchestration-v2/RunExecutionService.test.ts
-      - name: Codex transport types
-        run: timeout 600 vp run --filter effect-codex-app-server typecheck
-  desktop:
-    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    container:
-      image: node:24-bookworm
-      options: --memory=6g --memory-swap=6g --cpus=2
-    env:
-      NODE_OPTIONS: --max-old-space-size=3072
-      GOMEMLIMIT: 5GiB
-    steps:
-      - uses: actions/checkout@v6
-      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
-        with:
-          node-version-file: package.json
-          cache: false
-          run-install: false
-      - run: vp install --frozen-lockfile
-      - name: Desktop startup, tray and WSL lifecycle regressions
-        run: vp test run --maxWorkers 1 apps/desktop/src/backend/DesktopBackendManager.test.ts apps/desktop/src/backend/DesktopBackendConfiguration.test.ts apps/desktop/src/backend/DesktopBackendPool.test.ts apps/desktop/src/backend/startupRecovery.test.ts apps/desktop/src/wsl/DesktopWslBackend.test.ts apps/desktop/src/wsl/DesktopWslEnvironment.test.ts apps/desktop/src/wsl/DesktopWslServerTree.test.ts apps/desktop/src/window/DesktopWindow.test.ts apps/desktop/src/window/trayWindowPolicy.test.ts apps/desktop/src/wsl/backgroundRuntimePolicy.test.ts apps/desktop/src/settings/DesktopAppSettings.test.ts
-      - name: Scoped desktop lint
-        run: vp lint apps/desktop/src/window/DesktopWindow.test.ts
-      - name: Desktop types
-        run: timeout 600 vp run --filter @t3tools/desktop typecheck
+          name: direct-alerts-native-evidence
+          path: |
+            apps/mobile/modules/t3-agent-notifications/android/build/reports/tests
+            apps/mobile/modules/t3-agent-notifications/android/build/reports/lint-results*
+          retention-days: 7

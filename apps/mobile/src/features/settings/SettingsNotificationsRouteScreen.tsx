@@ -40,6 +40,7 @@ import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { DirectAlertsSettings } from "./DirectAlertsSettings";
 import { resolveAgentAwarenessPlatformPresentation } from "./SettingsRouteScreen.logic";
 
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
@@ -66,9 +67,13 @@ export function SettingsNotificationsRouteScreen() {
           contentInsetAdjustmentBehavior="automatic"
           contentContainerClassName="px-5 pt-4"
         >
-          <Text className="text-base text-foreground-muted">
-            Notifications require T3 Connect in this app build.
-          </Text>
+          {Platform.OS === "android" ? (
+            <DirectAlertsSettings />
+          ) : (
+            <Text className="text-base text-foreground-muted">
+              Push notifications require T3 Connect in this app build.
+            </Text>
+          )}
         </ScrollView>
       </SettingsScreen>
     );
@@ -432,6 +437,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
           paddingBottom: Math.max(insets.bottom, 18) + 18,
         }}
       >
+        {Platform.OS === "android" ? <DirectAlertsSettings /> : null}
         <SettingsSection title="Agent activity">
           <SettingsSwitchRow
             icon="bell.badge"

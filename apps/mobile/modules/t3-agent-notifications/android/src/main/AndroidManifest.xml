@@ -1,7 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
   <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
   <application>
+    <service android:name=".DirectAlertsService" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="specialUse">
+      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-enabled continuous alerts from paired private coding-agent environments, including approval and input requests, over direct network connections without a hosted push service." />
+    </service>
     <service android:name="expo.modules.notifications.service.ExpoFirebaseMessagingService" tools:node="remove" />
     <service android:name=".AgentMessagingService" android:exported="false">
       <intent-filter>

@@ -203,6 +203,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       this is false — no update would ever repaint it. Absent on older
       servers, which may still publish, so only an explicit false skips. */
   agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
+  directAgentActivity: Schema.optionalKey(Schema.Boolean),
   /** Server runs repository clones for new projects in the background and
       streams their progress (`projectClone.*`, `subscribeProjectClones`).
       Absent on older servers, where clients must clone with the blocking
