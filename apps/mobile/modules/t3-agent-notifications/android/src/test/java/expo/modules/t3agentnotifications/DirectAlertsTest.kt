@@ -64,6 +64,16 @@ class DirectAlertsTest {
     assertTrue(context.getSystemService(NotificationManager::class.java).activeNotifications.none { it.notification.group == "direct:a" })
   }
 
+  @Test fun cloudRegistrationCleanupPreservesDirectNotifications() {
+    AgentNotifications.receiveDirect(context, "t3code-imaorise", mapOf("alert_id" to "direct-event", "alert_group" to "direct:environment", "alert_title" to "Done", "alert_body" to "Task", "alert_path" to "/threads/environment/thread"))
+    val manager = context.getSystemService(NotificationManager::class.java)
+    assertTrue(manager.activeNotifications.any { it.notification.group == "direct:environment" })
+    AgentNotifications.clear(context)
+    assertTrue(manager.activeNotifications.any { it.notification.group == "direct:environment" })
+    AgentNotifications.clearDirectEnvironment(context, "environment")
+    assertFalse(manager.activeNotifications.any { it.notification.group == "direct:environment" })
+  }
+
   @Test fun stopSerializesWithDeliveryAndRejectsSubsequentAlerts() {
     DirectAlertsStore.select(context, true, JSONArray(listOf("environment")))
     val entered = CountDownLatch(1)

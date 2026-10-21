@@ -99,8 +99,10 @@ object AgentNotifications {
     context.getSharedPreferences(STORE, Context.MODE_PRIVATE).edit().clear().apply()
     val manager = manager(context)
     manager.activeNotifications.filter {
-      it.tag == ACTIVITY_TAG || it.tag == ALERT_TAG ||
-        it.tag?.startsWith("$ALERT_TAG-summary:") == true
+      // Cloud registration/sign-out must not erase independently paired alerts.
+      !it.notification.group.orEmpty().startsWith("direct:") &&
+        (it.tag == ACTIVITY_TAG || it.tag == ALERT_TAG ||
+          it.tag?.startsWith("$ALERT_TAG-summary:") == true)
     }
       .forEach { manager.cancel(it.tag, it.id) }
   }
