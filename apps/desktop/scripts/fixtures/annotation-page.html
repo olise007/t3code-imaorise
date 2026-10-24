@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Annotation modal regression fixture</title>
+    <style>
+      body {
+        margin: 0;
+        background: #eef3f8;
+        font: 16px sans-serif;
+      }
+      button,
+      input {
+        font: inherit;
+        padding: 10px;
+      }
+      #background-target {
+        position: absolute;
+        left: 280px;
+        top: 250px;
+        width: 180px;
+        height: 50px;
+      }
+      .modal {
+        position: fixed;
+        left: 180px;
+        top: 100px;
+        width: 600px;
+        height: 450px;
+        box-sizing: border-box;
+        padding: 30px;
+        margin: 0;
+        border: 2px solid #345;
+        background: white;
+        overflow: auto;
+      }
+      .modal[hidden] {
+        display: none;
+      }
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: #0005;
+      }
+      dialog::backdrop {
+        background: #0005;
+      }
+      #second {
+        left: 240px;
+        top: 140px;
+        width: 500px;
+        height: 350px;
+      }
+      form {
+        margin: 0;
+      }
+      .target {
+        display: block;
+        width: 180px;
+        height: 50px;
+        margin-top: 40px;
+        background: #ddedff;
+      }
+      .scrolling {
+        transform: translate(35px, 20px);
+      }
+      .scrolling .spacer {
+        height: 500px;
+      }
+      .scrolling form {
+        padding-bottom: 350px;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="background-target">Background target</button>
+    <div class="backdrop" id="backdrop" hidden></div>
+    <!-- Deliberately precedes the first dialog in DOM order, but opens last. -->
+    <dialog id="second" class="modal"></dialog>
+    <dialog id="native" class="modal"></dialog>
+    <div id="scripted" class="modal" role="dialog" aria-modal="true" tabindex="-1" hidden></div>
+    <script>
+      const scenario = new URLSearchParams(location.search).get("scenario");
+      const native = document.getElementById("native");
+      const second = document.getElementById("second");
+      let scripted = document.getElementById("scripted");
+      const backdrop = document.getElementById("backdrop");
+      let activeModal = null;
+      window.fixtureState = { submissions: 0, dismissals: 0, leakedKeys: [], focusRedirects: 0 };
+      const populate = (element, id) => {
+        element.innerHTML = `<form><label>Website field <input id="${id}-field" /></label><div class="spacer"></div><button type="button" class="target" id="${id}-target">${id} target</button></form>`;
+        element.querySelector("form").addEventListener("submit", (event) => {
+          event.preventDefault();
+          window.fixtureState.submissions++;
+        });
+      };
+      populate(native, "native");
+      populate(second, "second");
+      populate(scripted, "scripted");
+      const openScripted = () => {
+        backdrop.hidden = false;
+        scripted.hidden = false;
+        activeModal = scripted;
+        // Represents libraries which disable pointer events outside the modal.
+        document.body.style.pointerEvents = "none";
+        scripted.style.pointerEvents = "auto";
+        scripted.querySelector("input").focus();
+      };
+      window.closeFixtureModal = () => {
+        if (activeModal instanceof HTMLDialogElement) activeModal.close();
+        else if (activeModal) activeModal.hidden = true;
+        activeModal = null;
+        backdrop.hidden = true;
+        document.body.style.pointerEvents = "";
+      };
+      window.replaceFixtureModal = () => {
+        const replacement = scripted.cloneNode(false);
+        populate(replacement, "replacement");
+        scripted.replaceWith(replacement);
+        scripted = replacement;
+        openScripted();
+      };
+      window.openSecondModal = () => {
+        second.showModal();
+        activeModal = second;
+        second.querySelector("input").focus();
+      };
+      document.addEventListener("focusin", (event) => {
+        if (activeModal && !activeModal.contains(event.target)) {
+          window.fixtureState.focusRedirects++;
+          activeModal.querySelector("input").focus();
+        }
+      });
+      // Capture listeners run before the editor's old bubble-phase isolation.
+      document.addEventListener(
+        "keydown",
+        (event) => {
+          if (!activeModal) return;
+          window.fixtureState.leakedKeys.push(event.key);
+          if (event.key === "Enter") {
+            event.preventDefault();
+            window.fixtureState.submissions++;
+          }
+          if (event.key === "Escape") {
+            window.fixtureState.dismissals++;
+            window.closeFixtureModal();
+          }
+        },
+        true,
+      );
+      if (scenario === "scripted" || scenario === "scrolling") {
+        if (scenario === "scrolling") scripted.classList.add("scrolling");
+        openScripted();
+      } else if (scenario === "native" || scenario === "nested") {
+        native.showModal();
+        activeModal = native;
+        if (scenario === "nested") window.openSecondModal();
+      }
+      if (activeModal) {
+        const rect = activeModal.querySelector(".target").getBoundingClientRect();
+        Object.assign(document.getElementById("background-target").style, {
+          left: `${rect.left}px`,
+          top: `${rect.top}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
+        });
+      }
+    </script>
+  </body>
+</html>

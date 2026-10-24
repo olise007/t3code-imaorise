@@ -1,0 +1,93 @@
+name: Personal browser annotation validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=2048
+      GOMEMLIMIT: 3GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - run: node apps/desktop/scripts/ensure-electron-runtime.mjs
+      - name: Annotation submission and payload regressions
+        run: >-
+          timeout 600 vp test run --maxWorkers 1
+          apps/desktop/src/preview/AnnotationKeyboard.test.ts
+          apps/desktop/src/preview/PickedElementPayload.test.ts
+          apps/desktop/src/preview/WebviewPreferences.test.ts
+          apps/web/src/lib/previewAnnotation.test.ts
+          apps/web/src/components/preview/PreviewView.test.tsx
+      - name: Capture failure, cancellation, permissions and stale completion
+        run: >-
+          timeout 600 vp test run --maxWorkers 1
+          apps/desktop/src/preview/Manager.test.ts
+          --testNamePattern "annotation|pick|element picking"
+      - name: Changed source and test lint
+        run: >-
+          timeout 300 vp lint
+          apps/desktop/src/preview/AnnotationOverlay.ts
+          apps/desktop/src/preview/PickPreload.ts
+          apps/desktop/scripts/annotation-modal.test.mjs
+          apps/desktop/scripts/fixtures/annotation-main.mjs
+      - name: Desktop types
+        run: timeout 600 vp run --filter @t3tools/desktop typecheck
+  windows-interactions:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      NODE_OPTIONS: --max-old-space-size=2048
+      GOMEMLIMIT: 2GiB
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - run: node apps/desktop/scripts/ensure-electron-runtime.mjs
+      - name: Confirm the original focus regression
+        shell: pwsh
+        env:
+          T3_ANNOTATION_BASELINE_REVISION: 98585f494ae28b05499c5555d4802c041de0ca8f
+        run: |
+          $env:T3_ANNOTATION_EVIDENCE_DIR = Join-Path $env:RUNNER_TEMP 'annotation-evidence/baseline'
+          New-Item -ItemType Directory -Force $env:T3_ANNOTATION_EVIDENCE_DIR | Out-Null
+          $log = Join-Path $env:T3_ANNOTATION_EVIDENCE_DIR 'baseline.log'
+          node --test --test-concurrency=1 --test-timeout=240000 --test-name-pattern='retains typed comments in a focus-trapped modal' apps/desktop/scripts/annotation-modal.test.mjs 2>&1 | Tee-Object -FilePath $log
+          $failed = $LASTEXITCODE -ne 0
+          if (-not $failed -or -not (Select-String -Path $log -SimpleMatch 'typed annotation comment must survive a website focus trap' -Quiet)) {
+            throw 'The baseline did not reproduce the expected lost-comment regression.'
+          }
+          $global:LASTEXITCODE = 0
+      - name: Real Windows Electron annotation interactions
+        shell: pwsh
+        run: |
+          $env:T3_ANNOTATION_EVIDENCE_DIR = Join-Path $env:RUNNER_TEMP 'annotation-evidence/fixed'
+          node --test --test-concurrency=1 --test-timeout=300000 apps/desktop/scripts/annotation-modal.test.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain scoped fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: annotation-modal-evidence
+          path: ${{ runner.temp }}/annotation-evidence
+          retention-days: 1
+          if-no-files-found: ignore

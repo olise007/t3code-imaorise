@@ -15,6 +15,11 @@ import type {
 } from "@t3tools/contracts";
 
 import { resolveAnnotationSubmission } from "./AnnotationKeyboard.ts";
+import {
+  ANNOTATION_UI_ATTRIBUTE as OVERLAY_ATTRIBUTE,
+  createAnnotationOverlay,
+  isAnnotationNode,
+} from "./AnnotationOverlay.ts";
 import { previewAnnotationStyles } from "./AnnotationStyles.generated.ts";
 import { installRecordingCursor } from "./RecordingCursor.ts";
 import { DEFAULT_RECORDING_INPUT_OPTIONS } from "./RecordingInput.ts";
@@ -33,7 +38,6 @@ import {
   RECORDING_CONTROLLER_CHANNEL,
   START_PICK_CHANNEL,
 } from "./GuestProtocol.ts";
-const OVERLAY_ATTRIBUTE = "data-t3code-annotation-ui";
 const Z_INDEX_OVERLAY = 2147483646;
 const PRIMARY = "var(--t3-primary)";
 const PRIMARY_FILL = "color-mix(in srgb, var(--t3-primary) 10%, transparent)";
@@ -131,6 +135,8 @@ interface AnnotationSession {
   teardown: (notifyMain: boolean) => void;
   applyTheme: (theme: DesktopPreviewAnnotationTheme) => void;
   setSendEnabled: (enabled: boolean) => void;
+  ownsEvent: (event: Event) => boolean;
+  onKeyDown: (event: KeyboardEvent) => void;
 }
 
 let activeSession: AnnotationSession | null = null;
@@ -186,7 +192,40 @@ const reportHumanKeyInput = (event: KeyboardEvent): void => {
 };
 
 window.addEventListener("pointerdown", reportHumanPointerInput, true);
-window.addEventListener("keydown", reportHumanKeyInput, true);
+// Register before the inspected page's scripts. Stopping propagation leaves
+// native editing intact while preventing page focus traps and shortcuts from
+// interpreting input intended for the annotation editor.
+window.addEventListener(
+  "keydown",
+  (event) => {
+    reportHumanKeyInput(event);
+    activeSession?.onKeyDown(event);
+  },
+  true,
+);
+for (const type of [
+  "focus",
+  "blur",
+  "focusin",
+  "focusout",
+  "keyup",
+  "keypress",
+  "beforeinput",
+  "copy",
+  "cut",
+  "paste",
+  "compositionstart",
+  "compositionupdate",
+  "compositionend",
+]) {
+  window.addEventListener(
+    type,
+    (event) => {
+      if (activeSession?.ownsEvent(event)) event.stopImmediatePropagation();
+    },
+    true,
+  );
+}
 
 // Mouse thumb buttons: `button === 3` is Back, `button === 4` is Forward.
 const MOUSE_BUTTON_BACK = 3;
@@ -267,20 +306,6 @@ function unionRects(
     width: Math.min(maxWidth, right - left + padding * 2),
     height: Math.min(maxHeight, bottom - top + padding * 2),
   };
-}
-
-function isAnnotationNode(element: Element): boolean {
-  return element instanceof Element && element.closest(`[${OVERLAY_ATTRIBUTE}]`) !== null;
-}
-
-function pickFromPoint(clientX: number, clientY: number): Element | null {
-  for (const candidate of document.elementsFromPoint(clientX, clientY)) {
-    if (!(candidate instanceof Element)) continue;
-    if (isAnnotationNode(candidate)) continue;
-    if (candidate === document.documentElement || candidate === document.body) continue;
-    return candidate;
-  }
-  return null;
 }
 
 function describeRawElement(element: Element): string {
@@ -418,6 +443,15 @@ function withCaptureTimeout<A>(promise: Promise<A>, millis: number): Promise<A |
 /** Truncation for the DOM-only preview used when React context is unavailable. */
 const HTML_PREVIEW_MAX_CHARS = 500;
 
+function pageHtmlPreview(element: Element): string {
+  if (!element.querySelector(`[${OVERLAY_ATTRIBUTE}]`))
+    return element.outerHTML.slice(0, HTML_PREVIEW_MAX_CHARS);
+  // A selected modal now owns our host. Describe only the website's markup.
+  const copy = element.cloneNode(true) as Element;
+  for (const overlay of copy.querySelectorAll(`[${OVERLAY_ATTRIBUTE}]`)) overlay.remove();
+  return copy.outerHTML.slice(0, HTML_PREVIEW_MAX_CHARS);
+}
+
 /**
  * Describes a picked element. The React context lookup can stall or throw on
  * some pages, so the element is never dropped: without context it still
@@ -441,7 +475,9 @@ async function captureElement(element: Element): Promise<PickedElementPayload> {
       return {
         ...base,
         selector: context.selector,
-        htmlPreview: context.htmlPreview ?? "",
+        htmlPreview: element.querySelector(`[${OVERLAY_ATTRIBUTE}]`)
+          ? pageHtmlPreview(element)
+          : (context.htmlPreview ?? ""),
         componentName: context.componentName,
         source: stack[0] ?? null,
         stack,
@@ -454,7 +490,7 @@ async function captureElement(element: Element): Promise<PickedElementPayload> {
   return {
     ...base,
     selector: null,
-    htmlPreview: element.outerHTML.slice(0, HTML_PREVIEW_MAX_CHARS),
+    htmlPreview: pageHtmlPreview(element),
     componentName: null,
     source: null,
     stack: [],
@@ -555,7 +591,8 @@ function startAnnotation(sendEnabled: boolean): void {
   const host = document.createElement("div");
   host.setAttribute(OVERLAY_ATTRIBUTE, "");
   host.setAttribute("dir", "ltr");
-  host.style.cssText = `position:fixed;inset:0;z-index:${Z_INDEX_OVERLAY};pointer-events:none`;
+  host.popover = "manual";
+  host.style.cssText = `all:initial;position:fixed;inset:0;width:auto;height:auto;margin:0;padding:0;border:0;background:transparent;overflow:visible;z-index:${Z_INDEX_OVERLAY};pointer-events:none`;
   applyAnnotationTheme(host, annotationTheme);
   const shadowRoot = host.attachShadow({ mode: "closed" });
   const themeStyle = document.createElement("style");
@@ -569,7 +606,7 @@ function startAnnotation(sendEnabled: boolean): void {
   root.style.cssText = "pointer-events:none";
   const cursorStyle = document.createElement("style");
   cursorStyle.setAttribute(OVERLAY_ATTRIBUTE, "");
-  cursorStyle.textContent = `html[data-t3code-annotation-tool] body, html[data-t3code-annotation-tool] body * { cursor: crosshair !important; } [${OVERLAY_ATTRIBUTE}], [${OVERLAY_ATTRIBUTE}] * { cursor: default !important; } [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-inner-spin-button, [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-outer-spin-button { appearance:none; margin:0; }`;
+  cursorStyle.textContent = `html[data-t3code-annotation-tool] body, html[data-t3code-annotation-tool] body * { cursor: crosshair !important; } [${OVERLAY_ATTRIBUTE}], [${OVERLAY_ATTRIBUTE}] * { cursor: default !important; } [${OVERLAY_ATTRIBUTE}][popover]::backdrop { background:transparent;pointer-events:none; } [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-inner-spin-button, [${OVERLAY_ATTRIBUTE}] input[type=number]::-webkit-outer-spin-button { appearance:none; margin:0; }`;
   document.documentElement.appendChild(cursorStyle);
   shadowRoot.appendChild(root);
 
@@ -614,6 +651,7 @@ function startAnnotation(sendEnabled: boolean): void {
 
   const comment = document.createElement("textarea");
   comment.placeholder = "Describe the change…";
+  comment.setAttribute("aria-label", "Describe the change");
   comment.setAttribute("dir", "auto");
   comment.rows = 1;
   comment.className =
@@ -659,6 +697,18 @@ function startAnnotation(sendEnabled: boolean): void {
   let editorPosition: { left: number; top: number } | null = null;
   let editorDrag: { pointerId: number; offsetX: number; offsetY: number } | null = null;
   let editorLayoutFrame: number | null = null;
+  let commentFocusTimer: number | null = null;
+  const overlay = createAnnotationOverlay(host, shadowRoot, () => {
+    clearHoverOutline();
+    dragStart = null;
+    activeStroke?.path.remove();
+    activeStroke = null;
+    marqueeBox.style.display = "none";
+    for (const target of selected.values()) {
+      if (!overlay.isEligible(target.element)) removeSelected(target);
+    }
+    repaint();
+  });
 
   const resizeComment = (): void => {
     const maxHeight = 96;
@@ -680,7 +730,15 @@ function startAnnotation(sendEnabled: boolean): void {
     queueEditorLayout();
     if (hasTargets && !editorWasShown) {
       editorWasShown = true;
-      window.setTimeout(() => comment.focus({ preventScroll: true }), 0);
+      commentFocusTimer = window.setTimeout(() => {
+        commentFocusTimer = null;
+        if (!finished) comment.focus({ preventScroll: true });
+      }, 0);
+    }
+    if (!hasTargets) {
+      editorWasShown = false;
+      if (commentFocusTimer !== null) window.clearTimeout(commentFocusTimer);
+      commentFocusTimer = null;
     }
   };
 
@@ -1189,7 +1247,7 @@ function startAnnotation(sendEnabled: boolean): void {
 
   const selectElementsInRect = (rect: PreviewAnnotationRect): number => {
     const candidates = Array.from(document.querySelectorAll("body *"))
-      .filter((element) => !isAnnotationNode(element))
+      .filter(overlay.isEligible)
       .map((element) => ({ element, rect: element.getBoundingClientRect() }))
       .filter(({ rect: candidate }) => {
         if (candidate.width < 2 || candidate.height < 2) return false;
@@ -1208,6 +1266,10 @@ function startAnnotation(sendEnabled: boolean): void {
           centerX <= rect.x + rect.width &&
           centerY >= rect.y &&
           centerY <= rect.y + rect.height &&
+          (() => {
+            const front = overlay.pickFromPoint(centerX, centerY);
+            return front !== null && element.contains(front);
+          })() &&
           (element.children.length === 0 ||
             element instanceof HTMLButtonElement ||
             element instanceof HTMLAnchorElement ||
@@ -1232,7 +1294,7 @@ function startAnnotation(sendEnabled: boolean): void {
       return;
     }
     if (tool === "select" && dragStart === null) {
-      const target = pickFromPoint(event.clientX, event.clientY);
+      const target = overlay.pickFromPoint(event.clientX, event.clientY);
       if (target) positionBox(hoverOutline, visibleElementRect(target));
       else clearHoverOutline();
       return;
@@ -1260,10 +1322,11 @@ function startAnnotation(sendEnabled: boolean): void {
 
   const onPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0 || isAnnotationNode(event.target as Element)) return;
+    overlay.reconcile(event.target instanceof Element ? event.target : undefined);
     event.preventDefault();
     event.stopPropagation();
     if (tool === "select") {
-      const target = pickFromPoint(event.clientX, event.clientY);
+      const target = overlay.pickFromPoint(event.clientX, event.clientY);
       if (target) toggleSelected(target, event.shiftKey);
       return;
     }
@@ -1359,7 +1422,6 @@ function startAnnotation(sendEnabled: boolean): void {
     window.removeEventListener("pointerout", onPointerOut, true);
     window.removeEventListener("click", onClick, true);
     window.removeEventListener("blur", onWindowBlur);
-    window.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("scroll", repaint, true);
     window.removeEventListener("resize", repaint);
     dragHandle.removeEventListener("pointerdown", onEditorPointerDown);
@@ -1367,30 +1429,51 @@ function startAnnotation(sendEnabled: boolean): void {
     dragHandle.removeEventListener("pointerup", onEditorPointerUp);
     dragHandle.removeEventListener("pointercancel", onEditorPointerUp);
     if (editorLayoutFrame !== null) window.cancelAnimationFrame(editorLayoutFrame);
+    if (commentFocusTimer !== null) window.clearTimeout(commentFocusTimer);
     ipcRenderer.off(CANCEL_PICK_CHANNEL, onCancel);
     ipcRenderer.off(ANNOTATION_CAPTURED_CHANNEL, onCaptured);
     document.documentElement.removeAttribute("data-t3code-annotation-tool");
     cursorStyle.remove();
-    host.remove();
+    overlay.dispose();
     activeSession = null;
     if (notifyMain) ipcRenderer.send(ELEMENT_PICKED_CHANNEL, null);
   };
 
   const onCancel = (): void => teardown(false);
   const onCaptured = (): void => teardown(false);
+  const ownsEvent = (event: Event): boolean =>
+    event.target === host || (event.target instanceof Node && shadowRoot.contains(event.target));
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (isAnnotationNode(event.target as Element) && event.key !== "Escape") return;
+    if (event.isComposing) {
+      if (ownsEvent(event)) event.stopImmediatePropagation();
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
-      event.stopPropagation();
+      event.stopImmediatePropagation();
       teardown(true);
       return;
     }
+    if (ownsEvent(event)) {
+      event.stopImmediatePropagation();
+      const submission =
+        shadowRoot.activeElement === comment
+          ? resolveAnnotationSubmission(event, sendEnabled)
+          : null;
+      if (submission) {
+        event.preventDefault();
+        submitAnnotation(submission);
+      }
+      return;
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key === "v") tool = "select";
     else if (event.key === "r") tool = "marquee";
     else if (event.key === "d") tool = "draw";
     else if (event.key === "e") tool = "erase";
     else return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
     refreshToolButtons();
   };
 
@@ -1464,16 +1547,10 @@ function startAnnotation(sendEnabled: boolean): void {
       });
   };
   submit.addEventListener("click", () => submitAnnotation("attach"));
-  root.addEventListener("keydown", (event) => {
-    const submission =
-      event.target === comment ? resolveAnnotationSubmission(event, sendEnabled) : null;
-    // Keep this in the bubble phase so editor inputs receive the event before
-    // it is isolated from listeners installed by the inspected page.
-    event.stopImmediatePropagation();
-    if (!submission) return;
-    event.preventDefault();
-    submitAnnotation(submission);
-  });
+  // Controls receive their events before they reach the website's delegated handlers.
+  for (const type of ["pointerdown", "pointerup", "click", "input", "change"]) {
+    root.addEventListener(type, (event) => event.stopPropagation());
+  }
 
   window.addEventListener("pointermove", onPointerMove, { capture: true, passive: false });
   window.addEventListener("pointerdown", onPointerDown, { capture: true, passive: false });
@@ -1481,12 +1558,10 @@ function startAnnotation(sendEnabled: boolean): void {
   window.addEventListener("pointerout", onPointerOut, { capture: true, passive: true });
   window.addEventListener("click", onClick, { capture: true, passive: false });
   window.addEventListener("blur", onWindowBlur);
-  window.addEventListener("keydown", onKeyDown, { capture: true });
   window.addEventListener("scroll", repaint, { capture: true, passive: true });
   window.addEventListener("resize", repaint, { passive: true });
   ipcRenderer.on(CANCEL_PICK_CHANNEL, onCancel);
   ipcRenderer.on(ANNOTATION_CAPTURED_CHANNEL, onCaptured);
-  document.documentElement.appendChild(host);
   rootResizeObserver.observe(document.documentElement);
   refreshToolButtons();
   updateStatus();
@@ -1497,7 +1572,10 @@ function startAnnotation(sendEnabled: boolean): void {
       sendEnabled = enabled;
       updateSendHint();
     },
+    ownsEvent,
+    onKeyDown,
   };
+  overlay.mount();
 }
 
 ipcRenderer.on(
