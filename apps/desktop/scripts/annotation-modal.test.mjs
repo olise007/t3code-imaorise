@@ -23,39 +23,41 @@ NodeTest.before(
     const baseline = process.env.T3_ANNOTATION_BASELINE_REVISION;
     if (baseline && !/^[a-f0-9]{40}$/.test(baseline))
       throw new Error("Expected a full baseline revision.");
-    await build({
-      config: false,
-      cwd: desktop,
-      entry: {
-        "preview-pick-preload": "src/preview-pick-preload.ts",
-        "annotation-main": "scripts/fixtures/annotation-main.mjs",
-      },
-      outDir: directory,
-      format: "cjs",
-      dts: false,
-      sourcemap: false,
-      outExtensions: () => ({ js: ".cjs" }),
-      outputOptions: { codeSplitting: false },
-      deps: {
-        alwaysBundle: (id) => id === "react-grab" || id.startsWith("react-grab/"),
-        neverBundle: (id) => id === "electron" || id.startsWith("node:"),
-      },
-      plugins: baseline
-        ? [
-            {
-              name: "annotation-regression-baseline",
-              load(id) {
-                if (!id.replaceAll("\\", "/").endsWith("/src/preview/PickPreload.ts")) return;
-                return NodeChildProcess.execFileSync(
-                  "git",
-                  ["show", `${baseline}:apps/desktop/src/preview/PickPreload.ts`],
-                  { cwd: desktop, encoding: "utf8" },
-                );
+    for (const [name, entry] of [
+      ["preview-pick-preload", "src/preview-pick-preload.ts"],
+      ["annotation-main", "scripts/fixtures/annotation-main.mjs"],
+    ])
+      await build({
+        config: false,
+        cwd: desktop,
+        entry: { [name]: entry },
+        outDir: directory,
+        clean: false,
+        format: "cjs",
+        dts: false,
+        sourcemap: false,
+        outExtensions: () => ({ js: ".cjs" }),
+        outputOptions: { codeSplitting: false },
+        deps: {
+          alwaysBundle: (id) => id === "react-grab" || id.startsWith("react-grab/"),
+          neverBundle: (id) => id === "electron" || id.startsWith("node:"),
+        },
+        plugins: baseline
+          ? [
+              {
+                name: "annotation-regression-baseline",
+                load(id) {
+                  if (!id.replaceAll("\\", "/").endsWith("/src/preview/PickPreload.ts")) return;
+                  return NodeChildProcess.execFileSync(
+                    "git",
+                    ["show", `${baseline}:apps/desktop/src/preview/PickPreload.ts`],
+                    { cwd: desktop, encoding: "utf8" },
+                  );
+                },
               },
-            },
-          ]
-        : [],
-    });
+            ]
+          : [],
+      });
     const profile = NodePath.join(directory, "profile");
     await NodeFSP.mkdir(profile);
     const env = { ...process.env };

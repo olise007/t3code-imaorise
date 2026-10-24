@@ -1,7 +1,7 @@
 const DIALOG_SELECTOR = 'dialog[open], [role="dialog"], [role="alertdialog"]';
 export const ANNOTATION_UI_ATTRIBUTE = "data-t3code-annotation-ui";
 
-export function isAnnotationNode(element: EventTarget | null): element is Element {
+export function isAnnotationNode(element: EventTarget | null): boolean {
   return element instanceof Element && element.closest(`[${ANNOTATION_UI_ATTRIBUTE}]`) !== null;
 }
 

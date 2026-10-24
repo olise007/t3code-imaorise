@@ -62,7 +62,8 @@ jobs:
           cache: false
           run-install: false
       - run: vp install --frozen-lockfile
-      - run: node apps/desktop/scripts/ensure-electron-runtime.mjs
+      - id: electron
+        run: node apps/desktop/scripts/ensure-electron-runtime.mjs
       - name: Confirm the original focus regression
         shell: pwsh
         env:
@@ -78,6 +79,7 @@ jobs:
           }
           $global:LASTEXITCODE = 0
       - name: Real Windows Electron annotation interactions
+        if: ${{ !cancelled() && steps.electron.outcome == 'success' }}
         shell: pwsh
         run: |
           $env:T3_ANNOTATION_EVIDENCE_DIR = Join-Path $env:RUNNER_TEMP 'annotation-evidence/fixed'
