@@ -11,8 +11,11 @@ import {
 } from "../../src/preview/GuestProtocol.ts";
 
 async function main() {
-  const [profile, preload, fixturePage, evidence] = process.argv.slice(2);
-  if (!profile || !preload || !fixturePage)
+  const profile = process.env.T3_ANNOTATION_PROFILE_DIR;
+  const preload = process.env.T3_ANNOTATION_PRELOAD_PATH;
+  const fixturePage = process.env.T3_ANNOTATION_FIXTURE_PAGE;
+  const evidence = process.env.T3_ANNOTATION_EVIDENCE_DIR;
+  if (![profile, preload, fixturePage].every((path) => path && NodePath.isAbsolute(path)))
     throw new Error("Explicit disposable fixture paths are required.");
   app.setPath("userData", profile);
   app.disableHardwareAcceleration();

@@ -60,17 +60,16 @@ NodeTest.before(
       });
     const profile = NodePath.join(directory, "profile");
     await NodeFSP.mkdir(profile);
-    const env = { ...process.env };
+    const env = {
+      ...process.env,
+      T3_ANNOTATION_PROFILE_DIR: profile,
+      T3_ANNOTATION_PRELOAD_PATH: NodePath.join(directory, "preview-pick-preload.cjs"),
+      T3_ANNOTATION_FIXTURE_PAGE: fixture,
+    };
     delete env.ELECTRON_RUN_AS_NODE;
     application = await electron.launch({
       executablePath: ensureElectronRuntime(),
-      args: [
-        NodePath.join(directory, "annotation-main.cjs"),
-        profile,
-        NodePath.join(directory, "preview-pick-preload.cjs"),
-        fixture,
-        process.env.T3_ANNOTATION_EVIDENCE_DIR ?? "",
-      ],
+      args: [NodePath.join(directory, "annotation-main.cjs")],
       env,
       timeout: 30_000,
     });
