@@ -76,6 +76,7 @@ NodeTest.before(
     page = await application.firstWindow();
     page.setDefaultTimeout(8_000);
     page.on("pageerror", (error) => pageErrors.push(String(error)));
+    await application.evaluate(() => globalThis.annotationFixture.ready);
     cdp = await page.context().newCDPSession(page);
     const preferences = await application.evaluate(() =>
       globalThis.annotationFixture.preferences(),

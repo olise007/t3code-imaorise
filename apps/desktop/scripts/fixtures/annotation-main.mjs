@@ -101,7 +101,8 @@ async function main() {
       return window.webContents.getLastWebPreferences();
     },
   };
-  await globalThis.annotationFixture.load("ordinary");
+  globalThis.annotationFixture.ready = globalThis.annotationFixture.load("ordinary");
+  await globalThis.annotationFixture.ready;
 }
 
 void main().catch((error) => {
