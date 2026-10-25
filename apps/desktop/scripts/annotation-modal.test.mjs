@@ -169,18 +169,47 @@ async function commentValue() {
   }
 }
 
+// The host may still focus a toolbar button. A new redirect also lets the old
+// preload reach the lost-comment assertion when it reproduces the focus trap.
+async function waitForCommentFocus(previousRedirects) {
+  const node = await uiNode("placeholder", "Describe the change…");
+  const { object } = await cdp.send("DOM.resolveNode", { nodeId: node.nodeId });
+  try {
+    await cdp.send("Runtime.callFunctionOn", {
+      objectId: object.objectId,
+      functionDeclaration: `function (previousRedirects) {
+        return new Promise((resolve) => {
+          const ready = () => {
+            if (this.getRootNode().activeElement !== this &&
+                window.fixtureState.focusRedirects <= previousRedirects) return;
+            this.removeEventListener("focus", ready);
+            document.removeEventListener("focusin", ready);
+            resolve(true);
+          };
+          this.addEventListener("focus", ready);
+          document.addEventListener("focusin", ready);
+          ready();
+        });
+      }`,
+      arguments: [{ value: previousRedirects }],
+      awaitPromise: true,
+      returnByValue: true,
+    });
+  } finally {
+    await cdp.send("Runtime.releaseObject", { objectId: object.objectId });
+  }
+}
+
 async function chooseTarget(id) {
+  const redirects = await page.evaluate(() => window.fixtureState.focusRedirects);
   const box = await page.locator(`#${id}`).boundingBox();
   NodeAssert.ok(box);
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await page.waitForFunction(
-    () =>
-      document.activeElement?.hasAttribute("data-t3code-annotation-ui") ||
-      window.fixtureState.focusRedirects > 0,
-  );
+  await waitForCommentFocus(redirects);
 }
 
 async function marqueeTarget(id) {
+  const redirects = await page.evaluate(() => window.fixtureState.focusRedirects);
   await clickUi("title", "Draw a region or marquee-select elements (R)");
   const box = await page.locator(`#${id}`).boundingBox();
   NodeAssert.ok(box);
@@ -188,18 +217,15 @@ async function marqueeTarget(id) {
   await page.mouse.down();
   await page.mouse.move(box.x + box.width + 5, box.y + box.height + 5, { steps: 4 });
   await page.mouse.up();
-  await page.waitForFunction(() =>
-    document.activeElement?.hasAttribute("data-t3code-annotation-ui"),
-  );
+  await waitForCommentFocus(redirects);
 }
 
 async function chooseDialog(id) {
+  const redirects = await page.evaluate(() => window.fixtureState.focusRedirects);
   const box = await page.locator(`#${id}`).boundingBox();
   NodeAssert.ok(box);
   await page.mouse.click(box.x + box.width - 15, box.y + box.height - 15);
-  await page.waitForFunction(() =>
-    document.activeElement?.hasAttribute("data-t3code-annotation-ui"),
-  );
+  await waitForCommentFocus(redirects);
 }
 
 async function previewZeroOpacity() {
@@ -266,11 +292,7 @@ NodeTest.test(
   async () => {
     await load("native");
     await start();
-    const box = await page.locator("#native").boundingBox();
-    await page.mouse.click(box.x + box.width - 15, box.y + box.height - 15);
-    await page.waitForFunction(() =>
-      document.activeElement?.hasAttribute("data-t3code-annotation-ui"),
-    );
+    await chooseDialog("native");
     await page.keyboard.type("Change this modal");
     const result = await attach();
     NodeAssert.equal(result.annotation.elements[0].element.tagName, "dialog");
@@ -469,15 +491,7 @@ NodeTest.test(
   async () => {
     await load("scripted");
     await start();
-    await clickUi("title", "Draw a region or marquee-select elements (R)");
-    const box = await page.locator("#scripted-target").boundingBox();
-    await page.mouse.move(box.x - 5, box.y - 5);
-    await page.mouse.down();
-    await page.mouse.move(box.x + box.width + 5, box.y + box.height + 5, { steps: 4 });
-    await page.mouse.up();
-    await page.waitForFunction(() =>
-      document.activeElement?.hasAttribute("data-t3code-annotation-ui"),
-    );
+    await marqueeTarget("scripted-target");
     await page.keyboard.type("Only the visible target");
     const result = await attach();
     NodeAssert.equal(result.annotation.elements.length, 1);
