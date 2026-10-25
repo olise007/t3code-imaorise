@@ -87,8 +87,15 @@ async function main() {
     },
     nextResult() {
       if (results.length) return Promise.resolve(results.shift());
-      return new Promise((resolve) => {
-        resolveResult = resolve;
+      return new Promise((resolve, reject) => {
+        const deadline = setTimeout(() => {
+          resolveResult = undefined;
+          reject(new Error("No annotation submission or cancellation arrived within 8 seconds."));
+        }, 8_000);
+        resolveResult = (result) => {
+          clearTimeout(deadline);
+          resolve(result);
+        };
       });
     },
     resultCount() {

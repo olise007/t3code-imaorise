@@ -143,6 +143,39 @@ async function uiNode(attribute, value) {
 
 async function uiPoint(attribute, value) {
   const node = await uiNode(attribute, value);
+  const { object } = await cdp.send("DOM.resolveNode", { nodeId: node.nodeId });
+  try {
+    // Like a locator click, wait for layout to settle before sampling coordinates.
+    const { result } = await cdp.send("Runtime.callFunctionOn", {
+      objectId: object.objectId,
+      functionDeclaration: `function () {
+        return new Promise((resolve) => {
+          const deadline = performance.now() + 8000;
+          let previous;
+          const measure = () => {
+            const rect = this.getBoundingClientRect();
+            const current = [rect.x, rect.y, rect.width, rect.height];
+            if (previous && current.every((value, index) => value === previous[index])) {
+              resolve(true);
+              return;
+            }
+            if (performance.now() >= deadline) {
+              resolve(false);
+              return;
+            }
+            previous = current;
+            requestAnimationFrame(measure);
+          };
+          requestAnimationFrame(measure);
+        });
+      }`,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    NodeAssert.equal(result.value, true, `Annotation control ${attribute}=${value} stopped moving`);
+  } finally {
+    await cdp.send("Runtime.releaseObject", { objectId: object.objectId });
+  }
   const { model } = await cdp.send("DOM.getBoxModel", { nodeId: node.nodeId });
   const [x1, y1, x2, , , y3] = model.content;
   NodeAssert.ok(model.width > 0 && model.height > 0, "Annotation control is visible");
@@ -175,15 +208,29 @@ async function waitForCommentFocus(previousRedirects) {
   const node = await uiNode("placeholder", "Describe the change…");
   const { object } = await cdp.send("DOM.resolveNode", { nodeId: node.nodeId });
   try {
-    await cdp.send("Runtime.callFunctionOn", {
+    const { result } = await cdp.send("Runtime.callFunctionOn", {
       objectId: object.objectId,
       functionDeclaration: `function (previousRedirects) {
         return new Promise((resolve) => {
+          const clean = () => {
+            clearTimeout(deadline);
+            this.removeEventListener("focus", ready);
+            document.removeEventListener("focusin", ready);
+          };
+          const deadline = setTimeout(() => {
+            clean();
+            const active = this.getRootNode().activeElement;
+            resolve({
+              active: active?.outerHTML,
+              pageActive: document.activeElement?.outerHTML.slice(0, 500),
+              commentVisible: this.checkVisibility(),
+              redirects: window.fixtureState.focusRedirects,
+            });
+          }, 8000);
           const ready = () => {
             if (this.getRootNode().activeElement !== this &&
                 window.fixtureState.focusRedirects <= previousRedirects) return;
-            this.removeEventListener("focus", ready);
-            document.removeEventListener("focusin", ready);
+            clean();
             resolve(true);
           };
           this.addEventListener("focus", ready);
@@ -195,6 +242,7 @@ async function waitForCommentFocus(previousRedirects) {
       awaitPromise: true,
       returnByValue: true,
     });
+    NodeAssert.equal(result.value, true, `Comment focus: ${JSON.stringify(result.value)}`);
   } finally {
     await cdp.send("Runtime.releaseObject", { objectId: object.objectId });
   }
@@ -617,25 +665,27 @@ for (const scenario of ["scripted", "native"]) {
         "",
       );
 
-      await start();
-      await chooseDialog(scenario);
-      await previewZeroOpacity();
-      NodeAssert.equal(
-        await page.locator(`#${scenario}`).evaluate((element) => element.style.opacity),
-        "0",
-      );
-      await page.keyboard.press("Escape");
-      NodeAssert.equal(
-        (await application.evaluate(() => globalThis.annotationFixture.nextResult())).annotation,
-        null,
-      );
-      await assertClosed();
-      NodeAssert.equal(
-        await page.locator(`#${scenario}`).evaluate((element) => element.style.opacity),
-        "",
-      );
-      NodeAssert.equal(await page.locator(`#${scenario}`).isVisible(), true);
-      NodeAssert.equal(await page.evaluate(() => window.fixtureState.dismissals), 0);
+      for (let session = 0; session < 3; session++) {
+        await start();
+        await chooseDialog(scenario);
+        await previewZeroOpacity();
+        NodeAssert.equal(
+          await page.locator(`#${scenario}`).evaluate((element) => element.style.opacity),
+          "0",
+        );
+        await page.keyboard.press("Escape");
+        NodeAssert.equal(
+          (await application.evaluate(() => globalThis.annotationFixture.nextResult())).annotation,
+          null,
+        );
+        await assertClosed();
+        NodeAssert.equal(
+          await page.locator(`#${scenario}`).evaluate((element) => element.style.opacity),
+          "",
+        );
+        NodeAssert.equal(await page.locator(`#${scenario}`).isVisible(), true);
+        NodeAssert.equal(await page.evaluate(() => window.fixtureState.dismissals), 0);
+      }
     },
   );
 }
