@@ -79,6 +79,35 @@
     <dialog id="second" class="modal"></dialog>
     <dialog id="native" class="modal"></dialog>
     <div id="scripted" class="modal" role="dialog" aria-modal="true" tabindex="-1" hidden></div>
+    <svg
+      id="line-chart"
+      width="400"
+      height="240"
+      style="display: none; position: absolute; left: 24px; top: 100px"
+    >
+      <g>
+        <line
+          id="horizontal-line"
+          x1="40"
+          y1="60"
+          x2="300"
+          y2="60"
+          stroke="#345"
+          stroke-width="12"
+        />
+      </g>
+      <g>
+        <line
+          id="vertical-line"
+          x1="340"
+          y1="40"
+          x2="340"
+          y2="200"
+          stroke="#345"
+          stroke-width="12"
+        />
+      </g>
+    </svg>
     <script>
       const scenario = new URLSearchParams(location.search).get("scenario");
       const native = document.getElementById("native");
@@ -155,6 +184,20 @@
         native.showModal();
         activeModal = native;
         if (scenario === "nested") window.openSecondModal();
+      } else if (scenario === "nonmodal-native" || scenario === "nonmodal-scripted") {
+        Object.assign(document.getElementById("background-target").style, {
+          left: "16px",
+          top: "240px",
+          width: "140px",
+        });
+        if (scenario === "nonmodal-native") native.show();
+        else {
+          scripted.setAttribute("aria-modal", "false");
+          scripted.hidden = false;
+          scripted.querySelector("input").focus();
+        }
+      } else if (scenario === "svg") {
+        document.getElementById("line-chart").style.display = "block";
       }
       if (activeModal) {
         const rect = activeModal.querySelector(".target").getBoundingClientRect();

@@ -698,17 +698,22 @@ function startAnnotation(sendEnabled: boolean): void {
   let editorDrag: { pointerId: number; offsetX: number; offsetY: number } | null = null;
   let editorLayoutFrame: number | null = null;
   let commentFocusTimer: number | null = null;
-  const overlay = createAnnotationOverlay(host, shadowRoot, () => {
-    clearHoverOutline();
-    dragStart = null;
-    activeStroke?.path.remove();
-    activeStroke = null;
-    marqueeBox.style.display = "none";
-    for (const target of selected.values()) {
-      if (!overlay.isEligible(target.element)) removeSelected(target);
-    }
-    repaint();
-  });
+  const overlay = createAnnotationOverlay(
+    host,
+    shadowRoot,
+    () => {
+      clearHoverOutline();
+      dragStart = null;
+      activeStroke?.path.remove();
+      activeStroke = null;
+      marqueeBox.style.display = "none";
+      for (const target of selected.values()) {
+        if (!overlay.canRetainSelection(target.element)) removeSelected(target);
+      }
+      repaint();
+    },
+    (element) => selected.get(element)?.baselineStyles.has("opacity") === true,
+  );
 
   const resizeComment = (): void => {
     const maxHeight = 96;

@@ -180,6 +180,38 @@ async function chooseTarget(id) {
   );
 }
 
+async function marqueeTarget(id) {
+  await clickUi("title", "Draw a region or marquee-select elements (R)");
+  const box = await page.locator(`#${id}`).boundingBox();
+  NodeAssert.ok(box);
+  await page.mouse.move(box.x - 5, box.y - 5);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width + 5, box.y + box.height + 5, { steps: 4 });
+  await page.mouse.up();
+  await page.waitForFunction(() =>
+    document.activeElement?.hasAttribute("data-t3code-annotation-ui"),
+  );
+}
+
+async function chooseDialog(id) {
+  const box = await page.locator(`#${id}`).boundingBox();
+  NodeAssert.ok(box);
+  await page.mouse.click(box.x + box.width - 15, box.y + box.height - 15);
+  await page.waitForFunction(() =>
+    document.activeElement?.hasAttribute("data-t3code-annotation-ui"),
+  );
+}
+
+async function previewZeroOpacity() {
+  await clickUi("aria-label", "Expand annotation editor");
+  const range = await uiNode("type", "range");
+  await cdp.send("DOM.scrollIntoViewIfNeeded", { nodeId: range.nodeId });
+  await clickUi("type", "range");
+  await page.keyboard.press("Home");
+  // Let placement reconciliation scheduled by the style mutation finish.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve())));
+}
+
 async function setSendEnabled(enabled) {
   const oldTitle = enabled
     ? "Attach annotation and screenshot (Enter)"
@@ -515,3 +547,108 @@ NodeTest.test(
     await assertClosed();
   },
 );
+
+for (const scenario of ["nonmodal-native", "nonmodal-scripted"]) {
+  NodeTest.test(
+    `selects visible page content beside ${scenario} dialogs`,
+    { timeout: 25_000 },
+    async () => {
+      await load(scenario);
+      const dialog = page.locator(scenario === "nonmodal-native" ? "#native" : "#scripted");
+      for (const select of [chooseTarget, marqueeTarget]) {
+        await start();
+        await select("background-target");
+        await page.keyboard.type("Change the page outside the panel");
+        const result = await attach();
+        NodeAssert.equal(result.annotation.elements.length, 1);
+        NodeAssert.ok(
+          result.annotation.elements[0].element.htmlPreview.includes("background-target"),
+        );
+        NodeAssert.equal(result.annotation.comment, "Change the page outside the panel");
+        await assertClosed();
+        NodeAssert.equal(await dialog.isVisible(), true);
+      }
+    },
+  );
+}
+
+for (const scenario of ["scripted", "native"]) {
+  NodeTest.test(
+    `keeps intentional zero-opacity edits on ${scenario} dialogs`,
+    { timeout: 25_000 },
+    async () => {
+      await load(scenario);
+      await start();
+      await chooseDialog(scenario);
+      await page.keyboard.type("Keep the transparent dialog");
+      await previewZeroOpacity();
+      NodeAssert.equal(
+        await page.locator(`#${scenario}`).evaluate((element) => element.style.opacity),
+        "0",
+      );
+      await clickUi("placeholder", "Describe the change…");
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type(" and this comment");
+      const result = await attach();
+      NodeAssert.equal(result.annotation.comment, "Keep the transparent dialog and this comment");
+      NodeAssert.equal(result.annotation.elements.length, 1);
+      NodeAssert.ok(
+        result.annotation.styleChanges.some(
+          (change) => change.property === "opacity" && change.value === "0",
+        ),
+      );
+      await assertClosed();
+      NodeAssert.equal(
+        await page.locator(`#${scenario}`).evaluate((element) => element.style.opacity),
+        "",
+      );
+
+      await start();
+      await chooseDialog(scenario);
+      await previewZeroOpacity();
+      NodeAssert.equal(
+        await page.locator(`#${scenario}`).evaluate((element) => element.style.opacity),
+        "0",
+      );
+      await page.keyboard.press("Escape");
+      NodeAssert.equal(
+        (await application.evaluate(() => globalThis.annotationFixture.nextResult())).annotation,
+        null,
+      );
+      await assertClosed();
+      NodeAssert.equal(
+        await page.locator(`#${scenario}`).evaluate((element) => element.style.opacity),
+        "",
+      );
+      NodeAssert.equal(await page.locator(`#${scenario}`).isVisible(), true);
+      NodeAssert.equal(await page.evaluate(() => window.fixtureState.dismissals), 0);
+    },
+  );
+}
+
+for (const line of ["horizontal-line", "vertical-line"]) {
+  NodeTest.test(
+    `selects a visible ancestor when clicking the SVG ${line}`,
+    { timeout: 25_000 },
+    async () => {
+      await load("svg");
+      NodeAssert.equal(
+        await page.locator(`#${line}`).evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.id;
+        }),
+        line,
+      );
+      await start();
+      await chooseTarget(line);
+      await page.keyboard.type(`Annotate ${line}`);
+      const result = await attach();
+      NodeAssert.equal(result.annotation.elements.length, 1);
+      NodeAssert.equal(result.annotation.elements[0].element.tagName, "svg");
+      NodeAssert.ok(result.annotation.elements[0].element.htmlPreview.includes("line-chart"));
+      NodeAssert.equal(result.annotation.comment, `Annotate ${line}`);
+      NodeAssert.ok(result.crop.width > 0 && result.crop.height > 0 && !result.screenshot.empty);
+      await assertClosed();
+    },
+  );
+}
