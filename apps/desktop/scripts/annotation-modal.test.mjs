@@ -204,6 +204,7 @@ async function commentValue() {
 
 // The host may still focus a toolbar button. A new redirect also lets the old
 // preload reach the lost-comment assertion when it reproduces the focus trap.
+// Read focus directly: the preload intentionally suppresses page focus listeners.
 async function waitForCommentFocus(previousRedirects) {
   const node = await uiNode("placeholder", "Describe the change…");
   const { object } = await cdp.send("DOM.resolveNode", { nodeId: node.nodeId });
@@ -212,29 +213,24 @@ async function waitForCommentFocus(previousRedirects) {
       objectId: object.objectId,
       functionDeclaration: `function (previousRedirects) {
         return new Promise((resolve) => {
-          const clean = () => {
-            clearTimeout(deadline);
-            this.removeEventListener("focus", ready);
-            document.removeEventListener("focusin", ready);
-          };
-          const deadline = setTimeout(() => {
-            clean();
-            const active = this.getRootNode().activeElement;
-            resolve({
-              active: active?.outerHTML,
-              pageActive: document.activeElement?.outerHTML.slice(0, 500),
-              commentVisible: this.checkVisibility(),
-              redirects: window.fixtureState.focusRedirects,
-            });
-          }, 8000);
+          const deadline = performance.now() + 8000;
           const ready = () => {
-            if (this.getRootNode().activeElement !== this &&
-                window.fixtureState.focusRedirects <= previousRedirects) return;
-            clean();
-            resolve(true);
+            const active = this.getRootNode().activeElement;
+            if (active === this || window.fixtureState.focusRedirects > previousRedirects) {
+              resolve(true);
+              return;
+            }
+            if (performance.now() >= deadline) {
+              resolve({
+                active: active?.outerHTML,
+                pageActive: document.activeElement?.outerHTML.slice(0, 500),
+                commentVisible: this.checkVisibility(),
+                redirects: window.fixtureState.focusRedirects,
+              });
+              return;
+            }
+            requestAnimationFrame(ready);
           };
-          this.addEventListener("focus", ready);
-          document.addEventListener("focusin", ready);
           ready();
         });
       }`,
