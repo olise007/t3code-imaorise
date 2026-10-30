@@ -1,3 +1,4 @@
+import { revealSidebarRow } from "./sidebar/routeReveal";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "./ThreadHoverCard";
 import { CollapsibleSectionHeader } from "./ui/collapsible-section-header";
@@ -3001,9 +3002,7 @@ export default function Sidebar() {
 
   useEffect(() => {
     if (!isSearchingThreads) return;
-    document
-      .getElementById(`sidebar-thread-search-result-${activeSearchResultIndex}`)
-      ?.scrollIntoView({ block: "nearest" });
+    revealSidebarRow(document.getElementById(`sidebar-thread-search-result-${activeSearchResultIndex}`));
   }, [activeSearchResultIndex, isSearchingThreads, threadSearchResultOrderKey]);
 
   // Arm a timeout for the earliest upcoming wake so the shelf empties the
