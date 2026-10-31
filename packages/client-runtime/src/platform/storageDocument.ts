@@ -23,6 +23,9 @@ export const ConnectionCatalogDocument = Schema.Struct({
   profiles: Schema.Array(ConnectionProfile),
   credentials: Schema.Array(StoredConnectionCredential),
   remoteDpopTokens: Schema.Array(TokenStore.RemoteDpopAccessToken),
+  displayNames: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ environmentId: EnvironmentId, label: Schema.String })),
+  ),
   githubRoutingPermissions: Schema.optionalKey(Schema.Array(StoredGitHubRoutingPermission)),
   // Saved environments the user switched off. They stay registered with their
   // credentials and cache but never connect until switched back on. Older
@@ -178,6 +181,9 @@ export function removeConnectionFromCatalog(
   const next = setRoutesInCatalog(document, environmentId, []);
   return {
     ...next,
+    displayNames: (next.displayNames ?? []).filter(
+      (value) => value.environmentId !== environmentId,
+    ),
     remoteDpopTokens: removeCatalogValue(
       next.remoteDpopTokens,
       (value) => value.environmentId,
@@ -234,5 +240,20 @@ export function putRemoteDpopTokenInCatalog(
       (value) => value.environmentId,
       token,
     ),
+  };
+}
+
+/** Stores a device-local name independently of server metadata and route order. */
+export function renameConnectionInCatalog(
+  document: ConnectionCatalogDocument,
+  environmentId: EnvironmentId,
+  label: string,
+): ConnectionCatalogDocument {
+  return {
+    ...document,
+    displayNames: replaceCatalogValue(document.displayNames ?? [], (value) => value.environmentId, {
+      environmentId,
+      label,
+    }),
   };
 }

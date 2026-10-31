@@ -1,0 +1,39 @@
+name: Personal connection name validation
+on:
+  push:
+    branches: [agent/rename-saved-ssh]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: personal-connection-name-validation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Connection name and catalog regressions
+        run: timeout 600 vp test run --maxWorkers 1 packages/client-runtime/src/connection/registry.test.ts packages/client-runtime/src/platform/storageDocument.test.ts packages/client-runtime/src/state/presentation.test.ts packages/client-runtime/src/state/threads-atoms.test.ts apps/web/src/connection/storage.test.ts apps/web/src/components/settings/RenameConnectionDialog.test.tsx
+      - name: Scoped lint
+        run: vp lint packages/client-runtime/src/connection/catalog.ts packages/client-runtime/src/connection/registry.ts packages/client-runtime/src/connection/registry.test.ts packages/client-runtime/src/platform/persistence.ts packages/client-runtime/src/platform/storageDocument.ts packages/client-runtime/src/platform/storageDocument.test.ts packages/client-runtime/src/state/connections.ts packages/client-runtime/src/state/threads-atoms.test.ts apps/web/src/connection/storage.ts apps/mobile/src/connection/storage.ts apps/web/src/components/settings/ConnectionsSettings.tsx apps/web/src/components/settings/RenameConnectionDialog.tsx apps/web/src/components/settings/RenameConnectionDialog.test.tsx
+      - name: Shared client types
+        run: timeout 600 vp run --filter @t3tools/client-runtime typecheck
+      - name: Web types
+        run: timeout 600 vp run --filter @t3tools/web typecheck
+      - name: Mobile types
+        run: timeout 600 vp run --filter @t3tools/mobile typecheck

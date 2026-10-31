@@ -33,6 +33,7 @@ import {
   registerConnectionInCatalog,
   removeConnectionFromCatalog,
   setConnectionEnabledInCatalog,
+  renameConnectionInCatalog,
 } from "./storageDocument.ts";
 
 const decodeConnectionCatalogDocument = Schema.decodeUnknownEffect(ConnectionCatalogDocument);
@@ -458,5 +459,24 @@ describe("ConnectionCatalogDocument", () => {
     expect(
       setRoutesInCatalog(document, ENVIRONMENT_ID, [BEARER_TARGET, RELAY_TARGET]).targets,
     ).toEqual([BEARER_TARGET, RELAY_TARGET, other]);
+  });
+});
+
+describe("local display names", () => {
+  it("round-trips names, retains them across route changes, and forgets them on removal", () => {
+    const original = {
+      ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
+      targets: [RELAY_TARGET, BEARER_TARGET],
+    };
+    const renamed = renameConnectionInCatalog(original, ENVIRONMENT_ID, "Work machine");
+    const decoded = decodeCatalogDocument(JSON.parse(JSON.stringify(renamed)));
+    expect(decoded.displayNames).toEqual([
+      { environmentId: ENVIRONMENT_ID, label: "Work machine" },
+    ]);
+    expect(decoded.targets).toEqual(original.targets);
+    const reordered = setRoutesInCatalog(decoded, ENVIRONMENT_ID, [BEARER_TARGET, RELAY_TARGET]);
+    expect(reordered.displayNames).toEqual(decoded.displayNames);
+    expect(removeConnectionFromCatalog(reordered, ENVIRONMENT_ID).displayNames).toEqual([]);
+    expect(decodeCatalogDocument(EMPTY_CONNECTION_CATALOG_DOCUMENT).displayNames).toBeUndefined();
   });
 });

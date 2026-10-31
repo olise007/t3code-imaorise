@@ -6,7 +6,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
-import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
+import { presentCatalogEntry, type ConnectionCatalogEntry } from "../connection/catalog.ts";
 import { AVAILABLE_CONNECTION_STATE } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import {
@@ -57,7 +57,7 @@ export function createEnvironmentCatalogAtoms<R, E>(
           SubscriptionRef.changes(registry.entries).pipe(
             Stream.map((entries) => ({
               isReady: true,
-              entries,
+              entries: new Map([...entries].map(([id, entry]) => [id, presentCatalogEntry(entry)])),
             })),
           ),
         ),
@@ -134,6 +134,15 @@ export function createEnvironmentCatalogAtoms<R, E>(
         Effect.flatMap((registry) => registry.register(target)),
       ),
   });
+  const rename = createRuntimeCommand(runtime, {
+    label: "environment-catalog:rename",
+    scheduler: commandScheduler,
+    concurrency: serial,
+    execute: (input: { readonly environmentId: EnvironmentIdType; readonly label: string }) =>
+      EnvironmentRegistry.EnvironmentRegistry.pipe(
+        Effect.flatMap((registry) => registry.rename(input.environmentId, input.label)),
+      ),
+  });
   const remove = createRuntimeCommand(runtime, {
     label: "environment-catalog:remove",
     scheduler: commandScheduler,
@@ -201,6 +210,7 @@ export function createEnvironmentCatalogAtoms<R, E>(
     networkStatusValueAtom,
     stateAtom,
     register,
+    rename,
     remove,
     removeRoute,
     reorderRoutes,

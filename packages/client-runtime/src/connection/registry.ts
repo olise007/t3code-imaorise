@@ -152,6 +152,16 @@ export class EnvironmentRegistry extends Context.Service<
       | PlatformEnvironmentRemovalError
     >;
     readonly retryNow: (environmentId: EnvironmentId) => Effect.Effect<void>;
+    /** Changes only this client's saved display name, without replacing the live session. */
+    readonly rename: (
+      environmentId: EnvironmentId,
+      label: string,
+    ) => Effect.Effect<
+      void,
+      | EnvironmentNotRegisteredError
+      | Persistence.ConnectionPersistenceError
+      | ConnectionBlockedError
+    >;
     /**
      * Switches a saved environment on or off. Off drops the socket, stops the
      * retry ladder, and persists so the next launch stays off. Registration,
@@ -219,6 +229,9 @@ export const make = Effect.gen(function* () {
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
   const ssh = yield* ClientCapabilities.SshEnvironmentGateway;
+  const displayNames = new Map(
+    (yield* storage.listDisplayNames).map((value) => [value.environmentId, value.label]),
+  );
   const persistedTargets = yield* storage.list;
   const disabledEnvironmentIds = new Set(yield* storage.listDisabled);
   const loadRoute = Effect.fn("EnvironmentRegistry.loadRoute")(function* (
@@ -260,6 +273,9 @@ export const make = Effect.gen(function* () {
               target: first.target,
               profile: first.profile,
               enabled: !disabledEnvironmentIds.has(environmentId),
+              ...(displayNames.has(environmentId)
+                ? { displayName: displayNames.get(environmentId)! }
+                : {}),
             },
             routes,
           ),
@@ -1079,6 +1095,34 @@ export const make = Effect.gen(function* () {
       Effect.catchTags({ EnvironmentNotRegisteredError: () => Effect.void }),
       Effect.withSpan("EnvironmentRegistry.retryNow"),
     );
+  const rename = Effect.fn("EnvironmentRegistry.rename")(function* (
+    environmentId: EnvironmentId,
+    input: string,
+  ) {
+    const label = input.trim();
+    if (!label)
+      return yield* new ConnectionBlockedError({
+        reason: "configuration",
+        detail: "Connection name cannot be empty.",
+      });
+    yield* withLeaseLock(
+      environmentId,
+      Effect.gen(function* () {
+        const entry = yield* getEntry(environmentId);
+        if (!(yield* Ref.get(persistedEnvironmentIds)).has(environmentId)) {
+          return yield* new ConnectionBlockedError({
+            reason: "configuration",
+            detail: "Only saved connections can be renamed.",
+          });
+        }
+        yield* registrations.rename(environmentId, label);
+        yield* SubscriptionRef.update(entries, (current) =>
+          new Map(current).set(environmentId, { ...entry, displayName: label }),
+        );
+      }),
+    );
+  });
+
   const setEnabled = Effect.fn("EnvironmentRegistry.setEnabled")(function* (
     environmentId: EnvironmentId,
     enabled: boolean,
@@ -1227,6 +1271,7 @@ export const make = Effect.gen(function* () {
     removeRelayEnvironments,
     retryNow,
     setEnabled,
+    rename,
     setCompatibility,
     state,
     stateChanges,

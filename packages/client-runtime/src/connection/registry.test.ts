@@ -27,6 +27,7 @@ import {
   BearerConnectionCredential,
   BearerConnectionProfile,
   BearerConnectionRegistration,
+  presentCatalogEntry,
   type ConnectionCatalogEntry,
   type ConnectionRegistration,
   type ConnectionRoute,
@@ -163,6 +164,7 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
     readonly beforePrepareRoute?: (
       target: ConnectionTarget,
     ) => Effect.Effect<ConnectionBlockedError | undefined>;
+    readonly renameError?: boolean;
     readonly initialDisabled?: ReadonlyArray<EnvironmentId>;
     /** Direct addresses the connected server reports. */
     readonly directEndpoints?: ServerConfig["directEndpoints"];
@@ -203,8 +205,12 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
   const storedDisabled = yield* Ref.make<ReadonlySet<EnvironmentId>>(
     new Set(options?.initialDisabled ?? []),
   );
+  const storedNames = yield* Ref.make<
+    ReadonlyArray<{ environmentId: EnvironmentId; label: string }>
+  >([]);
   const targetStore = Persistence.ConnectionTargetStore.of({
     list: Ref.get(storedTargets),
+    listDisplayNames: Ref.get(storedNames),
     listDisabled: Ref.get(storedDisabled).pipe(Effect.map((ids) => [...ids])),
   });
   const registrationStore = Persistence.ConnectionRegistrationStore.of({
@@ -268,6 +274,18 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
           return next;
         });
       }),
+    rename: (environmentId, label) =>
+      options?.renameError
+        ? Effect.fail(
+            new Persistence.ConnectionPersistenceError({
+              operation: "rename-connection",
+              message: "Storage unavailable",
+            }),
+          )
+        : Ref.update(storedNames, (names) => [
+            ...names.filter((name) => name.environmentId !== environmentId),
+            { environmentId, label },
+          ]),
     setEnabled: (environmentId, enabled) =>
       Ref.update(storedDisabled, (current) => {
         const next = new Set(current);
@@ -466,6 +484,7 @@ const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(function* (
   return {
     layer,
     storedTargets,
+    storedNames,
     shellCache,
     cacheClears,
     ownedDataClears,
@@ -2284,3 +2303,93 @@ it.effect("cancelling a same-ID SSH edit restores the persisted profile", () =>
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   }),
 );
+
+describe("device-local connection names", () => {
+  for (const disabled of [false, true]) {
+    it.effect(
+      `renames a ${disabled ? "switched-off" : "connected"} SSH environment without replacing its session`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness([SSH_CONNECTION], [SSH_PROFILE], [], {
+            initialDisabled: disabled ? [SSH_CONNECTION.environmentId] : [],
+          });
+          yield* Effect.gen(function* () {
+            const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+            if (!disabled) {
+              yield* registry.start;
+              yield* awaitConnectionState(
+                registry,
+                SSH_CONNECTION.environmentId,
+                (state) => state.phase === "connected",
+              );
+            }
+            const sessions = yield* Ref.get(harness.sessions);
+            const before = (yield* SubscriptionRef.get(registry.entries)).get(
+              SSH_CONNECTION.environmentId,
+            )!;
+            yield* registry.rename(SSH_CONNECTION.environmentId, "  Production box  ");
+            const after = (yield* SubscriptionRef.get(registry.entries)).get(
+              SSH_CONNECTION.environmentId,
+            )!;
+            expect(after.target).toBe(before.target);
+            expect(after.profile).toBe(before.profile);
+            expect(after.enabled).toBe(before.enabled);
+            expect(presentCatalogEntry(after).target.label).toBe("Production box");
+            expect(yield* Ref.get(harness.sessions)).toEqual(sessions);
+            expect(yield* Ref.get(harness.releasedSessions)).toBe(0);
+            expect(yield* Ref.get(harness.disconnectedSshTargets)).toEqual([]);
+            yield* registry.register(
+              new SshConnectionRegistration({ target: SSH_CONNECTION, profile: SSH_PROFILE }),
+            );
+            expect(
+              (yield* SubscriptionRef.get(registry.entries)).get(SSH_CONNECTION.environmentId)
+                ?.displayName,
+            ).toBe("Production box");
+            const fallback = new RelayConnectionTarget({
+              environmentId: SSH_CONNECTION.environmentId,
+              label: "Server-reported name",
+            });
+            yield* registry.register(new RelayConnectionRegistration({ target: fallback }));
+            yield* registry.reorderRoutes(SSH_CONNECTION.environmentId, [
+              connectionRouteId(fallback),
+              connectionRouteId(SSH_CONNECTION),
+            ]);
+            const withFallback = (yield* SubscriptionRef.get(registry.entries)).get(
+              SSH_CONNECTION.environmentId,
+            )!;
+            expect(presentCatalogEntry(withFallback).target.label).toBe("Production box");
+            expect(presentCatalogEntry(withFallback).alternateRoutes?.[0]?.target.label).toBe(
+              "Production box",
+            );
+          }).pipe(Effect.provide(harness.layer), Effect.scoped);
+          yield* Effect.gen(function* () {
+            const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+            expect(
+              presentCatalogEntry(
+                (yield* SubscriptionRef.get(registry.entries)).get(SSH_CONNECTION.environmentId)!,
+              ).target.label,
+            ).toBe("Production box");
+          }).pipe(Effect.provide(harness.layer), Effect.scoped);
+        }),
+    );
+  }
+  it.effect("rejects empty names and preserves the catalog when storage fails", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([SSH_CONNECTION], [SSH_PROFILE], [], {
+        renameError: true,
+      });
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        const before = yield* SubscriptionRef.get(registry.entries);
+        expect((yield* Effect.flip(registry.rename(SSH_CONNECTION.environmentId, "  ")))._tag).toBe(
+          "ConnectionBlockedError",
+        );
+        expect(
+          yield* Effect.flip(registry.rename(SSH_CONNECTION.environmentId, "New name")),
+        ).toMatchObject({ _tag: "ConnectionPersistenceError" });
+        expect(yield* SubscriptionRef.get(registry.entries)).toBe(before);
+        expect(yield* Ref.get(harness.storedNames)).toEqual([]);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+});

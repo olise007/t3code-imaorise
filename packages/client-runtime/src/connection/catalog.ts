@@ -65,6 +65,7 @@ export interface ConnectionRoute {
  * with `connectionRoutes`.
  */
 export interface ConnectionCatalogEntry {
+  readonly displayName?: string;
   readonly target: ConnectionTarget;
   readonly profile: Option.Option<ConnectionProfile>;
   readonly alternateRoutes?: ReadonlyArray<ConnectionRoute>;
@@ -158,4 +159,34 @@ export function connectionRegistrationCatalogEntry(
         enabled: true,
       };
   }
+}
+
+/** Applies the local name only to client presentation; transport targets stay unchanged. */
+export function presentCatalogEntry(entry: ConnectionCatalogEntry): ConnectionCatalogEntry {
+  const label = entry.displayName;
+  if (label === undefined) return entry;
+  const renameTarget = (target: ConnectionTarget): ConnectionTarget => {
+    switch (target._tag) {
+      case "PrimaryConnectionTarget":
+        return new PrimaryConnectionTarget({ ...target, label });
+      case "BearerConnectionTarget":
+        return new BearerConnectionTarget({ ...target, label });
+      case "RelayConnectionTarget":
+        return new RelayConnectionTarget({ ...target, label });
+      case "SshConnectionTarget":
+        return new SshConnectionTarget({ ...target, label });
+    }
+  };
+  return {
+    ...entry,
+    target: renameTarget(entry.target),
+    ...(entry.alternateRoutes === undefined
+      ? {}
+      : {
+          alternateRoutes: entry.alternateRoutes.map((route) => ({
+            ...route,
+            target: renameTarget(route.target),
+          })),
+        }),
+  };
 }

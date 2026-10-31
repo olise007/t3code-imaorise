@@ -3,6 +3,7 @@ import {
   registerConnectionInCatalog,
   removeConnectionFromCatalog,
   setConnectionEnabledInCatalog,
+  renameConnectionInCatalog,
   setRoutesInCatalog,
   removeCatalogValue,
   replaceCatalogValue,
@@ -26,6 +27,8 @@ import * as CatalogStore from "./catalog-store";
 function targetPersistenceError(
   operation:
     | "list-targets"
+    | "list-display-names"
+    | "rename-connection"
     | "list-disabled-targets"
     | "register-connection"
     | "set-connection-routes"
@@ -53,6 +56,10 @@ export const layer = Layer.effectContext(
         Effect.map((document) => document.targets),
         Effect.mapError((error) => targetPersistenceError("list-targets", error)),
       ),
+      listDisplayNames: catalog.read.pipe(
+        Effect.map((document) => document.displayNames ?? []),
+        Effect.mapError((cause) => targetPersistenceError("list-display-names", cause)),
+      ),
       listDisabled: catalog.read.pipe(
         Effect.map((document) => document.disabledEnvironmentIds),
         Effect.mapError((error) => targetPersistenceError("list-disabled-targets", error)),
@@ -71,6 +78,10 @@ export const layer = Layer.effectContext(
         catalog
           .update((document) => removeConnectionFromCatalog(document, environmentId))
           .pipe(Effect.mapError((error) => targetPersistenceError("remove-connection", error))),
+      rename: (environmentId, label) =>
+        catalog
+          .update((document) => renameConnectionInCatalog(document, environmentId, label))
+          .pipe(Effect.mapError((cause) => targetPersistenceError("rename-connection", cause))),
       setEnabled: (environmentId, enabled) =>
         catalog
           .update((document) => setConnectionEnabledInCatalog(document, environmentId, enabled))

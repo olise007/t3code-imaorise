@@ -21,6 +21,8 @@ export class ConnectionPersistenceError extends Schema.TaggedError<ConnectionPer
     operation: Schema.Literals([
       "list-targets",
       "list-disabled-targets",
+      "list-display-names",
+      "rename-connection",
       "register-connection",
       "set-connection-routes",
       "remove-connection",
@@ -46,6 +48,10 @@ export class ConnectionTargetStore extends Context.Service<
   ConnectionTargetStore,
   {
     readonly list: Effect.Effect<ReadonlyArray<ConnectionTarget>, ConnectionPersistenceError>;
+    readonly listDisplayNames: Effect.Effect<
+      ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly label: string }>,
+      ConnectionPersistenceError
+    >;
     /** Saved environments the user switched off. See `ConnectionRegistrationStore.setEnabled`. */
     readonly listDisabled: Effect.Effect<ReadonlyArray<EnvironmentId>, ConnectionPersistenceError>;
   }
@@ -70,6 +76,10 @@ export class ConnectionRegistrationStore extends Context.Service<
     /** Forgets the environment and every route it had. */
     readonly remove: (
       environmentId: EnvironmentId,
+    ) => Effect.Effect<void, ConnectionPersistenceError>;
+    readonly rename: (
+      environmentId: EnvironmentId,
+      label: string,
     ) => Effect.Effect<void, ConnectionPersistenceError>;
     readonly setEnabled: (
       environmentId: EnvironmentId,

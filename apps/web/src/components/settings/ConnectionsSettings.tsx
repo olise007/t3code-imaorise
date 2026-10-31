@@ -6,6 +6,7 @@ import {
 } from "~/rpc/environmentAccess";
 import { SessionPermissions } from "./SessionPermissions";
 
+import { RenameConnectionDialog } from "./RenameConnectionDialog";
 import { BackendStartupSettings } from "./BackendStartupSettings";
 import { useEnvironmentSessionState } from "~/state/session";
 import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
@@ -1538,6 +1539,8 @@ function SavedBackendListRow({
   onRemove,
   onAddRoute,
 }: SavedBackendListRowProps) {
+  const [renameOpen, setRenameOpen] = useState(false);
+  const renameConnection = useAtomCommand(environmentCatalog.rename, { reportFailure: false });
   const [routesOpen, setRoutesOpen] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [diagnosisOpen, setDiagnosisOpen] = useState(false);
@@ -1660,200 +1663,219 @@ function SavedBackendListRow({
   }`;
 
   return (
-    <EnvironmentRow
-      kind={machineKind}
-      label={environment.label}
-      dimmed={!enabled}
-      subtitle={
-        <span className="flex min-w-0 items-center gap-1">
-          <Tooltip>
-            {/* The status can change while the tooltip is open, and base-ui only
+    <>
+      <EnvironmentRow
+        kind={machineKind}
+        label={environment.label}
+        dimmed={!enabled}
+        subtitle={
+          <span className="flex min-w-0 items-center gap-1">
+            <Tooltip>
+              {/* The status can change while the tooltip is open, and base-ui only
                 re-measures the popup when the trigger's payload changes. */}
-            <TooltipTrigger
-              payload={statusTooltip}
-              render={
-                <span
-                  className={cn(
-                    "min-w-0 truncate",
-                    enabled &&
-                      status.tone === "error" &&
-                      !resumingServerUpdate &&
-                      !diagnosis &&
-                      "text-destructive",
-                  )}
-                />
-              }
-            >
-              {subtitleText}
-            </TooltipTrigger>
-            <TooltipPopup side="top" className="whitespace-pre-wrap">
-              {statusTooltip}
-            </TooltipPopup>
-          </Tooltip>
-          <span aria-hidden className="shrink-0">
-            ·
-          </span>
-          <button
-            type="button"
-            aria-expanded={routesOpen}
-            onClick={() => setRoutesOpen((open) => !open)}
-            className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-          >
-            {routeCount === 1 ? "Routes" : `${routeCount} routes`}
-            <ChevronRightIcon
-              aria-hidden
-              className={cn(
-                "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
-                routesOpen && "rotate-90",
-              )}
-            />
-          </button>
-          <span aria-hidden className="shrink-0">
-            ·
-          </span>
-          <button
-            type="button"
-            aria-expanded={permissionsOpen}
-            aria-controls={`remote-permissions-${environmentId}`}
-            onClick={() => setPermissionsOpen((open) => !open)}
-            className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-          >
-            Permissions
-            <ChevronRightIcon
-              aria-hidden
-              className={cn(
-                "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
-                permissionsOpen && "rotate-90",
-              )}
-            />
-          </button>
-        </span>
-      }
-      below={
-        <>
-          {diagnosis ? (
-            <ConnectionDiagnosisSummary
-              diagnosis={diagnosis}
-              retryAt={connectionState.phase === "backoff" ? connectionState.retryAt : null}
-              attempt={connectionState.attempt}
-              expanded={diagnosisOpen}
-              onToggle={() => setDiagnosisOpen((open) => !open)}
-            />
-          ) : null}
-          {serverUpdateState.status !== "idle" ? (
-            <div className="mt-1 max-w-md">
-              <ServerUpdateProgress state={serverUpdateState} />
-            </div>
-          ) : null}
-        </>
-      }
-      detail={
-        <>
-          {diagnosis && diagnosisOpen ? (
-            <ConnectionDiagnosisPanel
-              hostLabel={environment.label}
-              diagnosis={diagnosis}
-              onRetry={() => void retryNow(environmentId)}
-              onAddRoute={relayOnly ? () => onAddRoute(environment) : null}
-            />
-          ) : null}
-          {routesOpen && (
-            <EnvironmentRoutesList
-              environment={environment}
-              onAddRoute={() => onAddRoute(environment)}
-            />
-          )}
-          {permissionsOpen && (
-            <div
-              id={`remote-permissions-${environmentId}`}
-              className="mt-2 border-t border-border/50"
-            >
-              <SessionPermissions
-                environmentId={environmentId}
-                connected={isConnected}
-                routeContext
-              />
-            </div>
-          )}
-        </>
-      }
-    >
-      {unsupported &&
-      environment.entry.serverUpdateRequired === true &&
-      serverUpdateState.status !== "running" ? (
-        <OutdatedServerUpdateAction
-          environmentId={environmentId}
-          serverLabel={`${environment.label} server`}
-          fromVersion={lastDescriptor?.serverVersion}
-          targetVersion={APP_VERSION}
-          label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
-        />
-      ) : null}
-      {showUpdateAction ? (
-        <ServerUpdateAction
-          environmentId={environmentId}
-          serverLabel={`${environment.label} server`}
-          selfUpdate={resolveServerSelfUpdateCapability(environment.serverConfig)}
-          installation={environment.serverConfig?.environment.capabilities.serverInstallation}
-          desktopAppUpdate={supportsDesktopAppUpdate(environment.serverConfig)}
-          threadContinuation={supportsServerUpdateThreadContinuation(environment.serverConfig)}
-          targetVersion={versionMismatch.clientVersion}
-          label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
-          appearance="icon"
-        />
-      ) : null}
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Switch
-              size="sm"
-              checked={enabled}
-              disabled={isRemoving || unsupported}
-              aria-label={`${enabled ? "Switch off" : "Switch on"} ${environment.label}`}
-              onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
-            />
-          }
-        />
-        <TooltipPopup side="top">
-          {unsupported ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
-        </TooltipPopup>
-      </Tooltip>
-      <Menu>
-        <MenuTrigger
-          render={
-            <Button
+              <TooltipTrigger
+                payload={statusTooltip}
+                render={
+                  <span
+                    className={cn(
+                      "min-w-0 truncate",
+                      enabled &&
+                        status.tone === "error" &&
+                        !resumingServerUpdate &&
+                        !diagnosis &&
+                        "text-destructive",
+                    )}
+                  />
+                }
+              >
+                {subtitleText}
+              </TooltipTrigger>
+              <TooltipPopup side="top" className="whitespace-pre-wrap">
+                {statusTooltip}
+              </TooltipPopup>
+            </Tooltip>
+            <span aria-hidden className="shrink-0">
+              ·
+            </span>
+            <button
               type="button"
-              variant="ghost-muted"
-              size="icon-xs"
-              disabled={isRemoving}
-              aria-label={`More actions for ${environment.label}`}
-            />
-          }
-        >
-          <EllipsisIcon className="size-3.5" />
-        </MenuTrigger>
-        <MenuPopup align="end">
-          <EnvironmentIconMenu
+              aria-expanded={routesOpen}
+              onClick={() => setRoutesOpen((open) => !open)}
+              className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              {routeCount === 1 ? "Routes" : `${routeCount} routes`}
+              <ChevronRightIcon
+                aria-hidden
+                className={cn(
+                  "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
+                  routesOpen && "rotate-90",
+                )}
+              />
+            </button>
+            <span aria-hidden className="shrink-0">
+              ·
+            </span>
+            <button
+              type="button"
+              aria-expanded={permissionsOpen}
+              aria-controls={`remote-permissions-${environmentId}`}
+              onClick={() => setPermissionsOpen((open) => !open)}
+              className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              Permissions
+              <ChevronRightIcon
+                aria-hidden
+                className={cn(
+                  "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
+                  permissionsOpen && "rotate-90",
+                )}
+              />
+            </button>
+          </span>
+        }
+        below={
+          <>
+            {diagnosis ? (
+              <ConnectionDiagnosisSummary
+                diagnosis={diagnosis}
+                retryAt={connectionState.phase === "backoff" ? connectionState.retryAt : null}
+                attempt={connectionState.attempt}
+                expanded={diagnosisOpen}
+                onToggle={() => setDiagnosisOpen((open) => !open)}
+              />
+            ) : null}
+            {serverUpdateState.status !== "idle" ? (
+              <div className="mt-1 max-w-md">
+                <ServerUpdateProgress state={serverUpdateState} />
+              </div>
+            ) : null}
+          </>
+        }
+        detail={
+          <>
+            {diagnosis && diagnosisOpen ? (
+              <ConnectionDiagnosisPanel
+                hostLabel={environment.label}
+                diagnosis={diagnosis}
+                onRetry={() => void retryNow(environmentId)}
+                onAddRoute={relayOnly ? () => onAddRoute(environment) : null}
+              />
+            ) : null}
+            {routesOpen && (
+              <EnvironmentRoutesList
+                environment={environment}
+                onAddRoute={() => onAddRoute(environment)}
+              />
+            )}
+            {permissionsOpen && (
+              <div
+                id={`remote-permissions-${environmentId}`}
+                className="mt-2 border-t border-border/50"
+              >
+                <SessionPermissions
+                  environmentId={environmentId}
+                  connected={isConnected}
+                  routeContext
+                />
+              </div>
+            )}
+          </>
+        }
+      >
+        {unsupported &&
+        environment.entry.serverUpdateRequired === true &&
+        serverUpdateState.status !== "running" ? (
+          <OutdatedServerUpdateAction
             environmentId={environmentId}
-            serverConfig={environment.serverConfig}
+            serverLabel={`${environment.label} server`}
+            fromVersion={lastDescriptor?.serverVersion}
+            targetVersion={APP_VERSION}
+            label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
           />
-          <MenuItem onClick={() => setRoutesOpen((open) => !open)}>
-            <RouteIcon />
-            {routesOpen ? "Hide routes" : "Routes"}
-          </MenuItem>
-          {mcpUrl ? (
-            <MenuItem onClick={() => copyMcpUrl(mcpUrl, { url: mcpUrl })}>Copy MCP URL</MenuItem>
-          ) : null}
-          {errorTraceId ? (
-            <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
-          ) : null}
-          <MenuSeparator />
-          <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
-            {isRemoving ? "Removing…" : "Remove from this device…"}
-          </MenuItem>
-        </MenuPopup>
-      </Menu>
-    </EnvironmentRow>
+        ) : null}
+        {showUpdateAction ? (
+          <ServerUpdateAction
+            environmentId={environmentId}
+            serverLabel={`${environment.label} server`}
+            selfUpdate={resolveServerSelfUpdateCapability(environment.serverConfig)}
+            installation={environment.serverConfig?.environment.capabilities.serverInstallation}
+            desktopAppUpdate={supportsDesktopAppUpdate(environment.serverConfig)}
+            threadContinuation={supportsServerUpdateThreadContinuation(environment.serverConfig)}
+            targetVersion={versionMismatch.clientVersion}
+            label={serverUpdateState.status === "failed" ? "Retry update" : "Update"}
+            appearance="icon"
+          />
+        ) : null}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Switch
+                size="sm"
+                checked={enabled}
+                disabled={isRemoving || unsupported}
+                aria-label={`${enabled ? "Switch off" : "Switch on"} ${environment.label}`}
+                onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
+              />
+            }
+          />
+          <TooltipPopup side="top">
+            {unsupported ? "Client not supported" : enabled ? "Switch off" : "Switch on"}
+          </TooltipPopup>
+        </Tooltip>
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost-muted"
+                size="icon-xs"
+                disabled={isRemoving}
+                aria-label={`More actions for ${environment.label}`}
+              />
+            }
+          >
+            <EllipsisIcon className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup align="end">
+            {connectionRoutes(environment.entry).some(
+              (route) => route.target._tag === "SshConnectionTarget",
+            ) ? (
+              <MenuItem onClick={() => setRenameOpen(true)}>Rename…</MenuItem>
+            ) : null}
+            <EnvironmentIconMenu
+              environmentId={environmentId}
+              serverConfig={environment.serverConfig}
+            />
+            <MenuItem onClick={() => setRoutesOpen((open) => !open)}>
+              <RouteIcon />
+              {routesOpen ? "Hide routes" : "Routes"}
+            </MenuItem>
+            {mcpUrl ? (
+              <MenuItem onClick={() => copyMcpUrl(mcpUrl, { url: mcpUrl })}>Copy MCP URL</MenuItem>
+            ) : null}
+            {errorTraceId ? (
+              <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
+            ) : null}
+            <MenuSeparator />
+            <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
+              {isRemoving ? "Removing…" : "Remove from this device…"}
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
+      </EnvironmentRow>
+      {renameOpen ? (
+        <RenameConnectionDialog
+          name={environment.label}
+          onClose={() => setRenameOpen(false)}
+          onSave={async (label) => {
+            const result = await renameConnection({ environmentId, label });
+            if (result._tag !== "Failure") return null;
+            const error = squashAtomCommandFailure(result);
+            return error instanceof Error ? error.message : "Could not rename connection.";
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 
