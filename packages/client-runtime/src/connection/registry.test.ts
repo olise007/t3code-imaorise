@@ -2335,6 +2335,7 @@ describe("device-local connection names", () => {
             expect(after.profile).toBe(before.profile);
             expect(after.enabled).toBe(before.enabled);
             expect(presentCatalogEntry(after).target.label).toBe("Production box");
+            if (!disabled) yield* registry.run(SSH_CONNECTION.environmentId, Effect.void);
             expect(yield* Ref.get(harness.sessions)).toEqual(sessions);
             expect(yield* Ref.get(harness.releasedSessions)).toBe(0);
             expect(yield* Ref.get(harness.disconnectedSshTargets)).toEqual([]);

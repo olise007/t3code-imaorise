@@ -1116,8 +1116,16 @@ export const make = Effect.gen(function* () {
           });
         }
         yield* registrations.rename(environmentId, label);
+        const next = { ...entry, displayName: label };
+        // Keep the lease metadata in sync so the next RPC reuses its supervisor.
+        yield* SubscriptionRef.update(serviceScopes, (current) => {
+          const lease = current.get(environmentId);
+          return lease === undefined
+            ? current
+            : new Map(current).set(environmentId, { ...lease, entry: next });
+        });
         yield* SubscriptionRef.update(entries, (current) =>
-          new Map(current).set(environmentId, { ...entry, displayName: label }),
+          new Map(current).set(environmentId, next),
         );
       }),
     );
