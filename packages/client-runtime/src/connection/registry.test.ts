@@ -2305,75 +2305,73 @@ it.effect("cancelling a same-ID SSH edit restores the persisted profile", () =>
 );
 
 describe("device-local connection names", () => {
-  for (const disabled of [false, true]) {
-    it.effect(
-      `renames a ${disabled ? "switched-off" : "connected"} SSH environment without replacing its session`,
-      () =>
-        Effect.gen(function* () {
-          const harness = yield* makeHarness([SSH_CONNECTION], [SSH_PROFILE], [], {
-            initialDisabled: disabled ? [SSH_CONNECTION.environmentId] : [],
+  it.effect.each([false, true])(
+    "renames an SSH environment (disabled: %s) without replacing its session",
+    (disabled) =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness([SSH_CONNECTION], [SSH_PROFILE], [], {
+          initialDisabled: disabled ? [SSH_CONNECTION.environmentId] : [],
+        });
+        yield* Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+          if (!disabled) {
+            yield* registry.start;
+            yield* awaitConnectionState(
+              registry,
+              SSH_CONNECTION.environmentId,
+              (state) => state.phase === "connected",
+            );
+          }
+          const sessions = yield* Ref.get(harness.sessions);
+          const before = (yield* SubscriptionRef.get(registry.entries)).get(
+            SSH_CONNECTION.environmentId,
+          )!;
+          yield* registry.rename(SSH_CONNECTION.environmentId, "  Production box  ");
+          const after = (yield* SubscriptionRef.get(registry.entries)).get(
+            SSH_CONNECTION.environmentId,
+          )!;
+          expect(after.target).toBe(before.target);
+          expect(after.profile).toBe(before.profile);
+          expect(after.enabled).toBe(before.enabled);
+          expect(presentCatalogEntry(after).target.label).toBe("Production box");
+          if (!disabled) yield* registry.run(SSH_CONNECTION.environmentId, Effect.void);
+          expect(yield* Ref.get(harness.sessions)).toEqual(sessions);
+          expect(yield* Ref.get(harness.releasedSessions)).toBe(0);
+          expect(yield* Ref.get(harness.disconnectedSshTargets)).toEqual([]);
+          yield* registry.register(
+            new SshConnectionRegistration({ target: SSH_CONNECTION, profile: SSH_PROFILE }),
+          );
+          expect(
+            (yield* SubscriptionRef.get(registry.entries)).get(SSH_CONNECTION.environmentId)
+              ?.displayName,
+          ).toBe("Production box");
+          const fallback = new RelayConnectionTarget({
+            environmentId: SSH_CONNECTION.environmentId,
+            label: "Server-reported name",
           });
-          yield* Effect.gen(function* () {
-            const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-            if (!disabled) {
-              yield* registry.start;
-              yield* awaitConnectionState(
-                registry,
-                SSH_CONNECTION.environmentId,
-                (state) => state.phase === "connected",
-              );
-            }
-            const sessions = yield* Ref.get(harness.sessions);
-            const before = (yield* SubscriptionRef.get(registry.entries)).get(
-              SSH_CONNECTION.environmentId,
-            )!;
-            yield* registry.rename(SSH_CONNECTION.environmentId, "  Production box  ");
-            const after = (yield* SubscriptionRef.get(registry.entries)).get(
-              SSH_CONNECTION.environmentId,
-            )!;
-            expect(after.target).toBe(before.target);
-            expect(after.profile).toBe(before.profile);
-            expect(after.enabled).toBe(before.enabled);
-            expect(presentCatalogEntry(after).target.label).toBe("Production box");
-            if (!disabled) yield* registry.run(SSH_CONNECTION.environmentId, Effect.void);
-            expect(yield* Ref.get(harness.sessions)).toEqual(sessions);
-            expect(yield* Ref.get(harness.releasedSessions)).toBe(0);
-            expect(yield* Ref.get(harness.disconnectedSshTargets)).toEqual([]);
-            yield* registry.register(
-              new SshConnectionRegistration({ target: SSH_CONNECTION, profile: SSH_PROFILE }),
-            );
-            expect(
-              (yield* SubscriptionRef.get(registry.entries)).get(SSH_CONNECTION.environmentId)
-                ?.displayName,
-            ).toBe("Production box");
-            const fallback = new RelayConnectionTarget({
-              environmentId: SSH_CONNECTION.environmentId,
-              label: "Server-reported name",
-            });
-            yield* registry.register(new RelayConnectionRegistration({ target: fallback }));
-            yield* registry.reorderRoutes(SSH_CONNECTION.environmentId, [
-              connectionRouteId(fallback),
-              connectionRouteId(SSH_CONNECTION),
-            ]);
-            const withFallback = (yield* SubscriptionRef.get(registry.entries)).get(
-              SSH_CONNECTION.environmentId,
-            )!;
-            expect(presentCatalogEntry(withFallback).target.label).toBe("Production box");
-            expect(presentCatalogEntry(withFallback).alternateRoutes?.[0]?.target.label).toBe(
-              "Production box",
-            );
-          }).pipe(Effect.provide(harness.layer), Effect.scoped);
-          yield* Effect.gen(function* () {
-            const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-            expect(
-              presentCatalogEntry(
-                (yield* SubscriptionRef.get(registry.entries)).get(SSH_CONNECTION.environmentId)!,
-              ).target.label,
-            ).toBe("Production box");
-          }).pipe(Effect.provide(harness.layer), Effect.scoped);
-        }),
-    );
-  }
+          yield* registry.register(new RelayConnectionRegistration({ target: fallback }));
+          yield* registry.reorderRoutes(SSH_CONNECTION.environmentId, [
+            connectionRouteId(fallback),
+            connectionRouteId(SSH_CONNECTION),
+          ]);
+          const withFallback = (yield* SubscriptionRef.get(registry.entries)).get(
+            SSH_CONNECTION.environmentId,
+          )!;
+          expect(presentCatalogEntry(withFallback).target.label).toBe("Production box");
+          expect(presentCatalogEntry(withFallback).alternateRoutes?.[0]?.target.label).toBe(
+            "Production box",
+          );
+        }).pipe(Effect.provide(harness.layer), Effect.scoped);
+        yield* Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+          expect(
+            presentCatalogEntry(
+              (yield* SubscriptionRef.get(registry.entries)).get(SSH_CONNECTION.environmentId)!,
+            ).target.label,
+          ).toBe("Production box");
+        }).pipe(Effect.provide(harness.layer), Effect.scoped);
+      }),
+  );
   it.effect("rejects empty names and preserves the catalog when storage fails", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness([SSH_CONNECTION], [SSH_PROFILE], [], {

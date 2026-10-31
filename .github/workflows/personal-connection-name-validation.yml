@@ -32,8 +32,11 @@ jobs:
       - name: Scoped lint
         run: vp lint apps/desktop/src/app/DesktopConnectionCatalogStore.test.ts packages/client-runtime/src/connection/catalog.ts packages/client-runtime/src/connection/registry.ts packages/client-runtime/src/connection/registry.test.ts packages/client-runtime/src/platform/persistence.ts packages/client-runtime/src/platform/storageDocument.ts packages/client-runtime/src/platform/storageDocument.test.ts packages/client-runtime/src/state/connections.ts packages/client-runtime/src/state/threads-atoms.test.ts apps/web/src/connection/storage.ts apps/mobile/src/connection/storage.ts apps/web/src/components/settings/ConnectionsSettings.tsx apps/web/src/components/settings/RenameConnectionDialog.tsx apps/web/src/components/settings/RenameConnectionDialog.test.tsx
       - name: Shared client types
+        if: ${{ !cancelled() }}
         run: timeout 600 vp run --filter @t3tools/client-runtime typecheck
       - name: Web types
+        if: ${{ !cancelled() }}
         run: timeout 600 vp run --filter @t3tools/web typecheck
       - name: Mobile types
+        if: ${{ !cancelled() }}
         run: timeout 600 vp run --filter @t3tools/mobile typecheck
