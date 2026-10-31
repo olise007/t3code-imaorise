@@ -181,9 +181,11 @@ export function removeConnectionFromCatalog(
   const next = setRoutesInCatalog(document, environmentId, []);
   return {
     ...next,
-    displayNames: (next.displayNames ?? []).filter(
-      (value) => value.environmentId !== environmentId,
-    ),
+    ...(next.displayNames === undefined
+      ? {}
+      : {
+          displayNames: next.displayNames.filter((value) => value.environmentId !== environmentId),
+        }),
     remoteDpopTokens: removeCatalogValue(
       next.remoteDpopTokens,
       (value) => value.environmentId,

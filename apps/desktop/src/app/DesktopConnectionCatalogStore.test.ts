@@ -105,7 +105,8 @@ describe("DesktopConnectionCatalogStore", () => {
     withStore(
       Effect.gen(function* () {
         const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
-        const catalog = '{"schemaVersion":1,"targets":[]}';
+        const catalog =
+          '{"schemaVersion":1,"targets":[],"displayNames":[{"environmentId":"work","label":"Production"}]}';
 
         assert.isTrue(yield* store.set(catalog));
         assert.deepStrictEqual(yield* store.get, Option.some(catalog));
