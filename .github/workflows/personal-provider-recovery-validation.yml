@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validate:
-    if: github.repository == 'olise007/t3code-imaorise' && github.ref == 'refs/heads/imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    if: github.repository == 'olise007/t3code-imaorise' && (github.ref == 'refs/heads/imaorise' || github.event_name == 'workflow_dispatch') && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     container:
