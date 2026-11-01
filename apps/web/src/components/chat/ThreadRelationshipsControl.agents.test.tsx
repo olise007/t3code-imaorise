@@ -758,7 +758,7 @@ it("shows readable models and only differing workspace details in agent tooltips
     title: "Parent conversation",
     projectId: "main",
     worktreePath: null,
-    lineage: {},
+    lineage: { parentThreadId: null, relationshipToParent: null },
     activeProviderThreadId: null,
   };
   const child = {

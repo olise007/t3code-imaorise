@@ -1,12 +1,17 @@
-import assert from "node:assert/strict";
-import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import * as NodeAssert from "node:assert/strict";
+import * as NodeModule from "node:module";
+import * as NodeURL from "node:url";
 import { chromium } from "playwright-core";
 
-const webRoot = fileURLToPath(new URL("../../web/", import.meta.url));
-const requireWeb = createRequire(new URL("../../web/package.json", import.meta.url));
+const webRoot = NodeURL.fileURLToPath(new URL("../../web/", import.meta.url));
+const requireWeb = NodeModule.createRequire(new URL("../../web/package.json", import.meta.url));
 const { createServer } = await import(requireWeb.resolve("vite"));
+const { default: react } = await import(requireWeb.resolve("@vitejs/plugin-react"));
 const server = await createServer({
+  configFile: false,
+  appType: "mpa",
+  plugins: [react()],
+  optimizeDeps: { entries: ["test-fixtures/upstream-performance.html"] },
   root: webRoot,
   server: { host: "127.0.0.1", port: 0 },
   logLevel: "error",
@@ -15,7 +20,7 @@ let browser;
 try {
   await server.listen();
   const address = server.httpServer.address();
-  assert(address && typeof address !== "string");
+  NodeAssert.ok(address && typeof address !== "string");
   browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
   const page = await browser.newPage();
   const errors = [];
@@ -36,19 +41,19 @@ try {
     };
   });
   await page.getByText("thread-2", { exact: true }).click();
-  assert.equal(
+  NodeAssert.equal(
     await page.evaluate(() => window.scrollCalls),
     0,
     "pointer activation must not force a scroll",
   );
   await page.evaluate(() => document.getElementById("row-40").focus({ preventScroll: true }));
   await page.keyboard.press("Enter");
-  assert.equal(
+  NodeAssert.equal(
     await page.evaluate(() => window.scrollCalls),
     1,
     "keyboard activation must reveal the row",
   );
-  assert(
+  NodeAssert.ok(
     await page.evaluate(() => {
       const row = document.getElementById("row-40").getBoundingClientRect();
       const list = document.querySelector("ul").getBoundingClientRect();
@@ -56,7 +61,7 @@ try {
     }),
     "keyboard target should be visible",
   );
-  assert.deepEqual(errors, []);
+  NodeAssert.deepEqual(errors, []);
   console.log(
     "PASS: composer wrapping, pointer activation without scrolling, and keyboard row reveal",
   );
