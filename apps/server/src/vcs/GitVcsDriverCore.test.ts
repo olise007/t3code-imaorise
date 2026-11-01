@@ -1954,6 +1954,10 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         }
         yield* git(cwd, ["add", "."]);
         yield* git(cwd, ["update-index", "--chmod=+x", "mode-only.sh"]);
+        // Review ranges include the working tree; keep its mode in sync with the index.
+        if ((yield* HostProcess.Platform) !== "win32") {
+          yield* (yield* FileSystem.FileSystem).chmod(`${cwd}/mode-only.sh`, 0o755);
+        }
         yield* git(cwd, ["commit", "-m", "rename and add files"]);
         const preview = yield* driver.getReviewDiffPreview({
           cwd,
@@ -3830,7 +3834,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           assert.isFalse(yield* fs.exists(path.resolve(commitCwd, mergePath)));
 
           yield* driver.commit(commitCwd, "Selected without merge", "", {
-            stage: { filePaths: ["selected.txt"] },
+            stage: { filePaths: [location === "nested" ? "../selected.txt" : "selected.txt"] },
           });
 
           assert.equal(yield* git(cwd, ["show", "-s", "--format=%P", "HEAD"]), originalHead);

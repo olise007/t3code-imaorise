@@ -5,6 +5,10 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { expect, it, vi } from "vite-plus/test";
 
 const mint = vi.hoisted(() => vi.fn());
+// These renderer fixtures have no desktop editor bridge; WSL discovery has its own suite.
+vi.mock("../wslEditorDestinations", () => ({
+  useWslEditorDestinations: () => ({ active: false }),
+}));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => undefined }));

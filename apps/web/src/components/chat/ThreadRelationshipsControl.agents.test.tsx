@@ -755,6 +755,7 @@ it("shows readable models and only differing workspace details in agent tooltips
   state.showTooltips = true;
   const parent = {
     id: "parent",
+    title: "Parent conversation",
     projectId: "main",
     worktreePath: null,
     lineage: {},

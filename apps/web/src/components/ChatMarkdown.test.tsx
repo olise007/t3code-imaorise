@@ -17,6 +17,10 @@ import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 
+// These renderer fixtures have no desktop editor bridge; WSL discovery has its own suite.
+vi.mock("../wslEditorDestinations", () => ({
+  useWslEditorDestinations: () => ({ active: false }),
+}));
 vi.mock("../hooks/useFileMetadata", () => ({ useFileMetadata: () => null }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
 vi.mock("./chat/MermaidDiagram", () => ({

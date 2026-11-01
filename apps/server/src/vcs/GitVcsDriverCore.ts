@@ -2253,7 +2253,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               }),
           ),
         );
-        // Like git commit --only, reject partial merges before reset can discard their ancestry.
+        // Like git commit --only, reject partial merges before rebuilding the real index.
         if (isMerging) {
           return yield* new GitCommandError({
             operation: "GitVcsDriver.commit",

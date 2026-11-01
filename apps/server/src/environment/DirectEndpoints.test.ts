@@ -101,11 +101,21 @@ const virtualInterface = (address: string, mac = "02:42:ac:11:00:01") => [
 
 describe("resolveBoundEndpoints", () => {
   it("lists nothing for a loopback-only server", () => {
-    expect(resolveBoundEndpoints({ host: undefined, port: 3773, interfaces: INTERFACES })).toEqual(
-      [],
-    );
     expect(
-      resolveBoundEndpoints({ host: "127.0.0.1", port: 3773, interfaces: INTERFACES }),
+      resolveBoundEndpoints({
+        platform: "linux",
+        host: undefined,
+        port: 3773,
+        interfaces: INTERFACES,
+      }),
+    ).toEqual([]);
+    expect(
+      resolveBoundEndpoints({
+        platform: "linux",
+        host: "127.0.0.1",
+        port: 3773,
+        interfaces: INTERFACES,
+      }),
     ).toEqual([]);
   });
 
@@ -192,7 +202,12 @@ describe("resolveBoundEndpoints", () => {
 
   it("lists only the bound address for a specific bind", () => {
     expect(
-      resolveBoundEndpoints({ host: "100.101.102.103", port: 3773, interfaces: INTERFACES }),
+      resolveBoundEndpoints({
+        platform: "linux",
+        host: "100.101.102.103",
+        port: 3773,
+        interfaces: INTERFACES,
+      }),
     ).toEqual([{ kind: "tailnet", httpBaseUrl: "http://100.101.102.103:3773/" }]);
   });
 
