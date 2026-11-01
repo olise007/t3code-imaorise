@@ -4,6 +4,7 @@ import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as Sink from "effect/Sink";
 import * as TestClock from "effect/testing/TestClock";
 import * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -26,9 +27,10 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
       const handle = yield* spawner.spawn(
         ChildProcess.make(process.execPath, ["-e", "process.exit(7)"]),
       );
-      // Model an inherited pipe: the provider exits but stdout never reaches EOF.
+      // Isolate the exit watcher from the real stdin pipe closing first. This
+      // idle test sends no requests; stdout models a pipe inherited by a child.
       const context = yield* Layer.build(
-        CodexClient.layerChildProcess({ ...handle, stdout: Stream.never }),
+        CodexClient.layerChildProcess({ ...handle, stdout: Stream.never, stdin: Sink.drain }),
       );
       const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
         Effect.provide(context),
