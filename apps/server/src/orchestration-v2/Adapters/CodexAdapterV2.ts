@@ -2351,11 +2351,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   .pipe(
                     // Codex unloads idle threads and kills their terminals. A
                     // later inspection can therefore find no thread at all.
-                    Effect.catchTag("CodexAppServerRequestError", (error) =>
-                      error.code === -32600 && error.errorMessage.startsWith("thread not found:")
-                        ? Effect.succeed({ data: [], nextCursor: null })
-                        : Effect.fail(error),
-                    ),
+                    Effect.catchTags({
+                      CodexAppServerRequestError: (error) =>
+                        error.code === -32600 && error.errorMessage.startsWith("thread not found:")
+                          ? Effect.succeed({ data: [], nextCursor: null })
+                          : Effect.fail(error),
+                    }),
                     Effect.flatMap(decodeCodexBackgroundTerminalsListResponse),
                   );
                 for (const terminal of page.data) processes.add(terminal.processId);
