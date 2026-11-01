@@ -36,7 +36,7 @@ jobs:
           run-install: false
       - run: vp install --frozen-lockfile
       - name: Focused recovery and build supervision tests
-        run: timeout 1500 vp test run --maxWorkers 1 scripts/imaorise/supervised-build.test.ts packages/effect-codex-app-server/src/client.test.ts packages/effect-codex-app-server/src/notificationFailure.test.ts packages/effect-codex-app-server/src/protocol.test.ts packages/effect-codex-app-server/src/_internal/stdio.test.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts apps/server/src/orchestration-v2/ProviderSessionManager.test.ts apps/server/src/orchestration-v2/RunExecutionService.test.ts packages/shared/src/orchestrationV2PendingBackgroundWork.test.ts
+        run: timeout 1500 vp test run --maxWorkers 1 scripts/imaorise/supervised-build.test.ts packages/effect-codex-app-server/src/client.test.ts packages/effect-codex-app-server/src/notificationFailure.test.ts packages/effect-codex-app-server/src/protocol.test.ts packages/effect-codex-app-server/src/_internal/stdio.test.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts apps/server/src/orchestration-v2/ProviderSessionManager.test.ts apps/server/src/orchestration-v2/RunExecutionService.test.ts apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.test.ts apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.regression.test.ts apps/server/src/orchestration-v2/ProjectionStore.test.ts packages/shared/src/orchestrationV2PendingBackgroundWork.test.ts packages/client-runtime/src/state/threadExecution.test.ts
       - name: Notification failure lint
         run: vp lint packages/effect-codex-app-server/src/notificationFailure.test.ts
       - name: Codex transport typecheck

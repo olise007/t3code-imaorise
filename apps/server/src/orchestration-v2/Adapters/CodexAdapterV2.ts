@@ -2348,7 +2348,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     threadId,
                     cursor,
                   })
-                  .pipe(Effect.flatMap(decodeCodexBackgroundTerminalsListResponse));
+                  .pipe(
+                    // Codex unloads idle threads and kills their terminals. A
+                    // later inspection can therefore find no thread at all.
+                    Effect.catchTag("CodexAppServerRequestError", (error) =>
+                      error.code === -32600 && error.errorMessage.startsWith("thread not found:")
+                        ? Effect.succeed({ data: [], nextCursor: null })
+                        : Effect.fail(error),
+                    ),
+                    Effect.flatMap(decodeCodexBackgroundTerminalsListResponse),
+                  );
                 for (const terminal of page.data) processes.add(terminal.processId);
                 if (page.nextCursor === null) return processes;
                 if (cursors.has(page.nextCursor)) return undefined;
@@ -2395,6 +2404,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             );
           },
         );
+
+        const watchSettledCommands = (context: ActiveCodexTurnContext) =>
+          Effect.gen(function* () {
+            while (
+              (yield* Ref.get(settledTurns)).get(context.nativeTurnId) === context &&
+              (yield* Ref.get(runningCommandItemsByTurn)).get(context.nativeTurnId)?.size
+            ) {
+              yield* reconcileSettledCommands(context);
+              // Long-lived commands can finish after the root turn. Keep
+              // checking while tracked, including after a transient RPC failure.
+              if (!(yield* Ref.get(runningCommandItemsByTurn)).get(context.nativeTurnId)?.size)
+                return;
+              yield* Effect.sleep("1 minute");
+            }
+          });
 
         const terminateBackgroundTerminal = Effect.fn("CodexAdapterV2.terminateBackgroundTerminal")(
           function* (nativeThreadId: string, processId: string) {
@@ -6200,7 +6224,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if (retainSettledContext) {
                 // Notification dispatch reads responses on the same stream. Never
                 // await a provider request from inside turn/completed itself.
-                yield* reconcileSettledCommands(input.context).pipe(
+                yield* watchSettledCommands(input.context).pipe(
                   Effect.forkIn(scope),
                   Effect.asVoid,
                 );

@@ -4549,17 +4549,24 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     "live",
     "paged-live",
     "unsupported",
+    "other-request-error",
     "timeout",
     "invalid",
     "repeated-cursor",
     "late-completion",
     "no-process-empty",
     "no-process-live",
+    "live-then-missing",
+    "live-then-unloaded",
+    "unsupported-then-missing",
+    "live-then-live",
   ] as const)("reconciles an omitted command against a %s terminal roster", (scenario) =>
     Effect.scoped(
       Effect.gen(function* () {
         const paged = scenario === "paged-live" || scenario === "repeated-cursor";
-        const missing = scenario === "missing" || scenario === "no-process-empty";
+        const recheck = scenario.includes("-then-");
+        const initiallyMissing = scenario === "missing" || scenario === "no-process-empty";
+        const missing = initiallyMissing || (recheck && scenario !== "live-then-live");
         const started = {
           ...backgroundCommandItem("inProgress"),
           aggregatedOutput: "Preserved output\n",
@@ -4624,21 +4631,23 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               type: "emit_inbound",
               ...(scenario === "timeout" ? { afterMs: 3000 } : {}),
               frame:
-                scenario === "unsupported"
+                scenario === "unsupported" || scenario === "unsupported-then-missing"
                   ? { id: 4, error: { code: -32601, message: "Method unavailable" } }
-                  : {
-                      id: 4,
-                      result:
-                        scenario === "invalid"
-                          ? { data: "invalid" }
-                          : {
-                              data:
-                                missing || paged || scenario === "late-completion"
-                                  ? []
-                                  : [{ processId: "4242" }],
-                              nextCursor: paged ? "page-2" : null,
-                            },
-                    },
+                  : scenario === "other-request-error"
+                    ? { id: 4, error: { code: -32600, message: "Thread temporarily unavailable" } }
+                    : {
+                        id: 4,
+                        result:
+                          scenario === "invalid"
+                            ? { data: "invalid" }
+                            : {
+                                data:
+                                  initiallyMissing || paged || scenario === "late-completion"
+                                    ? []
+                                    : [{ processId: "4242" }],
+                                nextCursor: paged ? "page-2" : null,
+                              },
+                      },
             },
             ...(paged
               ? [
@@ -4662,6 +4671,38 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   },
                 ]
               : []),
+            ...(recheck
+              ? [
+                  {
+                    type: "expect_outbound" as const,
+                    label: "reinspect-roster",
+                    frame: {
+                      id: 5,
+                      method: "thread/backgroundTerminals/list",
+                      params: { threadId: BG_NATIVE_THREAD, cursor: null },
+                    },
+                  },
+                  {
+                    type: "emit_inbound" as const,
+                    frame:
+                      scenario === "live-then-unloaded"
+                        ? {
+                            id: 5,
+                            error: {
+                              code: -32600,
+                              message: `thread not found: ${BG_NATIVE_THREAD}`,
+                            },
+                          }
+                        : {
+                            id: 5,
+                            result: {
+                              data: scenario === "live-then-live" ? [{ processId: "4242" }] : [],
+                              nextCursor: null,
+                            },
+                          },
+                  },
+                ]
+              : []),
           ],
         });
         const reconciled = yield* Deferred.make<void>();
@@ -4682,10 +4723,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           }),
         );
         yield* harness.firstTerminal;
-        if (missing || scenario === "late-completion") yield* Deferred.await(reconciled);
+        if (initiallyMissing || scenario === "late-completion") yield* Deferred.await(reconciled);
+        if (recheck) {
+          yield* TestClock.adjust(0);
+          assert.isTrue(yield* harness.hasPendingBackgroundWork);
+          yield* TestClock.adjust("1 minute");
+          if (missing) yield* Deferred.await(reconciled);
+        }
         if (scenario === "timeout") {
           yield* TestClock.adjust("2 seconds");
           yield* TestClock.adjust("1 second");
+        }
+        if (scenario === "late-completion" || (recheck && missing)) {
+          // Once terminal, later inspection ticks must preserve the observed
+          // output and exit status and must not recreate background work.
+          yield* TestClock.adjust("1 minute");
         }
         // Flush runnable replay/client fibers without advancing the inspection deadline.
         yield* TestClock.adjust(0);
