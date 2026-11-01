@@ -3440,7 +3440,11 @@ function ChatMarkdown({
     setLocalMediaPreview,
   } = useChatMarkdownState({ text, ...props });
   const streamingBlocks =
-    props.isStreaming === true && extraRemarkPlugins.length === 0 && !props.onTaskListChange
+    props.isStreaming === true &&
+    extraRemarkPlugins.length === 0 &&
+    !props.onTaskListChange &&
+    // This fork deduplicates heading anchors per document, so keep headings in one parse.
+    !/^ {0,3}(?:#{1,6}(?:\s|$)|(?:=+|-+)\s*$)/m.test(text)
       ? splitMarkdownBlocks(text)
       : null;
   const incrementalParsing =

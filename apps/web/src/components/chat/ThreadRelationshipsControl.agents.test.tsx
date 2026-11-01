@@ -784,7 +784,11 @@ it("shows readable models and only differing workspace details in agent tooltips
     },
     { id: "other", environmentId: "test", title: "Other project", workspaceRoot: "/other" },
   ];
-  state.shells = [{ environmentId: "test", source: child }];
+  const parentShell = {
+    environmentId: "test",
+    source: { ...parent, status: "completed", activityRunStatus: "completed" },
+  };
+  state.shells = [parentShell, { environmentId: "test", source: child }];
   state.configs.set("test", {
     providers: [
       {
@@ -838,7 +842,7 @@ it("shows readable models and only differing workspace details in agent tooltips
     return read(renderer.root);
   };
   const rerender = async (source = child) => {
-    state.shells = [{ environmentId: "test", source: { ...source } }];
+    state.shells = [parentShell, { environmentId: "test", source: { ...source } }];
     await act(async () => renderer.update(cloneElement(panel)));
   };
   const nativeProjection = {

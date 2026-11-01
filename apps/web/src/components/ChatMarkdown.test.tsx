@@ -1279,6 +1279,18 @@ it.each([
 );
 
 describe("ChatMarkdown heading ids", () => {
+  it("keeps repeated streaming heading anchors unique across completed blocks", () => {
+    const html = renderToStaticMarkup(
+      <ChatMarkdown
+        cwd="/tmp/project"
+        isStreaming
+        text={"## Setup\n\n## Setup\n\n## Setup-1\n\nGrowing tail"}
+      />,
+    );
+    const ids = [...html.matchAll(/<h2 id="([^"]+)"/g)].map((match) => match[1]);
+    expect(ids).toEqual(["user-content-setup", "user-content-setup-1", "user-content-setup-1-1"]);
+  });
+
   it("never gives two headings the same id, even when a suffix matches another heading", () => {
     const html = renderToStaticMarkup(
       <ChatMarkdown

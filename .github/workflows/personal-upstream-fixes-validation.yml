@@ -64,13 +64,18 @@ jobs:
           apps/web/src/components/chat/markdownStreamBlocks.test.tsx
           apps/desktop/src/app/DesktopConnectionCatalogStore.test.ts
       - name: Terminal resize with the web WASM asset configuration
+        if: ${{ !cancelled() }}
         working-directory: apps/web
         run: timeout 600 vp test run --project unit --maxWorkers 1 src/terminal/ghostty/surface.test.ts
       - name: Install Chromium for isolated client fixtures
+        id: chromium
+        if: ${{ !cancelled() }}
         run: node apps/server/node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
       - name: Hosted composer and sidebar browser regressions
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
         run: timeout 300 node apps/server/scripts/upstream-performance-smoke.mjs
       - name: Scoped lint
+        if: ${{ !cancelled() }}
         run: >-
           vp lint apps/web/src/components/ChatMarkdown.test.tsx apps/web/src/components/ChatMarkdown.assets.test.tsx apps/server/scripts/upstream-performance-smoke.mjs apps/server/src/environment/DirectEndpoints.test.ts apps/server/src/environment/DirectEndpoints.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts apps/server/src/project/AgentSessionScanner.test.ts apps/server/src/project/AgentSessionScanner.ts apps/server/src/relay/AgentAwarenessRelay.test.ts apps/server/src/relay/AgentAwarenessRelay.ts apps/server/src/vcs/GitVcsDriverCore.test.ts apps/server/src/vcs/GitVcsDriverCore.ts apps/web/src/components/ChatMarkdown.tsx apps/web/src/components/Sidebar.tsx apps/web/src/components/chat/ThreadLineageWorkflowRow.tsx apps/web/src/components/chat/ThreadRelationshipsControl.agents.test.tsx apps/web/src/components/chat/ThreadRelationshipsControl.tsx apps/web/src/components/chat/cachedMarkdownParse.test.tsx apps/web/src/components/chat/cachedMarkdownParse.ts apps/web/src/components/chat/markdownStreamBlocks.test.tsx apps/web/src/components/chat/markdownStreamBlocks.ts apps/web/src/components/chat/useComposerMultilinePrompt.ts apps/web/src/components/sidebar/routeReveal.ts apps/web/test-fixtures/upstream-performance.tsx packages/client-runtime/src/state/threadRelationships.test.ts packages/client-runtime/src/state/threadRelationships.ts
           apps/server/src/process/externalLauncher.ts apps/server/src/process/externalLauncher.test.ts

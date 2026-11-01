@@ -21,17 +21,15 @@ function Fixture() {
       </div>
       <ul aria-label="Threads" style={{ height: 96, overflowY: "auto", margin: 0, padding: 0 }}>
         {Array.from({ length: 50 }, (_, index) => (
-          <li
-            key={index}
-            id={`row-${index}`}
-            tabIndex={-1}
-            style={{ height: 24 }}
-            onClick={(event) => revealSidebarRow(event.currentTarget)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") revealSidebarRow(event.currentTarget);
-            }}
-          >
-            thread-{index}
+          <li key={`thread-${index}`} style={{ height: 24 }}>
+            <button
+              type="button"
+              id={`row-${index}`}
+              style={{ height: 24, display: "block", width: "100%" }}
+              onClick={(event) => revealSidebarRow(event.currentTarget)}
+            >
+              thread-{index}
+            </button>
           </li>
         ))}
       </ul>
