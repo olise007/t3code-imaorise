@@ -609,7 +609,7 @@ export function ThreadRelationshipsPanel(props: {
                               variant="ghost"
                               part="primary"
                               aria-label={`${threadTitle} ${threadRelationshipStatusLabel(rowStatus)}`}
-                                    onClick={() => openThread(threadId)}
+                              onClick={() => openThread(threadId)}
                             />
                           }
                         >

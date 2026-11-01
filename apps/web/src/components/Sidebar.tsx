@@ -3002,7 +3002,9 @@ export default function Sidebar() {
 
   useEffect(() => {
     if (!isSearchingThreads) return;
-    revealSidebarRow(document.getElementById(`sidebar-thread-search-result-${activeSearchResultIndex}`));
+    revealSidebarRow(
+      document.getElementById(`sidebar-thread-search-result-${activeSearchResultIndex}`),
+    );
   }, [activeSearchResultIndex, isSearchingThreads, threadSearchResultOrderKey]);
 
   // Arm a timeout for the earliest upcoming wake so the shelf empties the

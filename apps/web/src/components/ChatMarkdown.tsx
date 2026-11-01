@@ -3439,10 +3439,13 @@ function ChatMarkdown({
     localMediaPreview,
     setLocalMediaPreview,
   } = useChatMarkdownState({ text, ...props });
-  const streamingBlocks = props.isStreaming === true && extraRemarkPlugins.length === 0 && !props.onTaskListChange
-    ? splitMarkdownBlocks(text) : null;
+  const streamingBlocks =
+    props.isStreaming === true && extraRemarkPlugins.length === 0 && !props.onTaskListChange
+      ? splitMarkdownBlocks(text)
+      : null;
   const incrementalParsing =
-    props.isStreaming === true && streamingBlocks === null &&
+    props.isStreaming === true &&
+    streamingBlocks === null &&
     extraRemarkPlugins.length === 0 &&
     /(?:^|\n) {0,3}(?:`{3}|~{3})/.test(text);
   const remarkPlugins = useMemo(
@@ -3473,11 +3476,24 @@ function ChatMarkdown({
           // oxlint-disable-next-line react/no-array-index-key -- streamed blocks only change at the end
           <ChatMarkdownRendererContext key={index} value={{ ...componentState, text: source }}>
             <ReactMarkdown
-              remarkPlugins={extraRemarkPlugins.length === 0 && !incrementalParsing && (!props.isStreaming || index < blocks.length - 1)
-                ? [...remarkPlugins, cachedMarkdownParse] : remarkPlugins}
-              rehypePlugins={parseRawHtml ? CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS}
-              skipHtml={false} components={CHAT_MARKDOWN_COMPONENTS} urlTransform={markdownUrlTransform}
-            >{source}</ReactMarkdown>
+              remarkPlugins={
+                extraRemarkPlugins.length === 0 &&
+                !incrementalParsing &&
+                (!props.isStreaming || index < blocks.length - 1)
+                  ? [...remarkPlugins, cachedMarkdownParse]
+                  : remarkPlugins
+              }
+              rehypePlugins={
+                parseRawHtml
+                  ? CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS
+                  : CHAT_MARKDOWN_LITERAL_HTML_REHYPE_PLUGINS
+              }
+              skipHtml={false}
+              components={CHAT_MARKDOWN_COMPONENTS}
+              urlTransform={markdownUrlTransform}
+            >
+              {source}
+            </ReactMarkdown>
           </ChatMarkdownRendererContext>
         ))}
       </ChatMarkdownRendererContext>

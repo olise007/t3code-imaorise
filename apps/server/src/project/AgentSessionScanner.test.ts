@@ -1563,6 +1563,15 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           mtimeMs: nowMs,
         });
 
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* fileSystem.writeFileString(
+          path.join(codexHomePath, "session_index.jsonl"),
+          JSON.stringify({ id: "custom-session", thread_name: "Wrong home" }),
+        );
+        yield* fileSystem.writeFileString(
+          path.join(customHome, "session_index.jsonl"),
+          JSON.stringify({ id: "custom-session", thread_name: "Work account name" }),
+        );
         const threads = yield* runRecentThreads({
           claudeHomePath,
           codexHomePath,
@@ -1576,6 +1585,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         });
 
         expect(threads[0]?.providerInstanceId).toBe("codex-work");
+        expect(threads[0]?.title).toBe("Work account name");
       }),
     );
 
@@ -1609,14 +1619,16 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         });
         yield* fileSystem.writeFileString(
           path.join(codexHomePath, "session_index.jsonl"),
-          [
-            { id: "named-session", thread_name: "First name" },
-            { id: "other-session", thread_name: "Other chat" },
-            { id: "named-session", thread_name: "Renamed chat" },
-            { id: "named-session", thread_name: " " },
-          ]
-            .map((entry) => `${encodeTranscriptRecord({ ...entry, updated_at: "unknown" })}\n`)
-            .join(""),
+          "x".repeat(1024 * 1024) +
+            "\n{malformed\n" +
+            [
+              { id: "named-session", thread_name: "First name" },
+              { id: "other-session", thread_name: "Other chat" },
+              { id: "named-session", thread_name: "Renamed chat" },
+              { id: "named-session", thread_name: " " },
+            ]
+              .map((entry) => `${encodeTranscriptRecord({ ...entry, updated_at: "unknown" })}\n`)
+              .join(""),
         );
 
         const threads = yield* runRecentThreads({

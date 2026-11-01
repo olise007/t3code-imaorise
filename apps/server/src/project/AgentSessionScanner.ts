@@ -305,7 +305,6 @@ function parseCodexThreadNames(contents: string): ReadonlyMap<string, string> {
   return names;
 }
 
-
 /** Keep visible user and assistant text while ignoring tools, reasoning, and malformed records. */
 export function parseAgentSessionTranscript(
   input: AgentSessionTranscriptMetadata & {

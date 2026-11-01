@@ -335,10 +335,16 @@ it("opens the correct chat for every workflow phase and unphased member", async 
   for (const phase of phaseButtons().slice(0, 2)) await act(async () => phase.props.onClick());
   expect(memberButtons()).toHaveLength(7);
   for (const button of memberButtons()) {
-    expect(button.props.disabled).toBe(true);
+    expect(button.props.disabled).toBe(false);
     await act(async () => button.props.onClick());
   }
-  expect(state.navigate).not.toHaveBeenCalled();
+  // A shell omitted from this environment must not prevent loading its own detail.
+  expect(state.navigate).toHaveBeenCalledTimes(7);
+  expect(state.navigate).toHaveBeenLastCalledWith({
+    to: "/$environmentId/$threadId",
+    params: { environmentId: "remote", threadId: agents.at(-1)!.childThreadId },
+  });
+  state.navigate.mockClear();
   // The coordinator roster arrives before the member thread shells.
   state.shells = memberShells.map((source) => ({ environmentId: "remote", source }));
   await act(async () => renderer.update(cloneElement(panel)));
