@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
+  EnvironmentId,
   NonNegativeInt,
   PositiveInt,
   ProjectId,
@@ -123,12 +124,42 @@ export const VcsPullInput = Schema.Struct({
 });
 export type VcsPullInput = typeof VcsPullInput.Type;
 
+/** Immutable review identity; a linked worktree has its own Git directory. */
+export const GitCommitContext = Schema.Struct({
+  environmentId: EnvironmentId,
+  cwd: TrimmedNonEmptyStringSchema,
+  repositoryRoot: TrimmedNonEmptyStringSchema,
+  gitDirectory: TrimmedNonEmptyStringSchema,
+  gitCommonDirectory: TrimmedNonEmptyStringSchema,
+  branch: Schema.NullOr(Schema.String),
+  head: Schema.NullOr(Schema.String),
+  filePaths: Schema.Array(TrimmedNonEmptyStringSchema),
+  fingerprint: Schema.String,
+  threadId: Schema.optional(ThreadId),
+  projectId: Schema.optional(ProjectId),
+});
+export type GitCommitContext = typeof GitCommitContext.Type;
+export const GitPrepareCommitInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  filePaths: Schema.Array(TrimmedNonEmptyStringSchema),
+  threadId: Schema.optional(ThreadId),
+  projectId: Schema.optional(ProjectId),
+});
+export type GitPrepareCommitInput = typeof GitPrepareCommitInput.Type;
+export const GitPrepareCommitResult = Schema.Struct({
+  commitContext: GitCommitContext,
+  skippedFilePaths: Schema.Array(Schema.String),
+});
+export type GitPrepareCommitResult = typeof GitPrepareCommitResult.Type;
+
 export const GitGenerateCommitMessageInput = Schema.Struct({
+  commitContext: Schema.optional(GitCommitContext),
   cwd: TrimmedNonEmptyStringSchema,
   filePaths: Schema.optional(
     Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
   ),
   threadId: Schema.optional(ThreadId),
+  projectId: Schema.optional(ProjectId),
   skipIgnoredFiles: Schema.optional(Schema.Boolean),
 });
 export type GitGenerateCommitMessageInput = typeof GitGenerateCommitMessageInput.Type;
@@ -140,6 +171,7 @@ export const GitGenerateCommitMessageResult = Schema.Struct({
 export type GitGenerateCommitMessageResult = typeof GitGenerateCommitMessageResult.Type;
 
 export const GitRunStackedActionInput = Schema.Struct({
+  commitContext: Schema.optional(GitCommitContext),
   actionId: TrimmedNonEmptyStringSchema,
   cwd: TrimmedNonEmptyStringSchema,
   action: GitStackedAction,
@@ -343,6 +375,7 @@ export const VcsSwitchRefResult = Schema.Struct({
 export type VcsSwitchRefResult = typeof VcsSwitchRefResult.Type;
 
 export const GitRunStackedActionResult = Schema.Struct({
+  commitContext: Schema.optional(GitCommitContext),
   action: GitStackedAction,
   branch: Schema.Struct({
     status: GitBranchStepStatus,
@@ -455,7 +488,21 @@ export class GitPullRequestMaterializationError extends Schema.TaggedError<GitPu
   }
 }
 
+export class GitCommitContextError extends Schema.TaggedError<GitCommitContextError>()(
+  "GitCommitContextError",
+  {
+    cwd: Schema.String,
+    reason: Schema.Literals(["required", "changed", "association"]),
+  },
+) {
+  override get message() {
+    return this.reason === "required"
+      ? "This commit requires a workspace-bound review. Update the client and review again."
+      : "Workspace changed—review again before committing. No changes were committed.";
+  }
+}
 export const GitManagerServiceError = Schema.Union([
+  GitCommitContextError,
   GitManagerError,
   GitPullRequestMaterializationError,
   GitCommandError,

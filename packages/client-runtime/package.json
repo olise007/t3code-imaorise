@@ -155,6 +155,10 @@
       "types": "./src/state/filesystem.ts",
       "default": "./src/state/filesystem.ts"
     },
+    "./state/gitCommitReview": {
+      "types": "./src/state/gitCommitReview.ts",
+      "default": "./src/state/gitCommitReview.ts"
+    },
     "./state/git": {
       "types": "./src/state/git.ts",
       "default": "./src/state/git.ts"

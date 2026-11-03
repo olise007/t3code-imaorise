@@ -164,6 +164,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.subscribeResourceTelemetry]: "server",
   [WS_METHODS.vcsRefreshStatus]: "vcs",
   [WS_METHODS.vcsPull]: "git",
+  [WS_METHODS.gitPrepareCommit]: "vcs",
   [WS_METHODS.gitGenerateCommitMessage]: "vcs",
   [WS_METHODS.gitRunStackedAction]: "vcs",
   [WS_METHODS.gitResolvePullRequest]: "git",

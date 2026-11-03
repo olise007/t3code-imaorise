@@ -323,6 +323,7 @@ export class GitVcsDriver extends Context.Service<
       options?: { readonly skipIgnoredFiles?: boolean },
     ) => Effect.Effect<
       {
+        readonly treeOid?: string;
         readonly context: GitPreparedCommitContext | null;
         readonly skippedFilePaths: readonly string[];
       },

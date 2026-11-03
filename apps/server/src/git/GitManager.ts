@@ -19,6 +19,10 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import {
+  GitCommitContext,
+  GitCommitContextError,
+  GitPrepareCommitInput,
+  GitPrepareCommitResult,
   GitActionProgressEvent,
   GitActionProgressPhase,
   GitCommandError,
@@ -81,6 +85,8 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import { detachStackFrame } from "./detachStackFrame.ts";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@t3tools/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -147,6 +153,13 @@ export class GitManager extends Context.Service<
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
+    readonly withWorktreeLock: <A, E, R>(
+      cwd: string,
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | GitCommandError, R>;
+    readonly prepareCommit: (
+      input: GitPrepareCommitInput,
+    ) => Effect.Effect<GitPrepareCommitResult, GitManagerServiceError>;
     readonly generateCommitMessage: (
       input: GitGenerateCommitMessageInput,
     ) => Effect.Effect<GitGenerateCommitMessageResult, GitManagerServiceError>;
@@ -730,6 +743,137 @@ export const make = Effect.gen(function* () {
   const serverSettingsService = yield* ServerSettings.ServerSettingsService;
   const threads = yield* ProjectionStore.ProjectionStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
+  const commitLocks = yield* KeyedLock.make<string>();
+  const withWorktreeLock: GitManager["Service"]["withWorktreeLock"] = (cwd, effect) =>
+    Effect.gen(function* () {
+      // Resolve the lock key on the server; a supplied context never chooses the lock.
+      const identity = yield* gitCore.execute({
+        operation: "GitManager.lock",
+        cwd,
+        args: ["rev-parse", "--absolute-git-dir"],
+      });
+      return yield* commitLocks.withLock(identity.stdout.trim(), effect);
+    });
+  const environmentIdentity = yield* ServerEnvironment.ServerEnvironmentIdentity;
+  const contextFailure = (cwd: string, reason: "required" | "changed" | "association") =>
+    new GitCommitContextError({ cwd, reason });
+  const prepareCommit: GitManager["Service"]["prepareCommit"] = Effect.fn(
+    "GitManager.prepareCommit",
+  )(function* (input) {
+    const cwd = yield* fileSystem
+      .realPath(input.cwd)
+      .pipe(Effect.mapError(() => contextFailure(input.cwd, "changed")));
+    const read = (args: ReadonlyArray<string>, allowNonZeroExit = false) =>
+      gitCore.execute({
+        operation: "GitManager.prepareCommit.identity",
+        cwd,
+        args,
+        allowNonZeroExit,
+      });
+    const root = (yield* read(["rev-parse", "--show-toplevel"])).stdout.trim();
+    const repositoryRoot = yield* fileSystem
+      .realPath(root)
+      .pipe(Effect.mapError(() => contextFailure(cwd, "changed")));
+    const gitDirectory = yield* fileSystem
+      .realPath((yield* read(["rev-parse", "--absolute-git-dir"])).stdout.trim())
+      .pipe(Effect.mapError(() => contextFailure(cwd, "changed")));
+    const common = (yield* read(["rev-parse", "--git-common-dir"])).stdout.trim();
+    const gitCommonDirectory = yield* fileSystem
+      .realPath(path.resolve(cwd, common))
+      .pipe(Effect.mapError(() => contextFailure(cwd, "changed")));
+    let projectId = input.projectId;
+    let associatedCwd: string | undefined;
+    if (input.threadId) {
+      const thread = yield* threads
+        .getThreadShell(input.threadId)
+        .pipe(Effect.mapError(() => contextFailure(cwd, "association")));
+      if (!thread || (projectId && thread.projectId !== projectId))
+        return yield* contextFailure(cwd, "association");
+      projectId = thread.projectId;
+      associatedCwd = thread.worktreePath ?? undefined;
+    }
+    if (projectId) {
+      const project = yield* projects
+        .get(projectId)
+        .pipe(Effect.mapError(() => contextFailure(cwd, "association")));
+      if (Option.isNone(project)) return yield* contextFailure(cwd, "association");
+      associatedCwd ??= project.value.workspaceRoot;
+    }
+    if (associatedCwd) {
+      const associated = yield* gitCore.execute({
+        operation: "GitManager.prepareCommit.association",
+        cwd: associatedCwd,
+        args: ["rev-parse", "--show-toplevel"],
+      });
+      const associatedRoot = yield* fileSystem
+        .realPath(associated.stdout.trim())
+        .pipe(Effect.mapError(() => contextFailure(cwd, "association")));
+      if (associatedRoot !== repositoryRoot) {
+        if (input.threadId) return yield* contextFailure(cwd, "association");
+        const associatedCommon = yield* gitCore.execute({
+          operation: "GitManager.prepareCommit.association",
+          cwd: associatedCwd,
+          args: ["rev-parse", "--git-common-dir"],
+        });
+        const associatedCommonPath = yield* fileSystem
+          .realPath(path.resolve(associatedCwd, associatedCommon.stdout.trim()))
+          .pipe(Effect.mapError(() => contextFailure(cwd, "association")));
+        if (associatedCommonPath !== gitCommonDirectory)
+          return yield* contextFailure(cwd, "association");
+      }
+    }
+    const paths = [...new Set(input.filePaths)].sort();
+    if (paths.some((value) => path.isAbsolute(value) || value.split(/[\\/]/u).includes("..")))
+      return yield* contextFailure(cwd, "changed");
+    const prepared = yield* gitCore.prepareCommitContext(cwd, paths, { skipIgnoredFiles: true });
+    if (!prepared.treeOid) return yield* contextFailure(cwd, "changed");
+    const branch =
+      (yield* read(["symbolic-ref", "--quiet", "--short", "HEAD"], true)).stdout.trim() || null;
+    const headResult = yield* read(["rev-parse", "--verify", "HEAD"], true);
+    const head = headResult.exitCode === 0 ? headResult.stdout.trim() : null;
+    return {
+      commitContext: {
+        environmentId: yield* environmentIdentity.getEnvironmentId,
+        cwd,
+        repositoryRoot,
+        gitDirectory,
+        gitCommonDirectory,
+        branch,
+        head,
+        filePaths: paths.filter((value) => !prepared.skippedFilePaths.includes(value)),
+        fingerprint: prepared.treeOid,
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(projectId ? { projectId } : {}),
+      },
+      skippedFilePaths: prepared.skippedFilePaths,
+    };
+  });
+  const validateCommit = Effect.fn("GitManager.validateCommit")(function* (input: {
+    readonly cwd: string;
+    readonly commitContext?: GitCommitContext | undefined;
+    readonly filePaths?: ReadonlyArray<string> | undefined;
+    readonly threadId?: ThreadId | undefined;
+    readonly projectId?: ProjectId | undefined;
+  }) {
+    const expected = input.commitContext;
+    if (!expected) return yield* contextFailure(input.cwd, "required");
+    if (
+      input.threadId !== expected.threadId ||
+      (input.projectId && input.projectId !== expected.projectId) ||
+      JSON.stringify([...(input.filePaths ?? [])].sort()) !== JSON.stringify(expected.filePaths)
+    )
+      return yield* contextFailure(input.cwd, "changed");
+    const actual = yield* prepareCommit({
+      cwd: input.cwd,
+      filePaths: expected.filePaths,
+      ...(expected.threadId ? { threadId: expected.threadId } : {}),
+      ...(expected.projectId ? { projectId: expected.projectId } : {}),
+    });
+    if (!Schema.toEquivalence(GitCommitContext)(actual.commitContext, expected))
+      return yield* contextFailure(input.cwd, "changed");
+    return expected;
+  });
+
   /** Environment settings with the acting project's overrides applied. */
   const projectSettingsFor = Effect.fnUntraced(function* (input: {
     readonly cwd: string;
@@ -2150,6 +2294,7 @@ export const make = Effect.gen(function* () {
   const generateCommitMessage: GitManager["Service"]["generateCommitMessage"] = Effect.fn(
     "GitManager.generateCommitMessage",
   )(function* (input) {
+    yield* validateCommit(input);
     const settings = yield* resolveCommitTextSettings(input);
     const status = yield* gitCore.statusDetails(input.cwd);
     const { suggestion, skippedFilePaths } = yield* resolveCommitAndBranchSuggestion({
@@ -2181,6 +2326,7 @@ export const make = Effect.gen(function* () {
     filePaths?: readonly string[],
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
+    commitContext?: GitCommitContext,
   ) {
     const emit = (event: GitActionProgressPayload) =>
       progressReporter && actionId
@@ -2265,6 +2411,13 @@ export const make = Effect.gen(function* () {
             },
           }
         : null;
+    yield* validateCommit({
+      cwd,
+      filePaths,
+      commitContext: commitContext ? { ...commitContext, branch } : undefined,
+      ...(commitContext?.threadId ? { threadId: commitContext.threadId } : {}),
+      ...(commitContext?.projectId ? { projectId: commitContext.projectId } : {}),
+    });
     const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
       timeoutMs: COMMIT_TIMEOUT_MS,
       stage: filePaths ? { filePaths } : {},
@@ -2936,6 +3089,7 @@ export const make = Effect.gen(function* () {
         GitRunStackedActionResult,
         GitManagerServiceError
       > {
+        if (isCommitAction(input.action)) yield* validateCommit(input);
         const initialStatus = yield* gitCore.statusDetails(input.cwd);
         const wantsCommit = isCommitAction(input.action);
         const wantsPush =
@@ -3031,6 +3185,7 @@ export const make = Effect.gen(function* () {
                   input.filePaths,
                   options?.progressReporter,
                   progress.actionId,
+                  input.commitContext,
                 ),
               ),
             )
@@ -3073,12 +3228,26 @@ export const make = Effect.gen(function* () {
         });
 
         const result = {
+          ...(input.commitContext
+            ? {
+                commitContext: {
+                  ...input.commitContext,
+                  branch: branchStep.name ?? input.commitContext.branch,
+                },
+              }
+            : {}),
           action: input.action,
           branch: branchStep,
           commit,
           push,
           pr,
-          toast,
+          toast:
+            input.commitContext && commit.status === "created"
+              ? {
+                  ...toast,
+                  description: `${input.commitContext.repositoryRoot} · ${branchStep.name ?? input.commitContext.branch ?? "Detached HEAD"} · ${commit.commitSha}`,
+                }
+              : toast,
         };
         yield* progress.emit({
           kind: "action_finished",
@@ -3087,7 +3256,10 @@ export const make = Effect.gen(function* () {
         return result;
       });
 
-      return yield* runAction().pipe(
+      const lockedAction = isCommitAction(input.action)
+        ? withWorktreeLock(input.cwd, runAction())
+        : runAction();
+      return yield* lockedAction.pipe(
         Effect.ensuring(invalidateStatus(input.cwd)),
         Effect.tapError((error) =>
           Effect.flatMap(Ref.get(currentPhase), (phase) =>
@@ -3113,7 +3285,9 @@ export const make = Effect.gen(function* () {
     invalidateStatus,
     resolvePullRequest,
     preparePullRequestThread,
-    generateCommitMessage,
+    withWorktreeLock,
+    prepareCommit: (input) => withWorktreeLock(input.cwd, prepareCommit(input)),
+    generateCommitMessage: (input) => withWorktreeLock(input.cwd, generateCommitMessage(input)),
     runStackedAction,
     subscribePullRequestStateChanges: PubSub.subscribe(pullRequestStateChanges).pipe(
       Effect.map((subscription) => Stream.fromSubscription(subscription)),
@@ -3121,4 +3295,6 @@ export const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(GitManager, make);
+export const layer = Layer.effect(GitManager, make).pipe(
+  Layer.provide(ServerEnvironment.layerIdentity),
+);

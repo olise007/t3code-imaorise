@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   type EnvironmentId as EnvironmentIdType,
+  type GitCommitContext,
   GitActionProgressPhase,
   type GitActionProgressEvent,
   type GitRunStackedActionInput,
@@ -74,6 +75,7 @@ export interface BeginVcsActionInput {
 }
 
 export interface RunVcsStackedActionInput {
+  readonly commitContext?: GitCommitContext;
   readonly actionId: string;
   readonly action: GitStackedAction;
   readonly commitMessage?: string;
@@ -455,6 +457,19 @@ export function createVcsActionManager<R, E>(
             }),
           );
         }
+        if (
+          input.commitContext &&
+          (input.commitContext.environmentId !== target.environmentId ||
+            input.commitContext.cwd !== target.cwd)
+        ) {
+          return Effect.fail(
+            new VcsActionUnavailableError({
+              operation: "run_change_request",
+              environmentId: target.environmentId,
+              cwd: target.cwd,
+            }),
+          );
+        }
         const transportActionId = createVcsActionTransportId(target, input.actionId);
         registry.set(
           stateAtom,
@@ -472,6 +487,7 @@ export function createVcsActionManager<R, E>(
           ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
           ...(input.featureBranch ? { featureBranch: true } : {}),
           ...(input.filePaths?.length ? { filePaths: [...input.filePaths] } : {}),
+          ...(input.commitContext ? { commitContext: input.commitContext } : {}),
           ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
           ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
         };

@@ -9,6 +9,12 @@ export function createGitEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   return {
+    prepareCommit: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:git:prepare-commit",
+      tag: WS_METHODS.gitPrepareCommit,
+      scheduler: vcsCommandScheduler,
+      concurrency: vcsCommandConcurrency,
+    }),
     generateCommitMessage: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:git:generate-commit-message",
       tag: WS_METHODS.gitGenerateCommitMessage,

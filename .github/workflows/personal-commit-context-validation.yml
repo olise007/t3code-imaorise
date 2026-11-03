@@ -1,0 +1,46 @@
+name: Personal commit workspace validation
+on:
+  push:
+    branches: [fix/commit-workspace-binding]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: personal-commit-workspace-validation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    if: github.repository == 'olise007/t3code-imaorise' && vars.PERSONAL_ZERO_SPEND_VERIFIED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: node:24-bookworm
+      options: --memory=6g --memory-swap=6g --cpus=2
+    env:
+      NODE_OPTIONS: --max-old-space-size=3072
+      GOMEMLIMIT: 5GiB
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - run: vp install --frozen-lockfile
+      - name: Contracts typecheck
+        run: vp run --filter @t3tools/contracts typecheck
+      - name: Shared client typecheck
+        if: ${{ !cancelled() }}
+        run: vp run --filter @t3tools/client-runtime typecheck
+      - name: Server typecheck
+        if: ${{ !cancelled() }}
+        run: vp run --filter t3 typecheck
+      - name: Web typecheck
+        if: ${{ !cancelled() }}
+        run: vp run --filter @t3tools/web typecheck
+      - name: Mobile typecheck
+        if: ${{ !cancelled() }}
+        run: vp run --filter @t3tools/mobile typecheck
+      - name: Commit workspace regression tests
+        if: ${{ !cancelled() }}
+        run: timeout 1200 vp test run --maxWorkers 1 apps/server/src/git/GitManager.test.ts apps/server/src/git/GitWorkflowService.test.ts apps/server/src/vcs/GitVcsDriver.test.ts apps/web/src/components/GitActionsControl.preview.test.tsx apps/mobile/src/features/threads/git/GitCommitSheet.test.tsx packages/client-runtime/src/state/vcsAction.test.ts packages/contracts/src/clientRpcPermissions.test.ts

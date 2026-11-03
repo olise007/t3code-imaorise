@@ -135,6 +135,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server persists the opt-in for continuing interrupted threads after restarts. */
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   /** Server resolves `projectSettingsOverrides`; older servers ignore the key. */
+  gitCommitContext: Schema.optionalKey(Schema.Boolean),
   projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),
   /** Server resolves a project's `providerInstances` override entry. Older
       servers decode the key away (unknown fields are stripped, not

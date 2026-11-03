@@ -1,3 +1,11 @@
+import type { GitCommitContext, VcsStatusResult } from "@t3tools/contracts";
+import {
+  gitCommitDraft,
+  gitCommitReviewScope,
+  commitContextMatchesFiles,
+} from "@t3tools/client-runtime/state/gitCommitReview";
+import { appAtomRegistry } from "../../../state/atom-registry";
+import { serverEnvironment } from "../../../state/server";
 import { useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
@@ -7,7 +15,7 @@ import { gitEnvironment } from "../../../state/git";
 import { useAtomCommand } from "../../../state/use-atom-command";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect, useRef, useState } from "react";
-import { Platform, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
+import { Alert, Platform, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -28,9 +36,10 @@ import { SheetActionButton } from "./gitSheetComponents";
 type GitCommitSheetProps = StaticScreenProps<{
   readonly environmentId: string;
   readonly threadId: string;
+  readonly action?: "commit" | "commit_push" | "commit_push_pr";
 }>;
 
-export function GitCommitSheet(_props: GitCommitSheetProps) {
+export function GitCommitSheet(props: GitCommitSheetProps) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
@@ -51,9 +60,42 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
 
   const busy = gitState.gitOperationLabel !== null;
   const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
-  const allFiles = gitStatus.data?.workingTree?.files ?? [];
+  const [reviewFiles, setReviewFiles] = useState<VcsStatusResult["workingTree"]["files"] | null>(
+    null,
+  );
+  const allFiles = reviewFiles ?? gitStatus.data?.workingTree?.files ?? [];
+  useEffect(() => {
+    if (reviewFiles === null && gitStatus.data)
+      setReviewFiles([...gitStatus.data.workingTree.files]);
+  }, [reviewFiles, gitStatus.data]);
+  const config = useAtomValue(
+    serverEnvironment.configValueAtom(selectedThread?.environmentId ?? null),
+  );
+  const [commitContext, setCommitContext] = useState<GitCommitContext | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const prepareCommit = useAtomCommand(gitEnvironment.prepareCommit, { reportFailure: false });
 
-  const [dialogCommitMessage, setDialogCommitMessage] = useState("");
+  const draftScope = gitCommitReviewScope({
+    environmentId: selectedThread?.environmentId ?? null,
+    cwd: selectedThreadCwd,
+    threadId: selectedThread?.id,
+  });
+  const initialScope = useRef(draftScope);
+  const currentScope = useRef(draftScope);
+  currentScope.current = draftScope;
+  const [dialogCommitMessage, setDialogCommitMessage] = useState(() =>
+    appAtomRegistry.get(gitCommitDraft(draftScope)),
+  );
+  useEffect(() => {
+    appAtomRegistry.set(gitCommitDraft(initialScope.current), dialogCommitMessage);
+  }, [dialogCommitMessage]);
+  useEffect(() => {
+    if (initialScope.current !== draftScope) {
+      previewRequest.current++;
+      navigation.goBack();
+    }
+  }, [draftScope, navigation]);
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
   const [isEditingFiles, setIsEditingFiles] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -104,6 +146,64 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
     if (preview.current.key !== previewKey) previewRequest.current++;
     preview.current = { key: previewKey, message: dialogCommitMessage, mounted: true };
   }, [previewKey, dialogCommitMessage]);
+  const fileKey = JSON.stringify(selectedFiles.map((file) => file.path).sort());
+  useEffect(() => {
+    if (
+      !selectedThread ||
+      !selectedThreadCwd ||
+      draftScope !== initialScope.current ||
+      !reviewFiles
+    )
+      return;
+    let cancelled = false;
+    setCommitContext(null);
+    if (config?.environment.capabilities.gitCommitContext !== true) {
+      setGenerationError("Update this T3 server to use workspace-bound commit review.");
+      return;
+    }
+    if (selectedFiles.length === 0) return;
+    setPreparing(true);
+    void prepareCommit({
+      environmentId: selectedThread.environmentId,
+      input: {
+        cwd: selectedThreadCwd,
+        threadId: selectedThread.id,
+        filePaths: selectedFiles.map((file) => file.path),
+      },
+    }).then((result) => {
+      if (cancelled) return;
+      setPreparing(false);
+      if (result._tag !== "Success") {
+        setGenerationError(String(squashAtomCommandFailure(result)));
+        return;
+      }
+      setGenerationError(null);
+      setCommitContext(result.value.commitContext);
+      setSkippedCommitFiles(result.value.skippedFilePaths);
+      if (result.value.skippedFilePaths.length)
+        setExcludedFiles((previous) => new Set([...previous, ...result.value.skippedFilePaths]));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    fileKey,
+    draftScope,
+    selectedThread?.id,
+    selectedThreadCwd,
+    selectedThread?.environmentId,
+    reviewFiles,
+    config?.environment.capabilities.gitCommitContext,
+    prepareCommit,
+  ]);
+  const reviewReady =
+    commitContext !== null &&
+    !preparing &&
+    draftScope === initialScope.current &&
+    commitContextMatchesFiles(
+      commitContext,
+      selectedFiles.map((file) => file.path),
+    );
   const generate = async () => {
     if (
       !selectedThread ||
@@ -111,7 +211,8 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
       previewPending.current ||
       busy ||
       noneSelected ||
-      !canGenerateCommitMessage
+      !canGenerateCommitMessage ||
+      !reviewReady
     )
       return;
     previewPending.current = true;
@@ -124,7 +225,8 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
       const result = await generateMessage({
         environmentId: selectedThread.environmentId,
         input: {
-          cwd: selectedThreadCwd,
+          cwd: commitContext!.cwd,
+          commitContext: commitContext!,
           threadId: selectedThread.id,
           filePaths: selectedFiles.map((file) => file.path),
           skipIgnoredFiles: true,
@@ -169,16 +271,57 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
   const selectedFilePreview = selectedFiles.slice(0, 3);
 
   const runCommitAction = async (featureBranch: boolean) => {
-    if (!canWriteSourceControl || (featureBranch && !canChangeThreadBranch)) return;
+    if (
+      !canWriteSourceControl ||
+      (featureBranch && !canChangeThreadBranch) ||
+      !reviewReady ||
+      submitting
+    )
+      return;
     const commitMessage = dialogCommitMessage.trim();
-    if (!commitMessage || generating || busy || noneSelected || hasEmptyPreview) return;
-    navigation.goBack();
-    await gitActions.onRunSelectedThreadGitAction({
-      action: "commit",
-      featureBranch,
-      ...(commitMessage ? { commitMessage } : {}),
-      ...(!allSelected ? { filePaths: selectedFiles.map((file) => file.path) } : {}),
-    });
+    if (!commitMessage || generating || busy || noneSelected || hasEmptyPreview || !commitContext)
+      return;
+    const context = commitContext;
+    const scope = draftScope;
+    const execute = async () => {
+      if (currentScope.current !== scope || !preview.current.mounted) return;
+      setSubmitting(true);
+      setGenerationError(null);
+      try {
+        const result = await gitActions.onRunSelectedThreadGitAction({
+          action: props.route.params.action ?? "commit",
+          featureBranch,
+          commitMessage,
+          commitContext: context,
+          filePaths: context.filePaths,
+        });
+        if (result) {
+          appAtomRegistry.set(gitCommitDraft(scope), "");
+          if (preview.current.mounted && currentScope.current === scope) navigation.goBack();
+        } else if (preview.current.mounted) {
+          setGenerationError(
+            "Commit failed. Your message is saved. Review the source control error and retry.",
+          );
+        }
+      } finally {
+        if (preview.current.mounted) setSubmitting(false);
+      }
+    };
+    if (
+      !featureBranch &&
+      isDefaultRef &&
+      props.route.params.action &&
+      props.route.params.action !== "commit"
+    ) {
+      Alert.alert(
+        "Commit and push to the default branch?",
+        `${context.repositoryRoot}\n${context.branch ?? "Detached HEAD"} · ${context.filePaths.length} files`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Continue", onPress: () => void execute() },
+        ],
+      );
+    } else await execute();
   };
 
   return (
@@ -379,9 +522,28 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
             <SheetActionButton
               icon="pencil"
               label={generating ? "Generating…" : "Generate commit message"}
-              disabled={!canGenerateCommitMessage || noneSelected || busy || generating}
+              disabled={
+                !reviewReady ||
+                !canGenerateCommitMessage ||
+                noneSelected ||
+                busy ||
+                generating ||
+                submitting
+              }
               onPress={() => void generate()}
             />
+            <Text className="text-foreground-secondary text-sm">
+              {config?.environment.label ?? selectedThread?.environmentId} ·{" "}
+              {commitContext?.repositoryRoot ?? selectedThreadCwd} ·{" "}
+              {commitContext?.branch ?? "Detached HEAD"} · {selectedFiles.length} files
+            </Text>
+            {generationError ? (
+              <SheetActionButton
+                label="Review current changes"
+                icon="arrow.clockwise"
+                onPress={() => setReviewFiles([...allFiles])}
+              />
+            ) : null}
             {generationError && (
               <Text accessibilityRole="alert" className="text-destructive">
                 {generationError}
@@ -417,6 +579,8 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
                 icon="arrow.branch"
                 label="Commit on new branch"
                 disabled={
+                  !reviewReady ||
+                  submitting ||
                   !canChangeThreadBranch ||
                   noneSelected ||
                   hasEmptyPreview ||
@@ -433,6 +597,8 @@ export function GitCommitSheet(_props: GitCommitSheetProps) {
                 label="Commit"
                 tone="primary"
                 disabled={
+                  !reviewReady ||
+                  submitting ||
                   !canWriteSourceControl ||
                   noneSelected ||
                   hasEmptyPreview ||

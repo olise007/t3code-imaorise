@@ -151,6 +151,14 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
   const runActionWithPrompt = useCallback(
     async (input: GitActionRequestInput) => {
       if (!canWriteSourceControl) return;
+      if (["commit", "commit_push", "commit_push_pr"].includes(input.action)) {
+        navigation.navigate("GitCommit", {
+          environmentId: String(environmentId),
+          threadId: String(threadId),
+          action: input.action as "commit" | "commit_push" | "commit_push_pr",
+        });
+        return;
+      }
       const confirmableAction =
         input.action === "push" ||
         input.action === "create_pr" ||

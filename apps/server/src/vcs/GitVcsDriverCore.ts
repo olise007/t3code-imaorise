@@ -2399,7 +2399,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const prepareCommitContext: GitVcsDriver.GitVcsDriver["Service"]["prepareCommitContext"] =
     Effect.fn("prepareCommitContext")(function* (cwd, filePaths, options) {
-      if (filePaths?.length === 0) return { context: null, skippedFilePaths: [] };
       return yield* Effect.scoped(
         Effect.gen(function* () {
           const indexValue = yield* runGitStdout(
@@ -2440,13 +2439,22 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               { env },
             );
           }
-          const skippedFilePaths = yield* stageCommitChanges(
-            cwd,
-            filePaths,
-            env,
-            options?.skipIgnoredFiles,
-          );
+          const skippedFilePaths =
+            filePaths?.length === 0
+              ? yield* runGit(
+                  "GitVcsDriver.prepareCommitContext.noSelection",
+                  cwd,
+                  [...config, "read-tree", "HEAD"],
+                  { env },
+                ).pipe(Effect.as([] as string[]))
+              : yield* stageCommitChanges(cwd, filePaths, env, options?.skipIgnoredFiles);
 
+          const treeOid = (yield* runGitStdoutWithOptions(
+            "GitVcsDriver.prepareCommitContext.tree",
+            cwd,
+            ["write-tree"],
+            { env },
+          )).trim();
           const stagedSummary = yield* runGitStdoutWithOptions(
             "GitVcsDriver.prepareCommitContext.stagedSummary",
             cwd,
@@ -2454,7 +2462,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             { env },
           ).pipe(Effect.map((stdout) => stdout.trim()));
           if (stagedSummary.length === 0) {
-            return { context: null, skippedFilePaths };
+            return { context: null, skippedFilePaths, treeOid };
           }
 
           const stagedPatch = yield* runGitStdoutWithOptions(
@@ -2470,6 +2478,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
           return {
             context: { stagedSummary, stagedPatch },
+            treeOid,
             skippedFilePaths,
           };
         }),

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useEffectEvent, useMemo } from "react";
 
 import { EnvironmentProject, EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import { runAtomCommand, type AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import {
   type GitActionRequestInput,
   type VcsActionOperation,
@@ -386,15 +386,27 @@ export function useSelectedThreadGitActions() {
         "run_change_request",
         "Running source control action",
         async ({ thread, cwd }) => {
-          const result = await runStackedAction({
+          const actionInput = {
             actionId,
             action: input.action,
+            ...(input.commitContext ? { commitContext: input.commitContext } : {}),
             ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
             ...(input.featureBranch ? { featureBranch: input.featureBranch } : {}),
             ...(input.filePaths?.length ? { filePaths: [...input.filePaths] } : {}),
             // A pull request the action opens is linked to the thread it ran beside.
             threadId: thread.id,
-          });
+          };
+          const result = input.commitContext
+            ? await runAtomCommand(
+                appAtomRegistry,
+                vcsActionManager.runStackedAction({
+                  environmentId: input.commitContext.environmentId,
+                  cwd: input.commitContext.cwd,
+                }),
+                actionInput,
+                { reportFailure: false },
+              )
+            : await runStackedAction(actionInput);
           if (AsyncResult.isFailure(result)) {
             return result;
           }

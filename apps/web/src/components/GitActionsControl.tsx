@@ -1,12 +1,22 @@
+import {
+  gitCommitDraft,
+  gitCommitReviewScope,
+  commitContextMatchesFiles,
+} from "@t3tools/client-runtime/state/gitCommitReview";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthOrchestrationOperateScope,
   AuthSourceControlWriteScope,
   SourceControlProviderKind,
+  type GitCommitContext,
+  type EnvironmentId,
+  type ThreadId,
+  type ProjectId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
+  runAtomCommand,
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
@@ -145,6 +155,7 @@ interface GitActionsControlProps {
 }
 
 interface PendingDefaultBranchAction {
+  commitContext?: GitCommitContext;
   action: DefaultBranchConfirmableAction;
   branchName: string;
   includesCommit: boolean;
@@ -156,6 +167,7 @@ interface PendingDefaultBranchAction {
 type GitActionToastId = ReturnType<typeof toastManager.add>;
 
 interface RunGitActionWithToastInput {
+  commitContext?: GitCommitContext;
   action: GitStackedAction;
   commitMessage?: string;
   onConfirmed?: () => void;
@@ -1051,6 +1063,19 @@ export default function GitActionsControl({
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const [isCommitDialogOpen, setIsCommitDialogOpen] = useState(false);
   const [dialogCommitMessage, setDialogCommitMessage] = useState("");
+  const [reviewTarget, setReviewTarget] = useState<{
+    environmentId: EnvironmentId;
+    cwd: string;
+    scope: string;
+    threadId?: ThreadId;
+    projectId?: ProjectId;
+    files: VcsStatusResult["workingTree"]["files"];
+  } | null>(null);
+  const [reviewContext, setReviewContext] = useState<GitCommitContext | null>(null);
+  const [reviewAction, setReviewAction] = useState<GitStackedAction>("commit");
+  const [preparingReview, setPreparingReview] = useState(false);
+  const prepareCommit = useAtomCommand(gitEnvironment.prepareCommit, { reportFailure: false });
+
   const [isGeneratingCommitMessage, setIsGeneratingCommitMessage] = useState(false);
   const [commitMessageError, setCommitMessageError] = useState<string | null>(null);
   const [skippedCommitFiles, setSkippedCommitFiles] = useState<readonly string[]>([]);
@@ -1172,7 +1197,10 @@ export default function GitActionsControl({
   // Matches the diff panel's Changes view. Older servers only report uncommitted totals.
   const changesTotals = gitStatusForActions?.branchChanges ?? gitStatusForActions?.workingTree;
 
-  const allFiles = gitStatusForActions?.workingTree.files ?? [];
+  const allFiles =
+    isCommitDialogOpen && reviewTarget
+      ? reviewTarget.files
+      : (gitStatusForActions?.workingTree.files ?? []);
   const selectedFiles = allFiles.filter((f) => !excludedFiles.has(f.path));
   const allSelected = excludedFiles.size === 0;
   const noneSelected = selectedFiles.length === 0;
@@ -1211,13 +1239,108 @@ export default function GitActionsControl({
       open: isCommitDialogOpen,
     };
   }, [commitPreviewKey, dialogCommitMessage, isCommitDialogOpen, commitPreviewState]);
+  const currentReviewScope = gitCommitReviewScope({
+    environmentId: activeEnvironmentId,
+    cwd: gitCwd,
+    threadId: activeThreadRef?.threadId,
+  });
+  const openCommitReview = (action: GitStackedAction = "commit") => {
+    if (!activeEnvironmentId || !gitCwd) return;
+    setReviewAction(action);
+    setReviewTarget({
+      environmentId: activeEnvironmentId,
+      cwd: gitCwd,
+      scope: currentReviewScope,
+      files: [...(gitStatusForActions?.workingTree.files ?? [])],
+      ...(activeServerThread
+        ? { threadId: activeServerThread.id, projectId: activeServerThread.projectId }
+        : activeDraftThread
+          ? { projectId: activeDraftThread.projectId }
+          : {}),
+    });
+    setReviewContext(null);
+    setDialogCommitMessage(appAtomRegistry.get(gitCommitDraft(currentReviewScope)));
+    setExcludedFiles(new Set());
+    setIsEditingFiles(false);
+    setCommitMessageError(null);
+    setIsCommitDialogOpen(true);
+  };
+  useEffect(() => {
+    if (!reviewTarget || reviewTarget.scope === currentReviewScope) return;
+    appAtomRegistry.set(gitCommitDraft(reviewTarget.scope), dialogCommitMessage);
+    previewRequest.current++;
+    setIsCommitDialogOpen(false);
+    setPendingDefaultBranchAction(null);
+    setReviewContext(null);
+    setReviewTarget(null);
+    setDialogCommitMessage("");
+  }, [currentReviewScope, reviewTarget, dialogCommitMessage]);
+  useEffect(() => {
+    if (reviewTarget) appAtomRegistry.set(gitCommitDraft(reviewTarget.scope), dialogCommitMessage);
+  }, [reviewTarget, dialogCommitMessage]);
+  const reviewFileKey = JSON.stringify(selectedFiles.map((file) => file.path).sort());
+  useEffect(() => {
+    if (!isCommitDialogOpen || !reviewTarget || reviewTarget.scope !== currentReviewScope) return;
+    let cancelled = false;
+    setReviewContext(null);
+    setPreparingReview(true);
+    if (serverConfig?.environment.capabilities.gitCommitContext !== true) {
+      setCommitMessageError("Update this T3 server to use workspace-bound commit review.");
+      setPreparingReview(false);
+      return;
+    }
+    if (selectedFiles.length === 0) {
+      setPreparingReview(false);
+      return;
+    }
+    void prepareCommit({
+      environmentId: reviewTarget.environmentId,
+      input: {
+        cwd: reviewTarget.cwd,
+        filePaths: selectedFiles.map((file) => file.path),
+        ...(reviewTarget.threadId ? { threadId: reviewTarget.threadId } : {}),
+        ...(reviewTarget.projectId ? { projectId: reviewTarget.projectId } : {}),
+      },
+    }).then((result) => {
+      if (cancelled) return;
+      setPreparingReview(false);
+      if (result._tag !== "Success") {
+        setCommitMessageError(String(squashAtomCommandFailure(result)));
+        return;
+      }
+      setReviewContext(result.value.commitContext);
+      setSkippedCommitFiles(result.value.skippedFilePaths);
+      if (result.value.skippedFilePaths.length)
+        setExcludedFiles((previous) => new Set([...previous, ...result.value.skippedFilePaths]));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isCommitDialogOpen,
+    reviewTarget,
+    currentReviewScope,
+    reviewFileKey,
+    prepareCommit,
+    serverConfig?.environment.capabilities.gitCommitContext,
+  ]);
+  const reviewReady =
+    reviewContext !== null &&
+    reviewTarget?.scope === currentReviewScope &&
+    !preparingReview &&
+    commitContextMatchesFiles(
+      reviewContext,
+      selectedFiles.map((file) => file.path),
+    );
+
   const generateDialogCommitMessage = async () => {
     if (
       !activeEnvironmentId ||
       !gitCwd ||
       noneSelected ||
       previewPending.current ||
-      !canGenerateCommitMessage
+      !canGenerateCommitMessage ||
+      !reviewReady
     )
       return;
     previewPending.current = true;
@@ -1230,10 +1353,12 @@ export default function GitActionsControl({
       const result = await generateCommitMessage({
         environmentId: activeEnvironmentId,
         input: {
-          cwd: gitCwd,
-          filePaths: selectedFiles.map((file) => file.path),
+          cwd: reviewContext!.cwd,
+          commitContext: reviewContext!,
+          filePaths: reviewContext!.filePaths,
+          ...(reviewContext!.projectId ? { projectId: reviewContext!.projectId } : {}),
           skipIgnoredFiles: true,
-          ...(activeServerThread ? { threadId: activeServerThread.id } : {}),
+          ...(reviewContext!.threadId ? { threadId: reviewContext!.threadId } : {}),
         },
       });
       const current = commitPreviewState.current;
@@ -1369,6 +1494,7 @@ export default function GitActionsControl({
   runGitActionWithToast = useEffectEvent(
     async ({
       action,
+      commitContext,
       commitMessage,
       onConfirmed,
       skipDefaultBranchPrompt = false,
@@ -1384,6 +1510,20 @@ export default function GitActionsControl({
           !readEnvironmentScope(activeEnvironmentId, AuthOrchestrationOperateScope))
       )
         return;
+      const committing =
+        action === "commit" || action === "commit_push" || action === "commit_push_pr";
+      if (committing && !commitContext) {
+        openCommitReview(action);
+        return;
+      }
+      if (
+        commitContext &&
+        (commitContext.environmentId !== activeEnvironmentId ||
+          reviewTarget?.scope !== currentReviewScope)
+      ) {
+        setCommitMessageError("Workspace changed—review again before committing.");
+        return;
+      }
       const actionStatus = statusOverride ?? gitStatusForActions;
       const actionBranch = actionStatus?.refName ?? null;
       const actionIsDefaultBranch = featureBranch ? false : isDefaultRef;
@@ -1406,6 +1546,7 @@ export default function GitActionsControl({
           return;
         }
         setPendingDefaultBranchAction({
+          ...(commitContext ? { commitContext } : {}),
           action,
           branchName: actionBranch,
           includesCommit,
@@ -1421,7 +1562,7 @@ export default function GitActionsControl({
       const scopedToastData = threadToastData ? { ...threadToastData } : undefined;
       const actionId = randomUUID();
 
-      const result = await runImmediateGitAction.run({
+      const actionInput = {
         actionId,
         action,
         ...(commitMessage ? { commitMessage } : {}),
@@ -1429,9 +1570,28 @@ export default function GitActionsControl({
         ...(filePaths ? { filePaths } : {}),
         // A pull request the action opens is linked to the thread it ran beside. Drafts
         // have no server thread yet, so there is nothing to link to.
-        ...(activeServerThread ? { threadId: activeServerThread.id } : {}),
-        ...(activeDraftThread ? { projectId: activeDraftThread.projectId } : {}),
-      });
+        ...(commitContext?.threadId
+          ? { threadId: commitContext.threadId }
+          : activeServerThread
+            ? { threadId: activeServerThread.id }
+            : {}),
+        ...(commitContext?.projectId
+          ? { projectId: commitContext.projectId }
+          : activeDraftThread
+            ? { projectId: activeDraftThread.projectId }
+            : {}),
+      };
+      const result = commitContext
+        ? await runAtomCommand(
+            appAtomRegistry,
+            vcsActionManager.runStackedAction({
+              environmentId: commitContext.environmentId,
+              cwd: commitContext.cwd,
+            }),
+            { ...actionInput, commitContext, filePaths: commitContext.filePaths },
+            { reportFailure: false },
+          )
+        : await runImmediateGitAction.run(actionInput);
 
       if (result._tag === "Failure") {
         if (isAtomCommandInterrupted(result)) {
@@ -1439,6 +1599,8 @@ export default function GitActionsControl({
         }
 
         const error = squashAtomCommandFailure(result);
+        if (commitContext)
+          setCommitMessageError(error instanceof Error ? error.message : String(error));
         const errorToastTiming = resolveGitActionResultToastTiming("error");
         toastManager.add(
           stackedThreadToast({
@@ -1453,6 +1615,12 @@ export default function GitActionsControl({
       }
 
       const actionResult = result.value;
+      if (commitContext) {
+        appAtomRegistry.set(gitCommitDraft(reviewTarget!.scope), "");
+        setIsCommitDialogOpen(false);
+        setDialogCommitMessage("");
+      }
+
       syncThreadBranchAfterGitAction(actionResult);
       if (isPanel) {
         setInlineSuccess({
@@ -1527,20 +1695,23 @@ export default function GitActionsControl({
 
   const continuePendingDefaultBranchAction = () => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
+    const { action, commitContext, commitMessage, onConfirmed, filePaths } =
+      pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
       action,
       ...(commitMessage ? { commitMessage } : {}),
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
+      ...(commitContext ? { commitContext } : {}),
       skipDefaultBranchPrompt: true,
     });
   };
 
   const checkoutFeatureBranchAndContinuePendingAction = () => {
     if (!canChangeThreadBranch || !pendingDefaultBranchAction) return;
-    const { action, commitMessage, onConfirmed, filePaths } = pendingDefaultBranchAction;
+    const { action, commitContext, commitMessage, onConfirmed, filePaths } =
+      pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
       action,
@@ -1548,6 +1719,7 @@ export default function GitActionsControl({
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
       featureBranch: true,
+      ...(commitContext ? { commitContext } : {}),
       skipDefaultBranchPrompt: true,
     });
   };
@@ -1555,19 +1727,22 @@ export default function GitActionsControl({
   const runDialogActionOnNewBranch = () => {
     if (!canChangeThreadBranch || !isCommitDialogOpen) return;
     const commitMessage = dialogCommitMessage.trim();
-    if (!commitMessage || isGeneratingCommitMessage || noneSelected || hasEmptyCommitPreview)
+    if (
+      !reviewReady ||
+      !commitMessage ||
+      isGeneratingCommitMessage ||
+      noneSelected ||
+      hasEmptyCommitPreview
+    )
       return;
 
     previewRequest.current++;
-    setIsCommitDialogOpen(false);
-    setDialogCommitMessage("");
-    setExcludedFiles(new Set());
-    setIsEditingFiles(false);
 
     void runGitActionWithToast({
-      action: "commit",
+      action: reviewAction,
+      commitContext: reviewContext!,
       ...(commitMessage ? { commitMessage } : {}),
-      ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
+      filePaths: [...reviewContext!.filePaths],
       featureBranch: true,
       skipDefaultBranchPrompt: true,
     });
@@ -1650,26 +1825,26 @@ export default function GitActionsControl({
       void runGitActionWithToast({ action: "create_pr" });
       return;
     }
-    setExcludedFiles(new Set());
-    setIsEditingFiles(false);
-    setCommitMessageError(null);
-    setIsCommitDialogOpen(true);
+    openCommitReview();
   };
 
   const runDialogAction = () => {
     if (!isCommitDialogOpen) return;
     const commitMessage = dialogCommitMessage.trim();
-    if (!commitMessage || isGeneratingCommitMessage || noneSelected || hasEmptyCommitPreview)
+    if (
+      !reviewReady ||
+      !commitMessage ||
+      isGeneratingCommitMessage ||
+      noneSelected ||
+      hasEmptyCommitPreview
+    )
       return;
     previewRequest.current++;
-    setIsCommitDialogOpen(false);
-    setDialogCommitMessage("");
-    setExcludedFiles(new Set());
-    setIsEditingFiles(false);
     void runGitActionWithToast({
-      action: "commit",
+      action: reviewAction,
+      commitContext: reviewContext!,
       ...(commitMessage ? { commitMessage } : {}),
-      ...(!allSelected ? { filePaths: selectedFiles.map((f) => f.path) } : {}),
+      filePaths: [...reviewContext!.filePaths],
     });
   };
 
@@ -2040,7 +2215,6 @@ export default function GitActionsControl({
           if (!open) {
             previewRequest.current++;
             setIsCommitDialogOpen(false);
-            setDialogCommitMessage("");
             setExcludedFiles(new Set());
             setIsEditingFiles(false);
           }
@@ -2177,7 +2351,12 @@ export default function GitActionsControl({
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={!canGenerateCommitMessage || noneSelected || isGeneratingCommitMessage}
+                  disabled={
+                    !reviewReady ||
+                    !canGenerateCommitMessage ||
+                    noneSelected ||
+                    isGeneratingCommitMessage
+                  }
                   onClick={() => void generateDialogCommitMessage()}
                 >
                   {isGeneratingCommitMessage ? "Generating…" : "Generate commit message"}
@@ -2193,6 +2372,24 @@ export default function GitActionsControl({
                 aria-label="Commit message"
                 size="sm"
               />
+              {reviewTarget && (
+                <p className="text-xs text-muted-foreground">
+                  {serverConfig?.environment.label} ·{" "}
+                  {reviewContext?.repositoryRoot ?? reviewTarget.cwd} ·{" "}
+                  {reviewContext?.branch ?? "detached/unborn"} · {selectedFiles.length} selected
+                  files
+                </p>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={preparingReview}
+                onClick={() => {
+                  setReviewTarget((target) => (target ? { ...target } : null));
+                }}
+              >
+                Review current changes
+              </Button>
               {commitMessageError && (
                 <p role="alert" className="text-sm text-destructive">
                   {commitMessageError}
@@ -2222,7 +2419,6 @@ export default function GitActionsControl({
               onClick={() => {
                 previewRequest.current++;
                 setIsCommitDialogOpen(false);
-                setDialogCommitMessage("");
                 setExcludedFiles(new Set());
                 setIsEditingFiles(false);
               }}
@@ -2237,6 +2433,7 @@ export default function GitActionsControl({
                 noneSelected ||
                 hasEmptyCommitPreview ||
                 isGeneratingCommitMessage ||
+                !reviewReady ||
                 !dialogCommitMessage.trim()
               }
               onClick={runDialogActionOnNewBranch}
@@ -2250,6 +2447,7 @@ export default function GitActionsControl({
                 noneSelected ||
                 hasEmptyCommitPreview ||
                 isGeneratingCommitMessage ||
+                !reviewReady ||
                 !dialogCommitMessage.trim()
               }
               onClick={runDialogAction}

@@ -63,6 +63,7 @@ export class GitWorkflowService extends Context.Service<
     readonly invalidateRemoteStatus: (cwd: string) => Effect.Effect<void, never>;
     readonly invalidateStatus: (cwd: string) => Effect.Effect<void, never>;
     readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
+    readonly prepareCommit: GitManager.GitManager["Service"]["prepareCommit"];
     readonly generateCommitMessage: GitManager.GitManager["Service"]["generateCommitMessage"];
     readonly runStackedAction: (
       input: GitRunStackedActionInput,
@@ -354,8 +355,9 @@ export const make = Effect.gen(function* () {
     invalidateStatus: gitManager.invalidateStatus,
     pullCurrentBranch: (cwd) =>
       ensureGitCommand("GitWorkflowService.pullCurrentBranch", cwd).pipe(
-        Effect.andThen(git.pullCurrentBranch(cwd)),
+        Effect.andThen(gitManager.withWorktreeLock(cwd, git.pullCurrentBranch(cwd))),
       ),
+    prepareCommit: routeGitManager("GitWorkflowService.prepareCommit", gitManager.prepareCommit),
     generateCommitMessage: routeGitManager(
       "GitWorkflowService.generateCommitMessage",
       gitManager.generateCommitMessage,
@@ -380,7 +382,9 @@ export const make = Effect.gen(function* () {
       ),
     createWorktree: (input, options) =>
       ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
-        Effect.andThen(gitManager.createWorktree(input, options)),
+        Effect.andThen(
+          gitManager.withWorktreeLock(input.cwd, gitManager.createWorktree(input, options)),
+        ),
       ),
     listLocalBranchNames: (cwd) =>
       ensureGitCommand("GitWorkflowService.listLocalBranchNames", cwd).pipe(
@@ -404,27 +408,27 @@ export const make = Effect.gen(function* () {
       ),
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
-        Effect.andThen(git.removeWorktree(input)),
+        Effect.andThen(gitManager.withWorktreeLock(input.cwd, git.removeWorktree(input))),
       ),
     pruneWorktrees: (input) =>
       ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(
-        Effect.andThen(git.pruneWorktrees(input)),
+        Effect.andThen(gitManager.withWorktreeLock(input.cwd, git.pruneWorktrees(input))),
       ),
     deleteLocalBranch: (input) =>
       ensureGitCommand("GitWorkflowService.deleteLocalBranch", input.cwd).pipe(
-        Effect.andThen(git.deleteLocalBranch(input)),
+        Effect.andThen(gitManager.withWorktreeLock(input.cwd, git.deleteLocalBranch(input))),
       ),
     createRef: (input) =>
       ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(
-        Effect.andThen(git.createRef(input)),
+        Effect.andThen(gitManager.withWorktreeLock(input.cwd, git.createRef(input))),
       ),
     switchRef: (input) =>
       ensureGitCommand("GitWorkflowService.switchRef", input.cwd).pipe(
-        Effect.andThen(Effect.scoped(git.switchRef(input))),
+        Effect.andThen(gitManager.withWorktreeLock(input.cwd, Effect.scoped(git.switchRef(input)))),
       ),
     renameBranch: (input) =>
       ensureGit("GitWorkflowService.renameBranch", input.cwd).pipe(
-        Effect.andThen(git.renameBranch(input)),
+        Effect.andThen(gitManager.withWorktreeLock(input.cwd, git.renameBranch(input))),
       ),
   });
 });
