@@ -81,21 +81,31 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
     cwd: selectedThreadCwd,
     threadId: selectedThread?.id,
   });
-  const initialScope = useRef(draftScope);
+  const initialScope = useRef<string | null>(
+    selectedThread && selectedThreadCwd ? draftScope : null,
+  );
   const currentScope = useRef(draftScope);
   currentScope.current = draftScope;
   const [dialogCommitMessage, setDialogCommitMessage] = useState(() =>
     appAtomRegistry.get(gitCommitDraft(draftScope)),
   );
   useEffect(() => {
-    appAtomRegistry.set(gitCommitDraft(initialScope.current), dialogCommitMessage);
+    if (initialScope.current)
+      appAtomRegistry.set(gitCommitDraft(initialScope.current), dialogCommitMessage);
   }, [dialogCommitMessage]);
   useEffect(() => {
+    if (initialScope.current === null) {
+      if (selectedThread && selectedThreadCwd) {
+        initialScope.current = draftScope;
+        setDialogCommitMessage(appAtomRegistry.get(gitCommitDraft(draftScope)));
+      }
+      return;
+    }
     if (initialScope.current !== draftScope) {
       previewRequest.current++;
       navigation.goBack();
     }
-  }, [draftScope, navigation]);
+  }, [draftScope, navigation, selectedThread, selectedThreadCwd]);
   const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
   const [isEditingFiles, setIsEditingFiles] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -179,7 +189,9 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
       }
       setGenerationError(null);
       setCommitContext(result.value.commitContext);
-      setSkippedCommitFiles(result.value.skippedFilePaths);
+      setSkippedCommitFiles((previous) => [
+        ...new Set([...previous, ...result.value.skippedFilePaths]),
+      ]);
       if (result.value.skippedFilePaths.length)
         setExcludedFiles((previous) => new Set([...previous, ...result.value.skippedFilePaths]));
     });

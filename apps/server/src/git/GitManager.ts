@@ -857,10 +857,12 @@ export const make = Effect.gen(function* () {
   }) {
     const expected = input.commitContext;
     if (!expected) return yield* contextFailure(input.cwd, "required");
+    const requestedFiles = [...(input.filePaths ?? [])].sort();
     if (
       input.threadId !== expected.threadId ||
       (input.projectId && input.projectId !== expected.projectId) ||
-      JSON.stringify([...(input.filePaths ?? [])].sort()) !== JSON.stringify(expected.filePaths)
+      requestedFiles.length !== expected.filePaths.length ||
+      requestedFiles.some((value, index) => value !== expected.filePaths[index])
     )
       return yield* contextFailure(input.cwd, "changed");
     const actual = yield* prepareCommit({
@@ -3241,13 +3243,7 @@ export const make = Effect.gen(function* () {
           commit,
           push,
           pr,
-          toast:
-            input.commitContext && commit.status === "created"
-              ? {
-                  ...toast,
-                  description: `${input.commitContext.repositoryRoot} · ${branchStep.name ?? input.commitContext.branch ?? "Detached HEAD"} · ${commit.commitSha}`,
-                }
-              : toast,
+          toast,
         };
         yield* progress.emit({
           kind: "action_finished",

@@ -39,6 +39,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  EnvironmentId,
   SourceControlProviderError as SourceControlProviderFailure,
   TextGenerationError,
   ThreadId,
@@ -73,6 +74,7 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitManager from "./GitManager.ts";
+import { ServerEnvironmentIdentity } from "../environment/ServerEnvironment.ts";
 
 const encodeCliJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeForgejoPullRequest = Schema.decodeEffect(ForgejoPullRequestSchema);
@@ -698,13 +700,53 @@ function runStackedAction(
   },
   options?: Parameters<GitManager.GitManager["Service"]["runStackedAction"]>[1],
 ) {
-  return manager.runStackedAction(
-    {
+  return Effect.gen(function* () {
+    const commits = ["commit", "commit_push", "commit_push_pr"].includes(input.action);
+    const prepared = commits
+      ? yield* manager.prepareCommit({
+          cwd: input.cwd,
+          filePaths:
+            input.filePaths ??
+            (yield* manager.localStatus({ cwd: input.cwd })).workingTree.files.map(
+              (file) => file.path,
+            ),
+        })
+      : null;
+    return yield* manager.runStackedAction(
+      {
+        ...input,
+        actionId: input.actionId ?? "test-action-id",
+        ...(prepared
+          ? { commitContext: prepared.commitContext, filePaths: prepared.commitContext.filePaths }
+          : {}),
+      },
+      options,
+    );
+  });
+}
+
+function generateCommitMessage(
+  manager: GitManager.GitManager["Service"],
+  input: Parameters<GitManager.GitManager["Service"]["generateCommitMessage"]>[0],
+) {
+  return Effect.gen(function* () {
+    const prepared = yield* manager.prepareCommit({
+      cwd: input.cwd,
+      filePaths:
+        input.filePaths ??
+        (yield* manager.localStatus({ cwd: input.cwd })).workingTree.files.map((file) => file.path),
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+    });
+    const result = yield* manager.generateCommitMessage({
       ...input,
-      actionId: input.actionId ?? "test-action-id",
-    },
-    options,
-  );
+      filePaths: prepared.commitContext.filePaths,
+      commitContext: prepared.commitContext,
+    });
+    return {
+      ...result,
+      ...(input.skipIgnoredFiles ? { skippedFilePaths: prepared.skippedFilePaths } : {}),
+    };
+  });
 }
 
 function resolvePullRequest(
@@ -823,6 +865,9 @@ function makeManager(input?: {
       yield* input.seed.pipe(Effect.provideContext(stores), Effect.orDie);
     }
     const manager = yield* GitManager.make.pipe(
+      Effect.provideService(ServerEnvironmentIdentity, {
+        getEnvironmentId: Effect.succeed(EnvironmentId.make("commit-test-environment")),
+      }),
       Effect.provide(layerManager),
       Effect.provideContext(stores),
     );
@@ -839,6 +884,131 @@ const layerGitManagerTest = GitVcsDriver.layer.pipe(
 );
 
 it.layer(layerGitManagerTest)("GitManager", (it) => {
+  it.effect.each([
+    "missing",
+    "repository",
+    "worktree",
+    "environment",
+    "branch",
+    "head",
+    "selection",
+    "content",
+    "thread",
+    "project",
+  ])("rejects a %s mismatch before changing either repository or index", (mismatch) =>
+    Effect.gen(function* () {
+      const a = yield* makeTempDir("t3-review-a-");
+      const b = yield* makeTempDir("t3-review-b-");
+      yield* initRepo(a);
+      yield* initRepo(b);
+      NodeFS.writeFileSync(NodePath.join(a, "README.md"), "reviewed A\n");
+      NodeFS.writeFileSync(NodePath.join(b, "README.md"), "unrelated B\n");
+      const { manager } = yield* makeManager();
+      const prepared = yield* manager.prepareCommit({ cwd: a, filePaths: ["README.md"] });
+      let context = prepared.commitContext;
+      let cwd = a;
+      let files = context.filePaths;
+      if (mismatch === "repository") cwd = b;
+      if (mismatch === "worktree") {
+        cwd = NodePath.join(b, "linked");
+        yield* runGit(a, ["worktree", "add", "-b", "linked", cwd]);
+        NodeFS.writeFileSync(NodePath.join(cwd, "README.md"), "linked change\n");
+      }
+      if (mismatch === "environment")
+        context = { ...context, environmentId: EnvironmentId.make("another-machine") };
+      if (mismatch === "branch") yield* runGit(a, ["switch", "-c", "changed"]);
+      if (mismatch === "head")
+        yield* runGit(a, ["commit", "--allow-empty", "-m", "external commit"]);
+      if (mismatch === "selection") files = ["README.md", "new.txt"];
+      if (mismatch === "content")
+        NodeFS.writeFileSync(NodePath.join(a, "README.md"), "changed after review\n");
+      if (mismatch === "thread")
+        context = { ...context, threadId: ThreadId.make("unrelated-thread") };
+      if (mismatch === "project")
+        context = { ...context, projectId: ProjectId.make("unrelated-project") };
+      const before = yield* Effect.forEach([a, b], (root) =>
+        Effect.gen(function* () {
+          return {
+            head: (yield* runGit(root, ["rev-parse", "HEAD"])).stdout,
+            status: (yield* runGit(root, ["status", "--porcelain"])).stdout,
+            index: NodeFS.readFileSync(NodePath.join(root, ".git/index")),
+          };
+        }),
+      );
+      const result = yield* manager
+        .runStackedAction({
+          cwd,
+          actionId: `mismatch-${mismatch}`,
+          action: "commit",
+          commitMessage: "Reviewed A",
+          filePaths: files,
+          ...(mismatch !== "missing" ? { commitContext: context } : {}),
+          ...(context.threadId ? { threadId: context.threadId } : {}),
+          ...(context.projectId ? { projectId: context.projectId } : {}),
+        })
+        .pipe(Effect.result);
+      expect(result).toMatchObject({ _tag: "Failure", failure: { _tag: "GitCommitContextError" } });
+      for (const [index, root] of [a, b].entries()) {
+        expect((yield* runGit(root, ["rev-parse", "HEAD"])).stdout).toBe(before[index]?.head);
+        expect(NodeFS.readFileSync(NodePath.join(root, ".git/index"))).toEqual(
+          before[index]?.index,
+        );
+        expect((yield* runGit(root, ["status", "--porcelain"])).stdout).toBe(before[index]?.status);
+      }
+    }),
+  );
+
+  it.effect("commits only the reviewed selection when new files appear, and rejects a replay", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDir("t3-reviewed-selection-");
+      yield* initRepo(cwd);
+      NodeFS.writeFileSync(NodePath.join(cwd, "README.md"), "reviewed content\n");
+      const { manager } = yield* makeManager();
+      const { commitContext } = yield* manager.prepareCommit({ cwd, filePaths: ["README.md"] });
+      NodeFS.writeFileSync(NodePath.join(cwd, "late.txt"), "never reviewed\n");
+      const input = {
+        cwd,
+        actionId: "bound-selection",
+        action: "commit" as const,
+        commitMessage: "Reviewed content",
+        filePaths: commitContext.filePaths,
+        commitContext,
+      };
+      const result = yield* manager.runStackedAction(input);
+      expect(result.commit.status).toBe("created");
+      expect(result.commitContext?.repositoryRoot).toBe(commitContext.repositoryRoot);
+      expect((yield* runGit(cwd, ["show", "--pretty=", "--name-only", "HEAD"])).stdout.trim()).toBe(
+        "README.md",
+      );
+      expect((yield* runGit(cwd, ["status", "--porcelain"])).stdout).toContain("?? late.txt");
+      expect(yield* manager.runStackedAction(input).pipe(Effect.result)).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "GitCommitContextError" },
+      });
+    }),
+  );
+
+  it.effect("rejects unbound message generation without invoking the writer", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDir("t3-unbound-preview-");
+      yield* initRepo(cwd);
+      NodeFS.writeFileSync(NodePath.join(cwd, "README.md"), "review me\n");
+      let calls = 0;
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: () => {
+            calls++;
+            return Effect.succeed({ subject: "No", body: "" });
+          },
+        },
+      });
+      expect(
+        yield* manager.generateCommitMessage({ cwd, filePaths: ["README.md"] }).pipe(Effect.result),
+      ).toMatchObject({ _tag: "Failure", failure: { reason: "required" } });
+      expect(calls).toBe(0);
+    }),
+  );
+
   it.effect("passive worktree status streams do not start remote refreshes", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-passive-vcs-");
@@ -3413,7 +3583,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           },
         },
       });
-      const preview = yield* manager.generateCommitMessage({
+      const preview = yield* generateCommitMessage(manager, {
         cwd: repoDir,
         filePaths: ["README.md"],
       });
@@ -3444,7 +3614,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           },
         },
       });
-      const preview = yield* manager.generateCommitMessage({
+      const preview = yield* generateCommitMessage(manager, {
         cwd: repoDir,
         filePaths: ["README.md", ignored],
         skipIgnoredFiles: true,
@@ -3479,7 +3649,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         },
       });
       expect(
-        yield* manager.generateCommitMessage({
+        yield* generateCommitMessage(manager, {
           cwd: repoDir,
           filePaths: ["ignored.txt"],
           skipIgnoredFiles: true,
@@ -3491,7 +3661,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       expect(calls).toBe(0);
       expect(NodeFS.readFileSync(NodePath.join(repoDir, ".git/index"))).toEqual(before);
       expect(
-        yield* manager.generateCommitMessage({
+        yield* generateCommitMessage(manager, {
           cwd: repoDir,
           filePaths: ["README.md"],
           skipIgnoredFiles: true,
@@ -3713,15 +3883,22 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
       // The checkout is not the project's root, so only the thread can name the project.
       const beforePreview = yield* runGit(repoDir, ["status", "--porcelain"]);
-      const preview = yield* manager.generateCommitMessage({ cwd: repoDir, threadId });
+      const preview = yield* generateCommitMessage(manager, { cwd: repoDir, threadId });
       expect(preview.message).toBe("Use the project writer");
       expect(generatedModelSelection).toEqual(projectModel);
       expect(yield* runGit(repoDir, ["status", "--porcelain"])).toEqual(beforePreview);
+      const { commitContext } = yield* manager.prepareCommit({
+        cwd: repoDir,
+        threadId,
+        filePaths: ["README.md"],
+      });
       yield* manager.runStackedAction({
         actionId: "test-action-id",
         cwd: repoDir,
         action: "commit",
         threadId,
+        filePaths: commitContext.filePaths,
+        commitContext,
       });
 
       expect(generatedModelSelection).toEqual(projectModel);

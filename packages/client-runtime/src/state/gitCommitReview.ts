@@ -1,5 +1,11 @@
 import { Atom } from "effect/reactivity";
-import type { EnvironmentId, GitCommitContext, ProjectId, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  GitCommitContext,
+  GitRunStackedActionResult,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 export interface GitCommitReviewTarget {
   readonly environmentId: EnvironmentId;
@@ -25,7 +31,15 @@ export const gitCommitReviewScope = (target: {
 
 export function commitContextMatchesFiles(
   context: GitCommitContext,
+  GitRunStackedActionResult,
   filePaths: ReadonlyArray<string>,
 ) {
   return JSON.stringify([...filePaths].sort()) === JSON.stringify(context.filePaths);
+}
+
+/** Commit feedback names the worktree that actually received the commit. */
+export function gitCommitSuccessDescription(result: GitRunStackedActionResult) {
+  const context = result.commitContext;
+  if (!context || result.commit.status !== "created") return result.toast.description;
+  return `${context.repositoryRoot} · ${context.branch ?? "Detached HEAD"} · ${result.commit.commitSha}\n${result.toast.description ?? ""}`;
 }

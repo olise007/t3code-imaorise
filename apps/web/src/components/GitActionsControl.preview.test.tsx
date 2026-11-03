@@ -13,6 +13,10 @@ const state = vi.hoisted(() => ({
   version: 1,
   files: [] as { path: string; status: string; insertions: number; deletions: number }[],
   generate: vi.fn(),
+  prepare: vi.fn(),
+  drafts: new Map<unknown, string>(),
+  supported: true,
+  isDefaultRef: false,
   commit: vi.fn(),
 }));
 function Box({ children }: { children?: ReactNode }) {
@@ -25,9 +29,31 @@ function Button({ children, onClick, disabled, "aria-label": label }: ComponentP
     </button>
   );
 }
+vi.mock("~/rpc/atomRegistry", () => ({
+  appAtomRegistry: {
+    get: (atom: unknown) => state.drafts.get(atom) ?? "",
+    set: (atom: unknown, value: string) => state.drafts.set(atom, value),
+  },
+}));
+vi.mock("@t3tools/client-runtime/state/runtime", async (original) => ({
+  ...(await original<typeof import("@t3tools/client-runtime/state/runtime")>()),
+  runAtomCommand: (_registry: unknown, command: (input: unknown) => unknown, input: unknown) =>
+    command(input),
+}));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) =>
-    atom === "permission" ? true : atom === "action" ? { isRunning: false } : null,
+    atom === "permission"
+      ? true
+      : atom === "action"
+        ? { isRunning: false }
+        : atom === "config"
+          ? {
+              environment: {
+                label: "Reviewed environment",
+                capabilities: { gitCommitContext: state.supported },
+              },
+            }
+          : null,
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => () => {} }));
 vi.mock("~/state/entities", () => ({
@@ -39,9 +65,10 @@ vi.mock("~/state/session", () => ({
   readEnvironmentScope: () => true,
 }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
-vi.mock("~/state/server", () => ({ serverEnvironment: { configValueAtom: () => null } }));
+vi.mock("~/state/server", () => ({ serverEnvironment: { configValueAtom: () => "config" } }));
 vi.mock("~/state/git", () => ({
   gitEnvironment: {
+    prepareCommit: (input: unknown) => state.prepare(input),
     generateCommitMessage: Object.assign((input: unknown) => state.generate(input), {
       permissionAtom: () => "permission",
     }),
@@ -52,7 +79,10 @@ vi.mock("~/state/sourceControl", () => ({
 }));
 vi.mock("~/state/vcs", () => ({
   vcsEnvironment: { status: () => "status" },
-  vcsActionManager: { stateAtom: () => "action" },
+  vcsActionManager: {
+    stateAtom: () => "action",
+    runStackedAction: () => (input: unknown) => state.commit(input),
+  },
 }));
 vi.mock("~/state/threads", () => ({
   threadEnvironment: { updateMetadata: async () => AsyncResult.success(undefined) },
@@ -67,7 +97,7 @@ vi.mock("~/state/query", () => ({
           data: {
             isRepo: true,
             refName: "main",
-            isDefaultRef: false,
+            isDefaultRef: state.isDefaultRef,
             hasPrimaryRemote: true,
             hasWorkingTreeChanges: true,
             workingTree: { files: state.files },
@@ -131,8 +161,8 @@ vi.mock("~/components/ui/checkbox", () => ({
   ),
 }));
 vi.mock("~/components/ui/textarea", () => ({
-  Textarea: ({ value, onChange }: ComponentProps<"textarea">) => (
-    <textarea aria-label="Commit message" value={value} onChange={onChange} />
+  Textarea: ({ value, onChange, onKeyDown }: ComponentProps<"textarea">) => (
+    <textarea aria-label="Commit message" value={value} onChange={onChange} onKeyDown={onKeyDown} />
   ),
 }));
 vi.mock("~/components/ui/scroll-area", () => ({ ScrollArea: Box }));
@@ -200,8 +230,29 @@ function pendingGeneration() {
   return (message: string | null, skippedFilePaths = [ignored]) =>
     act(async () => finish(AsyncResult.success({ message, skippedFilePaths })));
 }
-beforeEach(() => {
+beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  state.drafts.clear();
+  state.supported = true;
+  state.isDefaultRef = false;
+  state.prepare.mockReset().mockImplementation(async ({ environmentId, input }) =>
+    AsyncResult.success({
+      commitContext: {
+        environmentId,
+        cwd: input.cwd,
+        repositoryRoot: input.cwd,
+        gitDirectory: `${input.cwd}/.git`,
+        gitCommonDirectory: `${input.cwd}/.git`,
+        branch: "main",
+        head: "head",
+        fingerprint: "tree",
+        filePaths: [...input.filePaths].sort(),
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+      },
+      skippedFilePaths: [],
+    }),
+  );
   state.environment = "environment";
   state.thread = "thread";
   state.cwd = "/repo";
@@ -222,121 +273,145 @@ beforeEach(() => {
   element = document.createElement("div");
   root = createRoot(element);
   render();
-  act(() => button("Commit", element).click());
+  await act(async () => button("Commit", element).click());
 });
 afterEach(() => act(() => root.unmount()));
 
-describe("commit message preview interactions", () => {
+describe("workspace-bound commit review", () => {
   it.each(["Commit", "Commit on new branch"])(
-    "warns, updates totals, retries and sends only eligible files to %s",
+    "sends the prepared repository and explicit eligible files to %s",
     async (action) => {
       await click("Generate commit message");
       expect(state.generate.mock.calls[0]?.[0].input).toMatchObject({
-        skipIgnoredFiles: true,
-        filePaths: ["eligible.ts", ignored],
+        commitContext: { cwd: "/repo", filePaths: ["eligible.ts", ignored].sort() },
+        filePaths: ["eligible.ts", ignored].sort(),
       });
-      expect(dialog().querySelector('[role="status"]')?.textContent).toContain(ignored);
-      expect(dialog().textContent).toContain("(1 of 2)");
-      expect(dialog().textContent).not.toContain("+53");
+      expect(dialog().textContent).toContain(ignored);
       expect(message().value).toBe("Update eligible file");
-      state.generate.mockResolvedValueOnce(
-        AsyncResult.success({ message: "Update eligible file", skippedFilePaths: [] }),
-      );
-      await click("Generate commit message");
-      expect(state.generate.mock.calls[1]?.[0].input.filePaths).toEqual(["eligible.ts"]);
-      expect(dialog().querySelector('[role="status"]')?.textContent).toContain(ignored);
       await click(action);
       expect(state.commit).toHaveBeenCalledWith(
         expect.objectContaining({
           filePaths: ["eligible.ts"],
+          commitContext: expect.objectContaining({
+            cwd: "/repo",
+            environmentId: "environment",
+            filePaths: ["eligible.ts"],
+          }),
           commitMessage: "Update eligible file",
-          ...(action === "Commit on new branch" ? { featureBranch: true } : {}),
         }),
       );
     },
   );
-
-  it("preserves typed text and prevents both commit actions when all files are skipped", async () => {
-    state.files = [file(ignored, 49)];
-    render();
-    typeMessage("Keep my draft");
-    state.generate.mockResolvedValueOnce(
-      AsyncResult.success({ message: null, skippedFilePaths: [ignored] }),
-    );
-    await click("Generate commit message");
-    expect(message().value).toBe("Keep my draft");
-    expect(dialog().textContent).toContain("No selected changes remain");
-    expect(button("Generate commit message").disabled).toBe(true);
-    await click("Commit");
-    await click("Commit on new branch");
-    expect(state.commit).not.toHaveBeenCalled();
-  });
-
-  it.each(["message", "selection", "environment", "project", "thread", "status", "reopen"])(
-    "ignores stale warnings and text after changing %s",
+  it.each(["environment", "project", "thread"])(
+    "closes on %s change and discards a delayed preview while retaining the original draft",
     async (change) => {
-      typeMessage("Draft");
+      typeMessage("Original draft");
       const finish = pendingGeneration();
       await click("Generate commit message");
-      if (change === "message") typeMessage("Edited while waiting");
-      if (change === "selection") {
-        await click("Edit");
-        act(() =>
-          dialog().querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1]!.click(),
-        );
-      }
       if (change === "environment") state.environment = "other-environment";
       if (change === "project") state.cwd = "/other-repo";
       if (change === "thread") state.thread = "other-thread";
-      if (change === "status") state.version++;
-      if (change === "reopen") {
-        await click("Cancel");
-        act(() => button("Commit", element).click());
-      }
       render();
-      await finish("Stale generated text");
-      expect(message().value).not.toBe("Stale generated text");
-      expect(dialog().textContent).not.toContain("Ignored files were excluded");
-      expect(button("Generate commit message").disabled).toBe(false);
+      await finish("Stale message");
+      expect(dialog()).toBeNull();
+      expect(state.commit).not.toHaveBeenCalled();
+      state.environment = "environment";
+      state.cwd = "/repo";
+      state.thread = "thread";
+      render();
+      await act(async () => button("Commit", element).click());
+      expect(message().value).toBe("Original draft");
     },
   );
-
-  it("restores controls after failure and allows a successful retry", async () => {
-    typeMessage("Draft");
-    state.generate.mockResolvedValueOnce(
-      AsyncResult.failure(Cause.fail(new Error("index is locked"))),
+  it("keeps a pending commit bound when navigation occurs during execution", async () => {
+    typeMessage("Reviewed A");
+    let finish!: (value: unknown) => void;
+    state.commit.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
     );
-    await click("Generate commit message");
-    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("index is locked");
-    expect(message().value).toBe("Draft");
-    expect(button("Generate commit message").disabled).toBe(false);
-    expect(button("Commit").disabled).toBe(false);
-    await click("Generate commit message");
-    expect(message().value).toBe("Update eligible file");
-    expect(dialog().querySelector('[role="alert"]')).toBeNull();
+    await click("Commit");
+    const submitted = state.commit.mock.calls[0]?.[0];
+    expect(submitted.commitContext.cwd).toBe("/repo");
+    state.cwd = "/repo-b";
+    state.thread = "thread-b";
+    render();
+    await act(async () => button("Commit", element).click());
+    typeMessage("Draft B");
+    await act(async () =>
+      finish(
+        AsyncResult.success({
+          branch: { status: "skipped_not_requested" },
+          toast: { title: "Committed A", cta: { kind: "none" } },
+        }),
+      ),
+    );
+    expect(dialog()).not.toBeNull();
+    expect(message().value).toBe("Draft B");
+    expect(state.commit).toHaveBeenCalledTimes(1);
   });
-
-  it("blocks a no-change preview even when the status still lists eligible files", async () => {
-    typeMessage("Draft");
-    state.generate.mockResolvedValueOnce(
-      AsyncResult.success({ message: null, skippedFilePaths: [] }),
+  it("cancels a delayed default-branch confirmation when the workspace changes", async () => {
+    state.isDefaultRef = true;
+    await click("Cancel");
+    await act(async () => button("Commit & push", element).click());
+    typeMessage("Reviewed A");
+    await click("Commit");
+    expect(element.querySelectorAll('[role="dialog"]').length).toBe(2);
+    state.cwd = "/repo-b";
+    render();
+    expect(element.querySelectorAll('[role="dialog"]').length).toBe(0);
+    expect(state.commit).not.toHaveBeenCalled();
+  });
+  it("supports keyboard submission using the prepared selection", async () => {
+    typeMessage("Keyboard commit");
+    await act(async () =>
+      message().dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+      ),
     );
-    await click("Generate commit message");
-    expect(message().value).toBe("Draft");
+    expect(state.commit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commitContext: expect.objectContaining({ cwd: "/repo" }),
+        filePaths: ["eligible.ts", ignored].sort(),
+      }),
+    );
+  });
+  it("retains the draft and displays a server workspace mismatch", async () => {
+    typeMessage("Keep this message");
+    state.commit.mockResolvedValueOnce(
+      AsyncResult.failure(Cause.fail(new Error("Workspace changed—review again"))),
+    );
+    await click("Commit");
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain("Workspace changed");
+    expect(message().value).toBe("Keep this message");
+  });
+  it("disables committing with update guidance for unsupported servers", async () => {
+    await click("Cancel");
+    state.supported = false;
+    render();
+    await act(async () => button("Commit", element).click());
+    typeMessage("Keep draft");
     expect(button("Commit").disabled).toBe(true);
-    expect(button("Commit on new branch").disabled).toBe(true);
-    state.version++;
-    render();
-    expect(button("Commit").disabled).toBe(false);
+    expect(dialog().textContent).toContain("Update this T3 server");
+    expect(state.commit).not.toHaveBeenCalled();
   });
-
-  it("does not carry skipped-file exclusions into another project", async () => {
+  it("preserves user edits while generation is pending", async () => {
+    typeMessage("Draft");
+    const finish = pendingGeneration();
     await click("Generate commit message");
-    state.cwd = "/another-project";
-    render();
-    expect(dialog().textContent).not.toContain("Ignored files were excluded");
-    expect(dialog().textContent).not.toContain("(1 of 2)");
+    typeMessage("User edit");
+    await finish("Stale generated text");
+    expect(message().value).toBe("User edit");
+  });
+  it("warns and blocks commits when no eligible changes remain", async () => {
+    state.generate.mockResolvedValueOnce(
+      AsyncResult.success({ message: null, skippedFilePaths: ["eligible.ts", ignored] }),
+    );
+    typeMessage("Keep draft");
     await click("Generate commit message");
-    expect(state.generate.mock.calls[1]?.[0].input.filePaths).toEqual(["eligible.ts", ignored]);
+    expect(button("Commit").disabled).toBe(true);
+    expect(message().value).toBe("Keep draft");
   });
 });

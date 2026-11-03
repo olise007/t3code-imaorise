@@ -1,3 +1,4 @@
+import { gitCommitSuccessDescription } from "@t3tools/client-runtime/state/gitCommitReview";
 import { useCallback, useEffect, useEffectEvent, useMemo } from "react";
 
 import { EnvironmentProject, EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -429,7 +430,7 @@ export function useSelectedThreadGitActions() {
           showGitActionResult({
             type: "success",
             title: result.value.toast.title,
-            description: result.value.toast.description,
+            description: gitCommitSuccessDescription(result.value),
             prUrl:
               result.value.toast.cta.kind === "open_pr" ? result.value.toast.cta.url : undefined,
           });
