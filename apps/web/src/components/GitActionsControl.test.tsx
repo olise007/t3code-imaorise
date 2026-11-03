@@ -133,7 +133,7 @@ vi.mock("~/state/query", () => ({
           error: null,
           data: {
             isRepo: true,
-            refName: "main",
+            refName: state.branch,
             isDefaultRef: state.isDefaultRef,
             hasPrimaryRemote: true,
             hasWorkingTreeChanges: true,
