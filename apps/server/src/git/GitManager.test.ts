@@ -885,6 +885,17 @@ const layerGitManagerTest = GitVcsDriver.layer.pipe(
 );
 
 it.layer(layerGitManagerTest)("GitManager", (it) => {
+  it.effect("retains idempotent cleanup of an already missing worktree", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDir("t3-missing-worktree-");
+      yield* initRepo(cwd);
+      const { manager } = yield* makeManager();
+      const git = yield* GitVcsDriver.GitVcsDriver;
+      const path = NodePath.join(cwd, "already-removed");
+      yield* manager.withWorktreeLock(cwd, git.removeWorktree({ cwd, path }), path);
+      expect((yield* runGit(cwd, ["rev-parse", "HEAD"])).stdout.trim()).not.toBe("");
+    }),
+  );
   it.effect.each(["binary", "patch-tail"])(
     "fingerprints complete %s content rather than the bounded preview",
     (kind) =>

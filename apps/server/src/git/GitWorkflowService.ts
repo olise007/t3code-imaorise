@@ -408,7 +408,9 @@ export const make = Effect.gen(function* () {
       ),
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(
-        Effect.andThen(gitManager.withWorktreeLock(input.path, git.removeWorktree(input))),
+        Effect.andThen(
+          gitManager.withWorktreeLock(input.cwd, git.removeWorktree(input), input.path),
+        ),
       ),
     pruneWorktrees: (input) =>
       ensureGitCommand("GitWorkflowService.pruneWorktrees", input.cwd).pipe(

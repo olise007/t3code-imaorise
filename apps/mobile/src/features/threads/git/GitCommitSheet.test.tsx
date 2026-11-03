@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 const state = vi.hoisted(() => ({
   environment: "environment",
   thread: "thread",
+  project: "project",
   cwd: "/repo",
   version: 1,
   files: [] as { path: string; status: string; insertions: number; deletions: number }[],
@@ -106,7 +107,11 @@ vi.mock("../../../state/query", () => ({
 }));
 vi.mock("../../../state/use-thread-selection", () => ({
   useThreadSelection: () => ({
-    selectedThread: { environmentId: state.environment, id: state.thread },
+    selectedThread: {
+      environmentId: state.environment,
+      id: state.thread,
+      projectId: state.project,
+    },
   }),
 }));
 vi.mock("../../../state/use-selected-thread-worktree", () => ({
@@ -250,6 +255,7 @@ beforeEach(async () => {
   );
   state.environment = "environment";
   state.thread = "thread";
+  state.project = "project";
   state.cwd = "/repo";
   state.version = 1;
   state.files = [file("eligible.ts", 4), file(ignored, 49)];
@@ -292,12 +298,13 @@ describe("mobile workspace-bound commits", () => {
       );
     },
   );
-  it.each(["environment", "thread", "worktree"])(
+  it.each(["environment", "thread", "worktree", "project-record"])(
     "dismisses and blocks late generation after the %s changes",
     async (change) => {
       typeMessage("Original draft");
       const finish = pendingGeneration();
       await click("Generate commit message");
+      if (change === "project-record") state.project = "other-project";
       if (change === "environment") state.environment = "other-environment";
       if (change === "thread") state.thread = "other-thread";
       if (change === "worktree") state.cwd = "/other-repo";

@@ -156,6 +156,7 @@ export class GitManager extends Context.Service<
     readonly withWorktreeLock: <A, E, R>(
       cwd: string,
       effect: Effect.Effect<A, E, R>,
+      targetPath?: string,
     ) => Effect.Effect<A, E | GitCommandError, R>;
     readonly prepareCommit: (
       input: GitPrepareCommitInput,
@@ -744,12 +745,18 @@ export const make = Effect.gen(function* () {
   const threads = yield* ProjectionStore.ProjectionStoreV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const commitLocks = yield* KeyedLock.make<string>();
-  const withWorktreeLock: GitManager["Service"]["withWorktreeLock"] = (cwd, effect) =>
+  const withWorktreeLock: GitManager["Service"]["withWorktreeLock"] = (cwd, effect, targetPath) =>
     Effect.gen(function* () {
       // Resolve the lock key on the server; a supplied context never chooses the lock.
+      const targetCwd = targetPath ? path.resolve(cwd, targetPath) : cwd;
+      const targetExists = targetPath
+        ? yield* fileSystem.exists(targetCwd).pipe(Effect.orElseSucceed(() => true))
+        : true;
+      // Removing an already missing worktree remains an idempotent prune of the parent repository.
+      const lockCwd = targetExists ? targetCwd : cwd;
       const identity = yield* gitCore.execute({
         operation: "GitManager.lock",
-        cwd,
+        cwd: lockCwd,
         args: ["rev-parse", "--absolute-git-dir"],
       });
       const key = yield* fileSystem.realPath(identity.stdout.trim()).pipe(

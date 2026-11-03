@@ -82,6 +82,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
     environmentId: selectedThread?.environmentId ?? null,
     cwd: selectedThreadCwd,
     threadId: selectedThread?.id,
+    projectId: selectedThread?.projectId,
   });
   const initialScope = useRef<string | null>(
     selectedThread && selectedThreadCwd ? draftScope : null,

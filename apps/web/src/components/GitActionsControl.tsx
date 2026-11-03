@@ -1244,7 +1244,8 @@ export default function GitActionsControl({
   const currentReviewScope = gitCommitReviewScope({
     environmentId: activeEnvironmentId,
     cwd: gitCwd,
-    threadId: activeThreadRef?.threadId,
+    threadId: draftId ?? activeThreadRef?.threadId,
+    projectId: activeServerThread?.projectId ?? activeDraftThread?.projectId,
   });
   const latestReviewScope = useRef(currentReviewScope);
   latestReviewScope.current = currentReviewScope;

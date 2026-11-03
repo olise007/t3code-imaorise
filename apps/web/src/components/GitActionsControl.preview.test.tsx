@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 const state = vi.hoisted(() => ({
   environment: "environment",
   thread: "thread",
+  project: "project",
   cwd: "/repo",
   version: 1,
   files: [] as { path: string; status: string; insertions: number; deletions: number }[],
@@ -57,7 +58,7 @@ vi.mock("@effect/atom-react", () => ({
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => () => {} }));
 vi.mock("~/state/entities", () => ({
-  useThreadShell: () => ({ id: state.thread, branch: "main" }),
+  useThreadShell: () => ({ id: state.thread, projectId: state.project, branch: "main" }),
   useThreadProjection: () => null,
 }));
 vi.mock("~/state/session", () => ({
@@ -255,6 +256,7 @@ beforeEach(async () => {
   );
   state.environment = "environment";
   state.thread = "thread";
+  state.project = "project";
   state.cwd = "/repo";
   state.version = 1;
   state.files = [file("eligible.ts", 4), file(ignored, 49)];
@@ -302,12 +304,13 @@ describe("workspace-bound commit review", () => {
       );
     },
   );
-  it.each(["environment", "project", "thread"])(
+  it.each(["environment", "project", "project-record", "thread"])(
     "closes on %s change and discards a delayed preview while retaining the original draft",
     async (change) => {
       typeMessage("Original draft");
       const finish = pendingGeneration();
       await click("Generate commit message");
+      if (change === "project-record") state.project = "other-project";
       if (change === "environment") state.environment = "other-environment";
       if (change === "project") state.cwd = "/other-repo";
       if (change === "thread") state.thread = "other-thread";
@@ -316,6 +319,7 @@ describe("workspace-bound commit review", () => {
       expect(dialog()).toBeNull();
       expect(state.commit).not.toHaveBeenCalled();
       state.environment = "environment";
+      state.project = "project";
       state.cwd = "/repo";
       state.thread = "thread";
       render();
