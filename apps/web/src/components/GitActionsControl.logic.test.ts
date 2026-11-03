@@ -623,7 +623,7 @@ describe("when: on default ref without open PR", () => {
     );
     assert.deepInclude(quick, {
       kind: "run_action",
-      action: "commit_push",
+      action: "push",
       label: "Push",
       disabled: false,
     });
@@ -921,7 +921,7 @@ describe("when: ref has no upstream configured", () => {
     );
     assert.deepInclude(quick, {
       kind: "run_action",
-      action: "commit_push",
+      action: "push",
       label: "Push",
       disabled: false,
     });

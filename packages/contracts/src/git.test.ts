@@ -2,6 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import {
+  GitCommitContext,
+  GitCommitContextError,
+  GitManagerServiceError,
   GitGenerateCommitMessageInput,
   GitGenerateCommitMessageResult,
   VcsCreateWorktreeInput,
@@ -191,6 +194,45 @@ describe("GitRunStackedActionResult", () => {
     expect(parsed.toast.cta.kind).toBe("run_action");
     if (parsed.toast.cta.kind === "run_action") {
       expect(parsed.toast.cta.action.kind).toBe("create_pr");
+    }
+  });
+});
+
+describe("workspace-bound commit contracts", () => {
+  it("round trips reviewed identity, files and association across the wire", () => {
+    const context = Schema.decodeUnknownSync(GitCommitContext)({
+      environmentId: "environment-a",
+      cwd: "/repo",
+      repositoryRoot: "/repo",
+      gitDirectory: "/repo/.git",
+      gitCommonDirectory: "/repo/.git",
+      branch: "main",
+      head: "head",
+      filePaths: ["selected.txt"],
+      fingerprint: "tree",
+      threadId: "thread-a",
+      projectId: "project-a",
+    });
+    const wire = Schema.encodeSync(Schema.fromJsonString(GitCommitContext))(context);
+    expect(Schema.decodeUnknownSync(Schema.fromJsonString(GitCommitContext))(wire)).toEqual(
+      context,
+    );
+    const input = decodeRunStackedActionInput({
+      actionId: "action",
+      action: "commit_push_pr",
+      cwd: "/repo",
+      filePaths: context.filePaths,
+      commitContext: context,
+    });
+    expect(input.commitContext).toEqual(context);
+  });
+  it("preserves typed compatibility and changed-workspace errors", () => {
+    for (const reason of ["required", "changed", "association"] as const) {
+      const error = new GitCommitContextError({ cwd: "/repo", reason });
+      const codec = Schema.fromJsonString(GitManagerServiceError);
+      const roundTrip = Schema.decodeUnknownSync(codec)(Schema.encodeSync(codec)(error));
+      expect(roundTrip).toMatchObject({ _tag: "GitCommitContextError", reason });
+      expect(roundTrip.message).toBe(error.message);
     }
   });
 });

@@ -381,7 +381,10 @@ export function useSelectedThreadGitActions() {
   }, [pull, refreshSelectedThreadGitStatus, runSelectedThreadGitMutation]);
 
   const onRunSelectedThreadGitAction = useCallback(
-    async (input: GitActionRequestInput): Promise<GitRunStackedActionResult | null> => {
+    async (
+      input: GitActionRequestInput,
+      onError?: (message: string) => void,
+    ): Promise<GitRunStackedActionResult | null> => {
       const actionId = uuidv4();
       return await runSelectedThreadGitMutation(
         "run_change_request",
@@ -409,6 +412,8 @@ export function useSelectedThreadGitActions() {
               )
             : await runStackedAction(actionInput);
           if (AsyncResult.isFailure(result)) {
+            const error = Cause.squash(result.cause);
+            onError?.(error instanceof Error ? error.message : String(error));
             return result;
           }
 

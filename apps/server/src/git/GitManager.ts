@@ -823,8 +823,18 @@ export const make = Effect.gen(function* () {
       }
     }
     const paths = [...new Set(input.filePaths)].sort();
-    if (paths.some((value) => path.isAbsolute(value) || value.split(/[\\/]/u).includes("..")))
+    if (
+      paths.some(
+        (value) => value === "." || path.isAbsolute(value) || value.split(/[\\/]/u).includes(".."),
+      )
+    )
       return yield* contextFailure(cwd, "changed");
+    for (const file of paths) {
+      const info = yield* fileSystem
+        .stat(path.resolve(cwd, file))
+        .pipe(Effect.orElseSucceed(() => null));
+      if (info?.type === "Directory") return yield* contextFailure(cwd, "changed");
+    }
     const prepared = yield* gitCore.prepareCommitContext(cwd, paths, { skipIgnoredFiles: true });
     if (!prepared.treeOid) return yield* contextFailure(cwd, "changed");
     const branch =
@@ -859,6 +869,7 @@ export const make = Effect.gen(function* () {
     if (!expected) return yield* contextFailure(input.cwd, "required");
     const requestedFiles = [...(input.filePaths ?? [])].sort();
     if (
+      input.filePaths === undefined ||
       input.threadId !== expected.threadId ||
       (input.projectId && input.projectId !== expected.projectId) ||
       requestedFiles.length !== expected.filePaths.length ||

@@ -140,6 +140,13 @@ make your first commit before pushing.
 Use a thread's Git actions to commit, push, and create a pull request. T3 Code can generate commit
 messages, review titles, and descriptions from your changes.
 
+Commit review stays with the environment, worktree, branch and files you opened it for.
+Changing projects or worktrees closes review and keeps the message as a draft in the original
+workspace. Reopen review there to continue. If the checkout or selected changes have changed,
+review them again before retrying. Files that appear after review are not added to the commit.
+Workspace-bound commits require an updated T3 server; older servers still support browsing
+and other source-control actions.
+
 An existing fork PR can appear beside the branch even if you pushed without setting an upstream.
 If its badge is missing because several remotes hold that branch, set the branch's upstream to
 the intended remote with `git branch --set-upstream-to=<remote>/<branch>`.

@@ -61,6 +61,12 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
 
   const continuePendingAction = useCallback(async () => {
     if (!canWriteSourceControl || !confirmAction) return;
+    if (confirmAction === "commit_push" || confirmAction === "commit_push_pr") {
+      navigation.dispatch(
+        StackActions.replace("GitCommit", { environmentId, threadId, action: confirmAction }),
+      );
+      return;
+    }
     navigation.dispatch(StackActions.replace("Thread", { environmentId, threadId }));
     await gitActions.onRunSelectedThreadGitAction({
       action: confirmAction,
@@ -79,6 +85,12 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
 
   const movePendingActionToFeatureBranch = useCallback(async () => {
     if (!canChangeThreadBranch || !confirmAction) return;
+    if (confirmAction === "commit_push" || confirmAction === "commit_push_pr") {
+      navigation.dispatch(
+        StackActions.replace("GitCommit", { environmentId, threadId, action: confirmAction }),
+      );
+      return;
+    }
     navigation.dispatch(StackActions.replace("Thread", { environmentId, threadId }));
 
     if (includesCommit) {

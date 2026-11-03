@@ -82,30 +82,32 @@ describe("command permissions", () => {
       }),
     ),
   );
-  it.effect("requires the destination source-control grant for commit previews", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* setup;
-        const preview = createCommandPermissions(runtime, WS_METHODS.gitGenerateCommitMessage);
-        registry.set(sessions(env), AsyncResult.success(grant(true)));
-        expect(registry.get(preview.permissionAtom(env))).toBe(false);
-        expect((yield* preview.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
-          "EnvironmentAuthorizationError",
-        );
-        registry.set(
-          sessions(env),
-          AsyncResult.success({
-            ...grant(true),
-            scopes: [AuthSourceControlWriteScope],
-            permissions: [AuthSourceControlWriteScope],
-          }),
-        );
-        yield* preview.authorize(registry, env);
-        expect(registry.get(preview.permissionAtom(env))).toBe(true);
-        registry.set(sessions(other), AsyncResult.success(grant(false)));
-        expect(registry.get(preview.permissionAtom(other))).toBe(false);
-      }),
-    ),
+  it.effect.each([WS_METHODS.gitGenerateCommitMessage, WS_METHODS.gitPrepareCommit])(
+    "requires the destination source-control grant for %s",
+    (method) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* setup;
+          const preview = createCommandPermissions(runtime, method);
+          registry.set(sessions(env), AsyncResult.success(grant(true)));
+          expect(registry.get(preview.permissionAtom(env))).toBe(false);
+          expect((yield* preview.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+            "EnvironmentAuthorizationError",
+          );
+          registry.set(
+            sessions(env),
+            AsyncResult.success({
+              ...grant(true),
+              scopes: [AuthSourceControlWriteScope],
+              permissions: [AuthSourceControlWriteScope],
+            }),
+          );
+          yield* preview.authorize(registry, env);
+          expect(registry.get(preview.permissionAtom(env))).toBe(true);
+          registry.set(sessions(other), AsyncResult.success(grant(false)));
+          expect(registry.get(preview.permissionAtom(other))).toBe(false);
+        }),
+      ),
   );
   it.effect("requires the destination maintenance grant to manage desktop servers", () =>
     Effect.scoped(

@@ -300,19 +300,26 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
       setSubmitting(true);
       setGenerationError(null);
       try {
-        const result = await gitActions.onRunSelectedThreadGitAction({
-          action: props.route.params.action ?? "commit",
-          featureBranch,
-          commitMessage,
-          commitContext: context,
-          filePaths: context.filePaths,
-        });
+        let failureReason: string | null = null;
+        const result = await gitActions.onRunSelectedThreadGitAction(
+          {
+            action: props.route.params.action ?? "commit",
+            featureBranch,
+            commitMessage,
+            commitContext: context,
+            filePaths: context.filePaths,
+          },
+          (reason) => {
+            failureReason = reason;
+          },
+        );
         if (result) {
           appAtomRegistry.set(gitCommitDraft(scope), "");
           if (preview.current.mounted && currentScope.current === scope) navigation.goBack();
         } else if (preview.current.mounted) {
           setGenerationError(
-            "Commit failed. Your message is saved. Review the source control error and retry.",
+            failureReason ??
+              "Commit failed. Your message is saved. Review the source control error and retry.",
           );
         }
       } finally {
