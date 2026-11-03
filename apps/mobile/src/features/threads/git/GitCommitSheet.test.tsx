@@ -288,6 +288,7 @@ describe("mobile workspace-bound commits", () => {
           }),
           featureBranch: action === "Commit on new branch",
         }),
+        expect.any(Function),
       );
     },
   );
@@ -311,7 +312,11 @@ describe("mobile workspace-bound commits", () => {
   it("cancels a pending default-branch prompt when the route workspace changes", async () => {
     state.action = "commit_push";
     state.isDefaultRef = true;
-    render();
+    act(() => root.unmount());
+    root = createRoot(element);
+    await act(async () => {
+      render();
+    });
     typeMessage("Reviewed A");
     await click("Commit");
     expect(state.alert).toHaveBeenCalled();

@@ -1,6 +1,7 @@
 import { vi } from "vite-plus/test";
 import {
   EnvironmentId,
+  GitCommitContextError,
   AuthSourceControlWriteScope,
   ThreadId,
   ProjectId,
@@ -467,6 +468,44 @@ describe("vcsActionState", () => {
         "Source control action 'commit_push' ended without a terminal result.",
       );
     }),
+  );
+
+  it.each(["environment", "cwd"])(
+    "rejects a reviewed %s mismatch before dispatch",
+    async (changed) => {
+      const runtime = Atom.runtime(Layer.empty) as unknown as Atom.AtomRuntime<
+        EnvironmentRegistry.EnvironmentRegistry | Persistence.EnvironmentCacheStore,
+        never
+      >;
+      const manager = createVcsActionManager(runtime);
+      const registry = AtomRegistry.make();
+      try {
+        const result = await manager.runStackedAction({ environmentId, cwd }).run(registry, {
+          actionId: "bound",
+          action: "commit",
+          filePaths: ["selected.txt"],
+          commitContext: {
+            environmentId: changed === "environment" ? EnvironmentId.make("other") : environmentId,
+            cwd: changed === "cwd" ? "/another-repo" : cwd,
+            repositoryRoot: cwd,
+            gitDirectory: `${cwd}/.git`,
+            gitCommonDirectory: `${cwd}/.git`,
+            branch: "main",
+            head: "head",
+            fingerprint: "tree",
+            filePaths: ["selected.txt"],
+          },
+        });
+        expect(AsyncResult.isFailure(result)).toBe(true);
+        if (AsyncResult.isFailure(result))
+          expect(Cause.squash(result.cause)).toBeInstanceOf(GitCommitContextError);
+        expect(registry.get(manager.stateAtom({ environmentId, cwd }))).toEqual(
+          EMPTY_VCS_ACTION_STATE,
+        );
+      } finally {
+        registry.dispose();
+      }
+    },
   );
 
   it("keys mutation ownership by environment and cwd", () => {

@@ -4,6 +4,7 @@ import {
   gitCommitReviewScope,
   commitContextMatchesFiles,
   gitCommitSuccessDescription,
+  type GitCommitReviewTarget,
 } from "@t3tools/client-runtime/state/gitCommitReview";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { useAtomValue } from "@effect/atom-react";
@@ -12,9 +13,6 @@ import {
   AuthSourceControlWriteScope,
   SourceControlProviderKind,
   type GitCommitContext,
-  type EnvironmentId,
-  type ThreadId,
-  type ProjectId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
@@ -1065,14 +1063,14 @@ export default function GitActionsControl({
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const [isCommitDialogOpen, setIsCommitDialogOpen] = useState(false);
   const [dialogCommitMessage, setDialogCommitMessage] = useState("");
-  const [reviewTarget, setReviewTarget] = useState<{
-    environmentId: EnvironmentId;
-    cwd: string;
-    scope: string;
-    threadId?: ThreadId;
-    projectId?: ProjectId;
-    files: VcsStatusResult["workingTree"]["files"];
-  } | null>(null);
+  const [reviewTarget, setReviewTarget] = useState<
+    | (GitCommitReviewTarget & {
+        readonly scope: string;
+        readonly isDefaultRef: boolean;
+        readonly files: VcsStatusResult["workingTree"]["files"];
+      })
+    | null
+  >(null);
   const [reviewContext, setReviewContext] = useState<GitCommitContext | null>(null);
   const [reviewAction, setReviewAction] = useState<GitStackedAction>("commit");
   const [preparingReview, setPreparingReview] = useState(false);
@@ -1257,6 +1255,7 @@ export default function GitActionsControl({
       environmentId: activeEnvironmentId,
       cwd: gitCwd,
       scope: currentReviewScope,
+      isDefaultRef,
       files: [...(gitStatusForActions?.workingTree.files ?? [])],
       ...(activeServerThread
         ? { threadId: activeServerThread.id, projectId: activeServerThread.projectId }
@@ -1534,8 +1533,12 @@ export default function GitActionsControl({
         return;
       }
       const actionStatus = statusOverride ?? gitStatusForActions;
-      const actionBranch = actionStatus?.refName ?? null;
-      const actionIsDefaultBranch = featureBranch ? false : isDefaultRef;
+      const actionBranch = commitContext ? commitContext.branch : (actionStatus?.refName ?? null);
+      const actionIsDefaultBranch = featureBranch
+        ? false
+        : commitContext
+          ? reviewTarget!.isDefaultRef
+          : isDefaultRef;
       const actionCanCommit =
         action === "commit" || action === "commit_push" || action === "commit_push_pr";
       const includesCommit =
@@ -1618,8 +1621,10 @@ export default function GitActionsControl({
         }
 
         const error = squashAtomCommandFailure(result);
-        if (commitContext && latestReviewScope.current === operationScope)
+        if (commitContext && latestReviewScope.current === operationScope) {
+          setReviewContext(null);
           setCommitMessageError(error instanceof Error ? error.message : String(error));
+        }
         const errorToastTiming = resolveGitActionResultToastTiming("error");
         toastManager.add(
           stackedThreadToast({

@@ -59,14 +59,16 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
   );
 
   const busy = gitState.gitOperationLabel !== null;
-  const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
+  const reviewedDefaultRef = useRef(false);
   const [reviewFiles, setReviewFiles] = useState<VcsStatusResult["workingTree"]["files"] | null>(
     null,
   );
   const allFiles = reviewFiles ?? gitStatus.data?.workingTree?.files ?? [];
   useEffect(() => {
-    if (reviewFiles === null && gitStatus.data)
+    if (reviewFiles === null && gitStatus.data) {
+      reviewedDefaultRef.current = gitStatus.data.isDefaultRef;
       setReviewFiles([...gitStatus.data.workingTree.files]);
+    }
   }, [reviewFiles, gitStatus.data]);
   const config = useAtomValue(
     serverEnvironment.configValueAtom(selectedThread?.environmentId ?? null),
@@ -316,7 +318,8 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
         if (result) {
           appAtomRegistry.set(gitCommitDraft(scope), "");
           if (preview.current.mounted && currentScope.current === scope) navigation.goBack();
-        } else if (preview.current.mounted) {
+        } else if (preview.current.mounted && currentScope.current === scope) {
+          setCommitContext(null);
           setGenerationError(
             failureReason ??
               "Commit failed. Your message is saved. Review the source control error and retry.",
@@ -328,7 +331,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
     };
     if (
       !featureBranch &&
-      isDefaultRef &&
+      reviewedDefaultRef.current &&
       props.route.params.action &&
       props.route.params.action !== "commit"
     ) {
@@ -385,7 +388,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
                 {gitStatus.data?.refName ?? "(detached HEAD)"}
               </Text>
             </View>
-            {isDefaultRef ? (
+            {reviewedDefaultRef.current ? (
               <Text className="text-xs leading-normal text-warning-foreground">
                 Warning: this is the default branch.
               </Text>

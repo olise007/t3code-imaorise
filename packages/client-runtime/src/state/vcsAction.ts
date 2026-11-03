@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   type EnvironmentId as EnvironmentIdType,
   type GitCommitContext,
+  GitCommitContextError,
   GitActionProgressPhase,
   type GitActionProgressEvent,
   type GitRunStackedActionInput,
@@ -462,13 +463,7 @@ export function createVcsActionManager<R, E>(
           (input.commitContext.environmentId !== target.environmentId ||
             input.commitContext.cwd !== target.cwd)
         ) {
-          return Effect.fail(
-            new VcsActionUnavailableError({
-              operation: "run_change_request",
-              environmentId: target.environmentId,
-              cwd: target.cwd,
-            }),
-          );
+          return Effect.fail(new GitCommitContextError({ cwd: target.cwd, reason: "changed" }));
         }
         const transportActionId = createVcsActionTransportId(target, input.actionId);
         registry.set(

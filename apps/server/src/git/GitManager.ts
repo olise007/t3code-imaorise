@@ -752,7 +752,19 @@ export const make = Effect.gen(function* () {
         cwd,
         args: ["rev-parse", "--absolute-git-dir"],
       });
-      return yield* commitLocks.withLock(identity.stdout.trim(), effect);
+      const key = yield* fileSystem.realPath(identity.stdout.trim()).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitCommandError({
+              operation: "GitManager.lock",
+              cwd,
+              command: "git rev-parse --absolute-git-dir",
+              detail: "Could not identify the worktree for source control.",
+              cause,
+            }),
+        ),
+      );
+      return yield* commitLocks.withLock(key, effect);
     });
   const environmentIdentity = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const contextFailure = (cwd: string, reason: "required" | "changed" | "association") =>
@@ -833,7 +845,11 @@ export const make = Effect.gen(function* () {
       const info = yield* fileSystem
         .stat(path.resolve(cwd, file))
         .pipe(Effect.orElseSucceed(() => null));
-      if (info?.type === "Directory") return yield* contextFailure(cwd, "changed");
+      if (info?.type === "Directory") {
+        const entry = yield* read(["--literal-pathspecs", "ls-files", "--stage", "-z", "--", file]);
+        // A submodule is one selected gitlink; an ordinary directory would expand the selection.
+        if (!entry.stdout.startsWith("160000 ")) return yield* contextFailure(cwd, "changed");
+      }
     }
     const prepared = yield* gitCore.prepareCommitContext(cwd, paths, { skipIgnoredFiles: true });
     if (!prepared.treeOid) return yield* contextFailure(cwd, "changed");

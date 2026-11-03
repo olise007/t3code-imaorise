@@ -885,6 +885,42 @@ const layerGitManagerTest = GitVcsDriver.layer.pipe(
 );
 
 it.layer(layerGitManagerTest)("GitManager", (it) => {
+  it.effect.each(["binary", "patch-tail"])(
+    "fingerprints complete %s content rather than the bounded preview",
+    (kind) =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir("t3-complete-review-");
+        yield* initRepo(cwd);
+        const file = kind === "binary" ? "image.bin" : "large.txt";
+        const prefix = "reviewed line\n".repeat(8_000);
+        NodeFS.writeFileSync(
+          NodePath.join(cwd, file),
+          kind === "binary" ? Buffer.from([0, 1, 2, 3]) : `${prefix}original tail\n`,
+        );
+        const { manager } = yield* makeManager();
+        const { commitContext } = yield* manager.prepareCommit({ cwd, filePaths: [file] });
+        const before = NodeFS.readFileSync(NodePath.join(cwd, ".git/index"));
+        NodeFS.writeFileSync(
+          NodePath.join(cwd, file),
+          kind === "binary" ? Buffer.from([0, 1, 2, 4]) : `${prefix}changed tail\n`,
+        );
+        expect(
+          yield* manager
+            .runStackedAction({
+              cwd,
+              actionId: kind,
+              action: "commit",
+              commitMessage: "Reviewed content",
+              filePaths: commitContext.filePaths,
+              commitContext,
+            })
+            .pipe(Effect.result),
+        ).toMatchObject({ _tag: "Failure", failure: { _tag: "GitCommitContextError" } });
+        expect(NodeFS.readFileSync(NodePath.join(cwd, ".git/index"))).toEqual(before);
+        expect((yield* runGit(cwd, ["rev-parse", "HEAD"])).stdout.trim()).toBe(commitContext.head);
+      }),
+  );
+
   it.effect("revalidates after waiting for the worktree mutation lock", () =>
     Effect.gen(function* () {
       const cwd = yield* makeTempDir("t3-queued-review-");
