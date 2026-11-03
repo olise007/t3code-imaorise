@@ -3595,17 +3595,20 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           yield* writeTextFile(cwd, "unrelated.txt", "unrelated\n");
           yield* git(cwd, ["add", "unrelated.txt"]);
           const before = NodeFS.readFileSync(`${cwd}/.git/index`);
+          const treeOid = yield* git(cwd, ["rev-parse", "HEAD^{tree}"]);
           assert.deepEqual(
             yield* driver.prepareCommitContext(cwd, ["tests/ignored.txt"], {
               skipIgnoredFiles: true,
             }),
             {
               context: null,
+              treeOid,
               skippedFilePaths: ["tests/ignored.txt"],
             },
           );
           assert.deepEqual(yield* driver.prepareCommitContext(cwd, []), {
             context: null,
+            treeOid,
             skippedFilePaths: [],
           });
           const error = yield* driver

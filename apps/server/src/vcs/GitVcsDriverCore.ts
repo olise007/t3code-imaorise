@@ -2452,7 +2452,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           const treeOid = (yield* runGitStdoutWithOptions(
             "GitVcsDriver.prepareCommitContext.tree",
             cwd,
-            ["write-tree"],
+            [...config, "write-tree"],
             { env },
           )).trim();
           const stagedSummary = yield* runGitStdoutWithOptions(

@@ -11,6 +11,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
@@ -884,6 +885,77 @@ const layerGitManagerTest = GitVcsDriver.layer.pipe(
 );
 
 it.layer(layerGitManagerTest)("GitManager", (it) => {
+  it.effect("revalidates after waiting for the worktree mutation lock", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDir("t3-queued-review-");
+      yield* initRepo(cwd);
+      NodeFS.writeFileSync(NodePath.join(cwd, "README.md"), "reviewed content\n");
+      const { manager } = yield* makeManager();
+      const { commitContext } = yield* manager.prepareCommit({ cwd, filePaths: ["README.md"] });
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* manager
+        .withWorktreeLock(
+          cwd,
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        )
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(entered);
+      const pending = yield* manager
+        .runStackedAction({
+          cwd,
+          actionId: "queued",
+          action: "commit",
+          commitMessage: "Original review",
+          commitContext,
+          filePaths: commitContext.filePaths,
+        })
+        .pipe(Effect.result, Effect.forkScoped);
+      yield* runGit(cwd, ["switch", "-c", "changed-while-waiting"]);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      expect(yield* Fiber.join(pending)).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "GitCommitContextError" },
+      });
+      expect((yield* runGit(cwd, ["rev-parse", "HEAD"])).stdout.trim()).toBe(commitContext.head);
+      expect((yield* runGit(cwd, ["diff", "--cached", "--name-only"])).stdout.trim()).toBe("");
+    }),
+  );
+
+  it.effect("serializes simultaneous confirmations and creates only one commit", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDir("t3-double-review-");
+      yield* initRepo(cwd);
+      NodeFS.writeFileSync(NodePath.join(cwd, "README.md"), "reviewed content\n");
+      const { manager } = yield* makeManager();
+      const { commitContext } = yield* manager.prepareCommit({ cwd, filePaths: ["README.md"] });
+      const results = yield* Effect.all(
+        ["one", "two"].map((actionId) =>
+          manager
+            .runStackedAction({
+              cwd,
+              actionId,
+              action: "commit",
+              commitMessage: "One reviewed commit",
+              commitContext,
+              filePaths: commitContext.filePaths,
+            })
+            .pipe(Effect.result),
+        ),
+        { concurrency: "unbounded" },
+      );
+      expect(results.filter((result) => result._tag === "Success")).toHaveLength(1);
+      expect(results.find((result) => result._tag === "Failure")).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "GitCommitContextError" },
+      });
+      expect(
+        (yield* runGit(cwd, ["rev-list", "--count", `${commitContext.head}..HEAD`])).stdout.trim(),
+      ).toBe("1");
+    }),
+  );
+
   it.effect.each([
     "missing",
     "repository",
@@ -892,6 +964,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     "branch",
     "head",
     "selection",
+    "omitted-selection",
     "content",
     "thread",
     "project",
@@ -941,7 +1014,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           actionId: `mismatch-${mismatch}`,
           action: "commit",
           commitMessage: "Reviewed A",
-          filePaths: files,
+          ...(mismatch !== "omitted-selection" ? { filePaths: files } : {}),
           ...(mismatch !== "missing" ? { commitContext: context } : {}),
           ...(context.threadId ? { threadId: context.threadId } : {}),
           ...(context.projectId ? { projectId: context.projectId } : {}),

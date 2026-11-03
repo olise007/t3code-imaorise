@@ -31,7 +31,6 @@ export const gitCommitReviewScope = (target: {
 
 export function commitContextMatchesFiles(
   context: GitCommitContext,
-  GitRunStackedActionResult,
   filePaths: ReadonlyArray<string>,
 ) {
   return JSON.stringify([...filePaths].sort()) === JSON.stringify(context.filePaths);
